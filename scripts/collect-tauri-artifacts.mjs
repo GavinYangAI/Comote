@@ -22,12 +22,25 @@ async function findArtifact(root, extension) {
   const matches = [];
   await walk(root, matches, extension);
   const installerMatches = matches
-    .filter((path) => path.includes(`${separator()}bundle${separator()}`))
-    .sort((a, b) => b.length - a.length);
+    .filter((path) => path.includes(`${separator()}bundle${separator()}`));
   if (installerMatches.length === 0) {
     throw new Error(`No Tauri ${extension} artifact found under ${root}`);
   }
-  return installerMatches[0];
+  const versionMatches = installerMatches.filter((path) => path.includes(pkg.version));
+  return newest(versionMatches.length > 0 ? versionMatches : installerMatches);
+}
+
+async function newest(paths) {
+  let selected = paths[0];
+  let selectedMtime = (await stat(selected)).mtimeMs;
+  for (const path of paths.slice(1)) {
+    const mtime = (await stat(path)).mtimeMs;
+    if (mtime > selectedMtime) {
+      selected = path;
+      selectedMtime = mtime;
+    }
+  }
+  return selected;
 }
 
 async function walk(dir, matches, extension) {

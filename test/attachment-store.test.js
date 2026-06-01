@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 import { createHash } from "node:crypto";
 
 import { saveInboundAttachment, imageExtFromContentType } from "../src/core/attachment-store.js";
@@ -101,8 +101,9 @@ test("sanitizes a crafted messageId so it cannot escape the attachments dir", as
     now: FIXED,
   });
 
-  assert.ok(result.path.includes("/feishu/2026-06-01/"), "stays under channel/date");
-  assert.ok(!result.path.includes("/etc/evil"), "path traversal neutralized");
+  const relativePath = relative(dir, result.path);
+  assert.match(relativePath, /^feishu[/\\]2026-06-01[/\\]/, "stays under channel/date");
+  assert.ok(!relativePath.split(/[/\\]/).includes(".."), "path traversal neutralized");
   await rm(dir, { recursive: true, force: true });
 });
 

@@ -793,10 +793,10 @@ mod tests {
     #[test]
     fn extracts_daemon_pid_from_api_version_body() {
         assert_eq!(
-            service_pid_from_body(r#"{"version":"0.2.4-test","pid":91632,"latest":null}"#),
+            service_pid_from_body(r#"{"version":"0.2.4","pid":91632,"latest":null}"#),
             Some(91632)
         );
-        assert_eq!(service_pid_from_body(r#"{"version":"0.2.4-test"}"#), None);
+        assert_eq!(service_pid_from_body(r#"{"version":"0.2.4"}"#), None);
     }
 
     #[test]
