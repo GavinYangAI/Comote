@@ -61,6 +61,12 @@ export class CodexDesktopConnector {
     }
     this.state = "reconnecting";
     this.stopHeartbeat();
+    // A disconnect invalidates any in-flight turn: it can no longer reach
+    // turn/completed, so its accumulated paths would otherwise bleed into the
+    // next turn on the same thread after reconnect. Drop all accumulation —
+    // the app-server re-drives state once the connection is re-established.
+    this.changedPathsByThread.clear();
+    this._activeThreadId = null;
     this.#emit({ type: "connectionLost" });
     this.scheduleReconnect(1);
   }
@@ -205,6 +211,14 @@ export class CodexDesktopConnector {
       return;
     }
     if (method === "error") {
+      // An `error` notification does not necessarily end the turn — the
+      // app-server emits non-fatal errors mid-turn while the turn stays alive.
+      // The payload carries no signal distinguishing a turn-ending failure, so
+      // clearing accumulation here could drop paths legitimately changed by a
+      // turn that is still running. A genuinely turn-ending failure tears the
+      // connection down (handled by handleDisconnect) or is followed by
+      // turn/completed; both reset accumulation. So we deliberately do not
+      // touch changedPathsByThread here.
       this.#emit({
         type: "error",
         threadId: params.threadId ?? null,

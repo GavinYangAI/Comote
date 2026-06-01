@@ -519,6 +519,77 @@ test("turnCompleted carries accumulated changed paths then clears", () => {
   assert.deepEqual(second.changedPaths, []);
 });
 
+test("turnCompleted accumulates paths from the patchUpdated branch", () => {
+  const connector = new CodexDesktopConnector({ transport: new MemoryTransport() });
+  const events = [];
+  connector.onEvent = (e) => events.push(e);
+
+  connector.handleNotification({ method: "turn/started", params: { threadId: "t1" } });
+  // Real app-server shape: params.itemId / params.changes / params.threadId.
+  connector.handleNotification({
+    method: "item/fileChange/patchUpdated",
+    params: {
+      threadId: "t1",
+      itemId: "item_5",
+      changes: [{ path: "src/app.js", kind: { type: "update", move_path: null }, diff: "+a" }],
+    },
+  });
+  connector.handleNotification({ method: "turn/completed", params: { threadId: "t1" } });
+
+  const completed = events.find((e) => e.type === "turnCompleted");
+  assert.deepEqual(completed.changedPaths, ["src/app.js"]);
+});
+
+test("changedPaths dedupes the union across multiple fileChange notifications in one turn", () => {
+  const connector = new CodexDesktopConnector({ transport: new MemoryTransport() });
+  const events = [];
+  connector.onEvent = (e) => events.push(e);
+
+  connector.handleNotification({ method: "turn/started", params: { threadId: "t1" } });
+  connector.handleNotification({
+    method: "item/started",
+    params: { threadId: "t1", item: { id: "i1", type: "fileChange", changes: [{ path: "/p/a.ts" }] } },
+  });
+  // Second notification repeats /p/a.ts and adds /p/b.ts — result must be the deduped union.
+  connector.handleNotification({
+    method: "item/fileChange/patchUpdated",
+    params: {
+      threadId: "t1",
+      itemId: "i2",
+      changes: [{ path: "/p/a.ts" }, { path: "/p/b.ts" }],
+    },
+  });
+  connector.handleNotification({ method: "turn/completed", params: { threadId: "t1" } });
+
+  const completed = events.find((e) => e.type === "turnCompleted");
+  assert.deepEqual(completed.changedPaths, ["/p/a.ts", "/p/b.ts"]);
+});
+
+test("handleDisconnect drops mid-turn accumulation so it does not bleed into the next turn", () => {
+  const connector = new CodexDesktopConnector({ transport: new MemoryTransport() });
+  const events = [];
+  connector.onEvent = (e) => events.push(e);
+
+  // Turn starts, a file changes, then the connection drops mid-turn (no turn/completed).
+  connector.handleNotification({ method: "turn/started", params: { threadId: "t1" } });
+  connector.handleNotification({
+    method: "item/started",
+    params: { threadId: "t1", item: { id: "i1", type: "fileChange", changes: [{ path: "/stale/x.ts" }] } },
+  });
+  connector.handleDisconnect();
+
+  // After reconnect the app-server re-drives state: a fresh turn on the same thread.
+  connector.handleNotification({ method: "turn/started", params: { threadId: "t1" } });
+  connector.handleNotification({
+    method: "item/started",
+    params: { threadId: "t1", item: { id: "i2", type: "fileChange", changes: [{ path: "/fresh/y.ts" }] } },
+  });
+  connector.handleNotification({ method: "turn/completed", params: { threadId: "t1" } });
+
+  const completed = events.filter((e) => e.type === "turnCompleted").at(-1);
+  assert.deepEqual(completed.changedPaths, ["/fresh/y.ts"]);
+});
+
 test("cli connector is explicitly fallback", () => {
   const connector = new CodexCliConnector();
 
