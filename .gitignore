@@ -1,5 +1,6 @@
 .comote/
 .private-docs/
+docs/
 .DS_Store
 node_modules/
 dist/
