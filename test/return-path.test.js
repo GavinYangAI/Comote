@@ -199,17 +199,35 @@ test("completed card includes push buttons for changed files", async () => {
   transport.receive({ jsonrpc: "2.0", method: "turn/started", params: { threadId: "thread_f" } });
   await tick();
 
-  // Codex changes an in-project file during the turn.
+  // Codex changes files during the turn: one in-project, one OUTSIDE the root
+  // (a sibling dir that shares the root's string prefix).
   transport.receive({
     jsonrpc: "2.0",
     method: "item/completed",
     params: {
       threadId: "thread_f",
-      item: { type: "fileChange", id: "fc1", changes: [{ path: "/home/proj/out/a.png" }] },
+      item: {
+        type: "fileChange",
+        id: "fc1",
+        changes: [{ path: "/home/proj/out/a.png" }, { path: "/home/proj-evil/x.png" }],
+      },
     },
   });
 
-  // The turn completes, finishing the card.
+  // In the REAL Codex Desktop flow, the agent replies with text first: an
+  // item/completed agentMessage (which finalizes and DROPS the card session)
+  // arrives BEFORE turn/completed. The push buttons must render on THIS card.
+  transport.receive({
+    jsonrpc: "2.0",
+    method: "item/completed",
+    params: {
+      threadId: "thread_f",
+      item: { type: "agentMessage", id: "m1", text: "all done" },
+    },
+  });
+  await tick();
+
+  // turn/completed arrives after the card session is already gone.
   transport.receive({
     jsonrpc: "2.0",
     method: "turn/completed",
@@ -222,9 +240,14 @@ test("completed card includes push buttons for changed files", async () => {
   const buttons = finalCard.elements
     .filter((el) => el.tag === "action")
     .flatMap((el) => el.actions);
-  const pushButton = buttons.find((b) => b.value?.kind === "pushfile");
-  assert.ok(pushButton, "completion card has a pushfile button");
-  assert.equal(pushButton.value.path, "/home/proj/out/a.png");
+  const pushButtons = buttons.filter((b) => b.value?.kind === "pushfile");
+  assert.equal(pushButtons.length, 1, "only the in-project file renders a pushfile button");
+  assert.equal(pushButtons[0].value.path, "/home/proj/out/a.png");
+  // The out-of-project sibling path must NOT produce a button.
+  assert.ok(
+    !pushButtons.some((b) => b.value.path === "/home/proj-evil/x.png"),
+    "out-of-project path must be excluded",
+  );
 });
 
 test("a Codex approval for a Feishu thread is delivered as a card", async () => {

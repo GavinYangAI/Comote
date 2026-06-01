@@ -565,6 +565,41 @@ test("changedPaths dedupes the union across multiple fileChange notifications in
   assert.deepEqual(completed.changedPaths, ["/p/a.ts", "/p/b.ts"]);
 });
 
+test("agentMessage carries the accumulated changed paths without clearing them", () => {
+  const connector = new CodexDesktopConnector({ transport: new MemoryTransport() });
+  const events = [];
+  connector.onEvent = (e) => events.push(e);
+
+  connector.handleNotification({ method: "turn/started", params: { threadId: "t1" } });
+  // A file edit completes DURING the turn, before the agent's final message.
+  connector.handleNotification({
+    method: "item/started",
+    params: { threadId: "t1", item: { id: "i1", type: "fileChange", changes: [{ path: "/p/a.png" }] } },
+  });
+  // The agent's final message arrives (item/completed agentMessage) before turn/completed.
+  connector.handleNotification({
+    method: "item/completed",
+    params: { threadId: "t1", item: { type: "agentMessage", id: "m1", text: "done" } },
+  });
+
+  const agentMessage = events.find((e) => e.type === "agentMessage");
+  assert.deepEqual(agentMessage.changedPaths, ["/p/a.png"]);
+
+  // turn/completed still works and still carries + clears the same paths.
+  connector.handleNotification({ method: "turn/completed", params: { threadId: "t1" } });
+  const completed = events.find((e) => e.type === "turnCompleted");
+  assert.deepEqual(completed.changedPaths, ["/p/a.png"]);
+
+  // A subsequent turn starts clean — agentMessage did not leave stale state.
+  connector.handleNotification({ method: "turn/started", params: { threadId: "t1" } });
+  connector.handleNotification({
+    method: "item/completed",
+    params: { threadId: "t1", item: { type: "agentMessage", id: "m2", text: "again" } },
+  });
+  const secondAgentMessage = events.filter((e) => e.type === "agentMessage").at(-1);
+  assert.deepEqual(secondAgentMessage.changedPaths, []);
+});
+
 test("handleDisconnect drops mid-turn accumulation so it does not bleed into the next turn", () => {
   const connector = new CodexDesktopConnector({ transport: new MemoryTransport() });
   const events = [];

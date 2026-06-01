@@ -1,6 +1,8 @@
 import { readFile } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+
+import { isWithinDir } from "../core/paths.js";
 
 import { AuthorizationStore } from "../core/authorization.js";
 import { CommandRouter } from "../core/commands.js";
@@ -406,7 +408,13 @@ export function createComoteState({
         feishuRuntime
           .finishThreadCard(
             event.threadId,
-            statusCard({ phase: "completed", text: event.text ?? "", done: true }),
+            statusCard({
+              phase: "completed",
+              threadId: event.threadId,
+              text: event.text ?? "",
+              done: true,
+              files: buildChangedFiles(event.threadId, event.changedPaths),
+            }),
           )
           .then((updated) => {
             if (!updated) {
@@ -516,10 +524,10 @@ export function createComoteState({
     const seen = new Set();
     const files = [];
     for (const p of changedPaths) {
-      if (root && !p.startsWith(root)) continue; // only expose project-internal files
+      if (root && !isWithinDir(root, p)) continue; // only expose project-internal files
       if (seen.has(p)) continue;
       seen.add(p);
-      files.push({ path: p, name: p.split("/").filter(Boolean).at(-1) ?? p });
+      files.push({ path: p, name: basename(p) || p });
     }
     return files;
   }

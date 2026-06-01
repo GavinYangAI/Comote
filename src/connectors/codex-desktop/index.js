@@ -171,11 +171,17 @@ export class CodexDesktopConnector {
       return;
     }
     if (method === "item/completed" && params.item?.type === "agentMessage") {
+      // File edits complete before the agent's final message, so the changed
+      // paths accumulated during the turn are already available here. Read but
+      // do NOT clear them — turn/completed remains the one that clears.
+      const threadId = params.threadId ?? this._activeThreadId ?? null;
+      const set = threadId != null ? this.changedPathsByThread.get(threadId) : null;
       this.#emit({
         type: "agentMessage",
         threadId: params.threadId ?? null,
         itemId: params.item.id ?? null,
         text: params.item.text ?? "",
+        changedPaths: set ? [...set] : [],
       });
       return;
     }
