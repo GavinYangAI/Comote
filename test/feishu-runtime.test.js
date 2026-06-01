@@ -562,4 +562,30 @@ test("handleCardAction pushfile enqueues media within project, rejects escape", 
     event: { action: { value: { kind: "pushfile", threadId: "t1", path: "/etc/passwd" } }, open_id: "u1" },
   });
   assert.equal(bad.toast.type, "error");
+  // The fence must block the ENQUEUE, not merely surface a toast.
+  assert.equal(
+    outboundQueue.snapshot().some((e) => e.path === "/etc/passwd"),
+    false,
+  );
+});
+
+test("handleCardAction pushfile with no binding returns error and enqueues nothing", async () => {
+  const outboundQueue = new OutboundQueue();
+  const router = { getThreadBinding: () => null };
+  const adapter = { handleInbound: async () => ({}), commandRouter: router };
+  const driver = {
+    getStatus: () => ({}),
+    uploadImage: async () => "img_1",
+    sendImage: async () => {},
+    sendText: async () => {},
+    sendCard: async () => {},
+  };
+  const runtime = new FeishuRuntimeService({ adapter, outboundQueue, driver });
+
+  const res = await runtime.handleCardAction({
+    event: { action: { value: { kind: "pushfile", threadId: "nope", path: "/etc/passwd" } }, open_id: "u1" },
+  });
+  assert.equal(res.toast.type, "error");
+  await new Promise((r) => setTimeout(r, 10));
+  assert.equal(outboundQueue.snapshot().length, 0);
 });
