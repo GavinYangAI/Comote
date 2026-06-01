@@ -193,3 +193,111 @@ test("normalizeInbound extracts image and file attachments", () => {
   assert.deepEqual(fileMsg.attachments, [{ type: "file", fileKey: "file_k", fileName: "report.pdf", messageId: "m2" }]);
   assert.equal(fileMsg.text, "");
 });
+
+test("normalizeInbound keeps text and empty attachments for a text message", () => {
+  const adapter = new FeishuChannelAdapter({ commandRouter: { handleMessageAsync: async () => ({}) } });
+
+  const msg = adapter.normalizeInbound({
+    event: {
+      sender: { sender_id: { open_id: "u1" }, name: "A" },
+      message: {
+        message_id: "m1",
+        chat_id: "c1",
+        chat_type: "p2p",
+        message_type: "text",
+        content: JSON.stringify({ text: "hello there" }),
+      },
+    },
+  });
+  assert.equal(msg.text, "hello there");
+  assert.deepEqual(msg.attachments, []);
+});
+
+test("normalizeInbound keeps text for non-text, non-media types (e.g. post)", () => {
+  const adapter = new FeishuChannelAdapter({ commandRouter: { handleMessageAsync: async () => ({}) } });
+
+  const content = JSON.stringify({ title: "t", text: "hello" });
+  const msg = adapter.normalizeInbound({
+    event: {
+      sender: { sender_id: { open_id: "u1" }, name: "A" },
+      message: {
+        message_id: "m1",
+        chat_id: "c1",
+        chat_type: "p2p",
+        message_type: "post",
+        content,
+      },
+    },
+  });
+  assert.equal(msg.text, "hello");
+  assert.notEqual(msg.text, "");
+  assert.deepEqual(msg.attachments, []);
+});
+
+test("normalizeInbound returns no attachments for malformed image content", () => {
+  const adapter = new FeishuChannelAdapter({ commandRouter: { handleMessageAsync: async () => ({}) } });
+
+  const msg = adapter.normalizeInbound({
+    event: {
+      sender: { sender_id: { open_id: "u1" }, name: "A" },
+      message: {
+        message_id: "m1",
+        chat_id: "c1",
+        chat_type: "p2p",
+        message_type: "image",
+        content: "not json",
+      },
+    },
+  });
+  assert.deepEqual(msg.attachments, []);
+});
+
+test("normalizeInbound falls back to default fileName for image and file", () => {
+  const adapter = new FeishuChannelAdapter({ commandRouter: { handleMessageAsync: async () => ({}) } });
+
+  const fileMsg = adapter.normalizeInbound({
+    event: {
+      sender: { sender_id: { open_id: "u1" }, name: "A" },
+      message: {
+        message_id: "m1",
+        chat_id: "c1",
+        chat_type: "p2p",
+        message_type: "file",
+        content: JSON.stringify({ file_key: "fk" }),
+      },
+    },
+  });
+  assert.equal(fileMsg.attachments[0].fileName, "file");
+
+  const imageMsg = adapter.normalizeInbound({
+    event: {
+      sender: { sender_id: { open_id: "u1" }, name: "A" },
+      message: {
+        message_id: "m2",
+        chat_id: "c1",
+        chat_type: "p2p",
+        message_type: "image",
+        content: JSON.stringify({ image_key: "ik" }),
+      },
+    },
+  });
+  assert.equal(imageMsg.attachments[0].fileName, "image.png");
+});
+
+test("normalizeInbound drops image attachment when image_key is missing", () => {
+  const adapter = new FeishuChannelAdapter({ commandRouter: { handleMessageAsync: async () => ({}) } });
+
+  const msg = adapter.normalizeInbound({
+    event: {
+      sender: { sender_id: { open_id: "u1" }, name: "A" },
+      message: {
+        message_id: "m1",
+        chat_id: "c1",
+        chat_type: "p2p",
+        message_type: "image",
+        content: JSON.stringify({}),
+      },
+    },
+  });
+  assert.deepEqual(msg.attachments, []);
+});

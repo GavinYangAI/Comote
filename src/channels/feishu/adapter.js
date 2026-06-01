@@ -47,7 +47,7 @@ export class FeishuChannelAdapter {
         stableId,
         displayName: sender.name ?? payload.senderName ?? stableId,
       },
-      text: messageType === "text" ? readFeishuText(message.content ?? payload.text ?? "") : "",
+      text: (messageType === "image" || messageType === "file") ? "" : readFeishuText(message.content ?? payload.text ?? ""),
       attachments: readFeishuAttachments(messageType, message),
     };
   }
@@ -149,7 +149,13 @@ function readFeishuAttachments(messageType, message) {
     return [];
   }
   if (messageType === "image") {
+    if (!content.image_key) {
+      return [];
+    }
     return [{ type: "image", fileKey: content.image_key, fileName: content.file_name ?? "image.png", messageId: message.message_id ?? null }];
+  }
+  if (!content.file_key) {
+    return [];
   }
   return [{ type: "file", fileKey: content.file_key, fileName: content.file_name ?? "file", messageId: message.message_id ?? null }];
 }
