@@ -1,5 +1,7 @@
 import { approvalResolvedCard } from "./cards.js";
 
+export const MAX_MEDIA_BYTES = 20 * 1024 * 1024;
+
 export class FeishuRuntimeService {
   constructor({ adapter, outboundQueue, driver = null, persist = null, eventLog = null, cardUpdateIntervalMs = 700 }) {
     if (!adapter) {
@@ -143,7 +145,9 @@ export class FeishuRuntimeService {
     let outbound = 0;
     for (const reply of this.outboundQueue.list({ channel: "feishu" })) {
       try {
-        if (reply.card) {
+        if (reply.kind === "image" || reply.kind === "file") {
+          await this._deliverMedia(reply);
+        } else if (reply.card) {
           await this.driver.sendCard({
             receiveId: reply.conversationId,
             receiveIdType: "chat_id",
@@ -162,7 +166,7 @@ export class FeishuRuntimeService {
         this.outboundQueue.markFailed(reply.id, error);
         this.eventLog?.error("飞书消息发送失败", {
           id: reply.id,
-          kind: reply.card ? "card" : "text",
+          kind: reply.kind === "image" || reply.kind === "file" ? reply.kind : reply.card ? "card" : "text",
           conversationId: reply.conversationId,
           error: error.message,
         });
@@ -171,6 +175,37 @@ export class FeishuRuntimeService {
     await this.persist?.();
     this.lastError = null;
     return { outbound };
+  }
+
+  async _deliverMedia(reply) {
+    const { stat } = await import("node:fs/promises");
+    const { basename } = await import("node:path");
+    let size = 0;
+    try {
+      size = (await stat(reply.path)).size;
+    } catch {
+      await this.driver.sendText({
+        receiveId: reply.conversationId,
+        receiveIdType: "chat_id",
+        text: `⚠️ 文件不存在，无法发送：${reply.path}`,
+      });
+      return;
+    }
+    if (size > MAX_MEDIA_BYTES) {
+      await this.driver.sendText({
+        receiveId: reply.conversationId,
+        receiveIdType: "chat_id",
+        text: `⚠️ 文件超过 20MB，未发送：${basename(reply.path)}（${Math.round(size / 1024 / 1024)}MB）。可在本机直接查看：${reply.path}`,
+      });
+      return;
+    }
+    if (reply.kind === "image") {
+      const imageKey = await this.driver.uploadImage(reply.path);
+      await this.driver.sendImage({ receiveId: reply.conversationId, receiveIdType: "chat_id", imageKey });
+    } else {
+      const fileKey = await this.driver.uploadFile(reply.path, reply.fileName ?? basename(reply.path));
+      await this.driver.sendFile({ receiveId: reply.conversationId, receiveIdType: "chat_id", fileKey });
+    }
   }
 
   async openThreadCard({ threadId, conversationId, card }) {

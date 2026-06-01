@@ -1,5 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import { AuthorizationStore } from "../src/core/authorization.js";
 import { CommandRouter } from "../src/core/commands.js";
@@ -493,4 +496,38 @@ test("start() must not leave running true if the WebSocket setup throws", async 
 
   assert.equal(runtime.getStatus().state, "configured", "state must not be running");
   assert.equal(runtime.running, false, "running flag must remain false");
+});
+
+function stubAdapter() {
+  return { handleInbound: async () => ({}), commandRouter: {} };
+}
+
+test("deliverQueued uploads then sends media; oversize falls back to text", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "comote-rt-"));
+  const small = join(dir, "a.png");
+  const big = join(dir, "big.bin");
+  writeFileSync(small, Buffer.from("img"));
+  writeFileSync(big, Buffer.alloc(21 * 1024 * 1024));
+
+  const calls = [];
+  const driver = {
+    getStatus: () => ({}),
+    uploadImage: async (p) => { calls.push(["uploadImage", p]); return "img_1"; },
+    uploadFile: async (p) => { calls.push(["uploadFile", p]); return "file_1"; },
+    sendImage: async (a) => { calls.push(["sendImage", a.imageKey]); },
+    sendFile: async (a) => { calls.push(["sendFile", a.fileKey]); },
+    sendText: async (a) => { calls.push(["sendText", a.text]); },
+    sendCard: async () => {},
+  };
+  const outboundQueue = new OutboundQueue();
+  outboundQueue.enqueue({ channel: "feishu", conversationId: "c1", kind: "image", path: small });
+  outboundQueue.enqueue({ channel: "feishu", conversationId: "c1", kind: "file", path: big, fileName: "big.bin" });
+
+  const runtime = new FeishuRuntimeService({ adapter: stubAdapter(), outboundQueue, driver });
+  await runtime.deliverQueued();
+
+  assert.deepEqual(calls[0], ["uploadImage", small]);
+  assert.deepEqual(calls[1], ["sendImage", "img_1"]);
+  assert.ok(!calls.some(([m]) => m === "uploadFile"));
+  assert.ok(calls.some(([m, t]) => m === "sendText" && /big\.bin/.test(t)));
 });
