@@ -4,7 +4,7 @@ import { readFileSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { CodexDesktopConnector } from "../src/connectors/codex-desktop/index.js";
+import { CodexDesktopConnector, extractChangePaths } from "../src/connectors/codex-desktop/index.js";
 import { CodexCliConnector } from "../src/connectors/codex-cli/index.js";
 
 class MemoryTransport {
@@ -490,6 +490,33 @@ test("desktop connector emits agentMessageDelta on item/updated", async () => {
     itemId: "item_9",
     text: "partial answer",
   });
+});
+
+test("extractChangePaths handles array and object change shapes", () => {
+  assert.deepEqual(extractChangePaths([{ path: "/p/a.ts" }, { absolutePath: "/p/b.ts" }]), ["/p/a.ts", "/p/b.ts"]);
+  assert.deepEqual(extractChangePaths({ "/p/c.ts": { kind: "edit" } }), ["/p/c.ts"]);
+  assert.deepEqual(extractChangePaths(null), []);
+});
+
+test("turnCompleted carries accumulated changed paths then clears", () => {
+  const connector = new CodexDesktopConnector({ transport: new MemoryTransport() });
+  const events = [];
+  connector.onEvent = (e) => events.push(e);
+
+  connector.handleNotification({ method: "turn/started", params: { threadId: "t1" } });
+  connector.handleNotification({
+    method: "item/started",
+    params: { threadId: "t1", item: { id: "i1", type: "fileChange", changes: [{ path: "/p/a.ts" }] } },
+  });
+  connector.handleNotification({ method: "turn/completed", params: { threadId: "t1" } });
+
+  const completed = events.find((e) => e.type === "turnCompleted");
+  assert.deepEqual(completed.changedPaths, ["/p/a.ts"]);
+
+  connector.handleNotification({ method: "turn/started", params: { threadId: "t1" } });
+  connector.handleNotification({ method: "turn/completed", params: { threadId: "t1" } });
+  const second = events.filter((e) => e.type === "turnCompleted").at(-1);
+  assert.deepEqual(second.changedPaths, []);
 });
 
 test("cli connector is explicitly fallback", () => {

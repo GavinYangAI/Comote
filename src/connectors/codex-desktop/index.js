@@ -36,6 +36,10 @@ export class CodexDesktopConnector {
     this.lastRateLimits = null;
     // itemId -> file changes, so a file-change approval can show the diff.
     this.fileChangesByItem = new Map();
+    // threadId -> Set<absolutePath> of files changed during the active turn.
+    // Assumption: one active turn per connection at a time.
+    this.changedPathsByThread = new Map();
+    this._activeThreadId = null;
     this.client = this.createClient();
   }
 
@@ -144,9 +148,11 @@ export class CodexDesktopConnector {
     // Capture file-change details so a later approval prompt can show the diff.
     if (params.item?.type === "fileChange" && params.item.id) {
       this.fileChangesByItem.set(params.item.id, params.item.changes ?? []);
+      this.#accumulateChangedPaths(params.threadId, params.item.changes);
     }
     if (method === "item/fileChange/patchUpdated" && params.itemId) {
       this.fileChangesByItem.set(params.itemId, params.changes ?? []);
+      this.#accumulateChangedPaths(params.threadId, params.changes);
       return;
     }
     if (method === "item/updated" && params.item?.type === "agentMessage") {
@@ -168,11 +174,19 @@ export class CodexDesktopConnector {
       return;
     }
     if (method === "turn/started") {
+      this._activeThreadId = params.threadId ?? null;
       this.#emit({ type: "turnStarted", threadId: params.threadId ?? null });
       return;
     }
     if (method === "turn/completed") {
-      this.#emit({ type: "turnCompleted", threadId: params.threadId ?? null });
+      const threadId = params.threadId ?? this._activeThreadId ?? null;
+      const set = threadId != null ? this.changedPathsByThread.get(threadId) : null;
+      const changedPaths = set ? [...set] : [];
+      if (threadId != null) {
+        this.changedPathsByThread.delete(threadId);
+      }
+      this._activeThreadId = null;
+      this.#emit({ type: "turnCompleted", threadId: params.threadId ?? null, changedPaths });
       return;
     }
     if (method === "item/started") {
@@ -196,6 +210,27 @@ export class CodexDesktopConnector {
         threadId: params.threadId ?? null,
         message: params.message ?? params.error ?? "Codex 报告了一个错误",
       });
+    }
+  }
+
+  // Accumulates absolute paths of files changed during the active turn, keyed
+  // by threadId. Only accumulates when a threadId is known.
+  #accumulateChangedPaths(threadId, changes) {
+    const id = threadId ?? this._activeThreadId ?? null;
+    if (id == null) {
+      return;
+    }
+    const paths = extractChangePaths(changes);
+    if (paths.length === 0) {
+      return;
+    }
+    let set = this.changedPathsByThread.get(id);
+    if (!set) {
+      set = new Set();
+      this.changedPathsByThread.set(id, set);
+    }
+    for (const path of paths) {
+      set.add(path);
     }
   }
 
@@ -369,6 +404,22 @@ export class CodexDesktopConnector {
     this.#emit({ type: "approvalResolved", approval, decision });
     return { ok: true };
   }
+}
+
+// Pure helper: normalizes the various file-change shapes the app-server emits
+// into a flat list of paths. Arrays of change objects (or strings), or an
+// object keyed by path, both supported.
+export function extractChangePaths(changes) {
+  if (!changes) return [];
+  if (Array.isArray(changes)) {
+    return changes
+      .map((c) => (typeof c === "string" ? c : c?.path ?? c?.absolutePath ?? c?.filePath ?? null))
+      .filter(Boolean);
+  }
+  if (typeof changes === "object") {
+    return Object.keys(changes);
+  }
+  return [];
 }
 
 // Prefers the codex bundled inside Codex.app; falls back to a PATH lookup.
