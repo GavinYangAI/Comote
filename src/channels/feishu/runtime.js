@@ -1,4 +1,5 @@
 import { approvalResolvedCard } from "./cards.js";
+import { classifyMedia, resolveWithinProject } from "../../core/paths.js";
 
 export const MAX_MEDIA_BYTES = 20 * 1024 * 1024;
 
@@ -316,6 +317,36 @@ export class FeishuRuntimeService {
     if (action.value.kind === "cancel") {
       await router?.cancelThread?.(action.value.threadId);
       return { toast: { type: "info", content: "已请求取消任务" } };
+    }
+    if (action.value.kind === "pushfile") {
+      const binding = router?.getThreadBinding?.(action.value.threadId);
+      const projectPath = binding?.projectPath ?? null;
+      const conversationId = binding?.conversationId ?? action.chatId ?? null;
+      if (!projectPath || !conversationId) {
+        return { toast: { type: "error", content: "无法定位项目，请重开会话" } };
+      }
+      const safePath = resolveWithinProject(projectPath, action.value.path);
+      if (!safePath) {
+        this.eventLog?.warn?.("飞书推送文件：路径越界", {
+          threadId: action.value.threadId,
+          projectPath,
+          path: action.value.path,
+        });
+        return { toast: { type: "error", content: "路径越界，已拒绝" } };
+      }
+      const { basename } = await import("node:path");
+      this.outboundQueue.enqueue({
+        channel: "feishu",
+        conversationId,
+        kind: classifyMedia(safePath),
+        path: safePath,
+        fileName: basename(safePath),
+      });
+      // Fire-and-forget so the toast returns within Feishu's ~3s callback window.
+      void this.deliverQueued().catch((err) =>
+        this.eventLog?.error?.("飞书推送文件：发送失败", { error: err.message }),
+      );
+      return { toast: { type: "info", content: "推送中…" } };
     }
     if (action.value.kind === "pick") {
       const conversation = router?.conversationByIdentity?.get(`feishu:${action.openId}`);

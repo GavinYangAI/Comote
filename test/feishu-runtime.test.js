@@ -531,3 +531,35 @@ test("deliverQueued uploads then sends media; oversize falls back to text", asyn
   assert.ok(!calls.some(([m]) => m === "uploadFile"));
   assert.ok(calls.some(([m, t]) => m === "sendText" && /big\.bin/.test(t)));
 });
+
+test("handleCardAction pushfile enqueues media within project, rejects escape", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "comote-pf-"));
+  writeFileSync(join(dir, "a.png"), "img");
+
+  const outboundQueue = new OutboundQueue();
+  const router = {
+    getThreadBinding: (tid) =>
+      tid === "t1" ? { channel: "feishu", conversationId: "c1", projectPath: dir } : null,
+  };
+  const adapter = { handleInbound: async () => ({}), commandRouter: router };
+  const driver = {
+    getStatus: () => ({}),
+    uploadImage: async () => "img_1",
+    sendImage: async () => {},
+    sendText: async () => {},
+    sendCard: async () => {},
+  };
+  const runtime = new FeishuRuntimeService({ adapter, outboundQueue, driver });
+
+  const ok = await runtime.handleCardAction({
+    event: { action: { value: { kind: "pushfile", threadId: "t1", path: join(dir, "a.png") } }, open_id: "u1" },
+  });
+  assert.equal(ok.toast.type, "info");
+  await new Promise((r) => setTimeout(r, 10));
+  assert.equal(outboundQueue.snapshot().some((e) => e.kind === "image"), true);
+
+  const bad = await runtime.handleCardAction({
+    event: { action: { value: { kind: "pushfile", threadId: "t1", path: "/etc/passwd" } }, open_id: "u1" },
+  });
+  assert.equal(bad.toast.type, "error");
+});
