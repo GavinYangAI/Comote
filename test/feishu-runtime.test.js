@@ -209,6 +209,44 @@ test("feishu runtime delivers a queued card via sendCard", async () => {
   assert.deepEqual(outbound.list({ channel: "feishu" }), []);
 });
 
+test("deliverQueued does not double-send a queued reply under concurrent re-entry", async () => {
+  const outbound = new OutboundQueue();
+  outbound.enqueue({ channel: "feishu", conversationId: "c1", text: "hello", dedupeKey: "t:1" });
+
+  const sent = [];
+  let reentered = false;
+  let runtime;
+  const driver = {
+    getStatus: () => ({ state: "configured" }),
+    verifyEvent: () => true,
+    async sendCard() {
+      throw new Error("unexpected card send");
+    },
+    async sendText(message) {
+      sent.push(message.text);
+      if (!reentered) {
+        reentered = true;
+        // Mid-flight, trigger a concurrent drain (as pushfile's fire-and-forget
+        // does). Awaiting it makes the race deterministic with no timing window:
+        // with the re-entry guard it returns immediately (coalesced, no send);
+        // without the guard it would list() the same not-yet-delivered entry and
+        // resend it before this first send is marked delivered.
+        await runtime.deliverQueued().catch(() => {});
+      }
+    },
+  };
+  runtime = new FeishuRuntimeService({
+    adapter: { handleInbound: async () => ({ kind: "text" }) },
+    outboundQueue: outbound,
+    driver,
+  });
+
+  await runtime.deliverQueued();
+
+  assert.deepEqual(sent, ["hello"]);
+  assert.deepEqual(outbound.list({ channel: "feishu" }), []);
+});
+
 function cardDriver() {
   const calls = { sent: [], updated: [] };
   return {

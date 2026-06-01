@@ -17,6 +17,11 @@ export class FeishuRuntimeService {
     this.persist = persist;
     this.eventLog = eventLog;
     this.lastError = null;
+    // Re-entry guard for deliverQueued: serializes concurrent drains so the same
+    // queued entry is never sent twice. `_deliverPending` requests one more drain
+    // pass when a trigger arrives while a drain is already running.
+    this._delivering = false;
+    this._deliverPending = false;
     this.startedAt = new Date().toISOString();
     this.running = false;
     this._startPromise = null;
@@ -143,6 +148,28 @@ export class FeishuRuntimeService {
     if (!this.driver) {
       throw new Error("Feishu driver is not configured");
     }
+    // A drain is already in flight: don't run a second concurrent loop over the
+    // same queue snapshot (it would resend entries not yet marked delivered).
+    // Flag that another pass is needed and let the active drain pick it up.
+    if (this._delivering) {
+      this._deliverPending = true;
+      return { outbound: 0, coalesced: true };
+    }
+    this._delivering = true;
+    try {
+      let outbound = 0;
+      do {
+        this._deliverPending = false;
+        outbound += await this._drainQueueOnce();
+      } while (this._deliverPending);
+      this.lastError = null;
+      return { outbound };
+    } finally {
+      this._delivering = false;
+    }
+  }
+
+  async _drainQueueOnce() {
     let outbound = 0;
     for (const reply of this.outboundQueue.list({ channel: "feishu" })) {
       try {
@@ -174,8 +201,7 @@ export class FeishuRuntimeService {
       }
     }
     await this.persist?.();
-    this.lastError = null;
-    return { outbound };
+    return outbound;
   }
 
   async _deliverMedia(reply) {
