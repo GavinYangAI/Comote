@@ -685,6 +685,9 @@ export class CommandRouter {
     if (!conversation) {
       return this.text("无法定位会话，请重发一条消息后再试。");
     }
+    if (conversation.channel !== "feishu") {
+      return this.text("/file 目前仅支持飞书渠道。");
+    }
     if (!this.outboundQueue) {
       return this.text("当前无法发送文件：出站队列不可用。");
     }
