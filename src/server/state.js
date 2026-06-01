@@ -300,7 +300,13 @@ export function createComoteState({
         feishuRuntime
           .finishThreadCard(
             event.threadId,
-            statusCard({ phase: "completed", text: tail, done: true }),
+            statusCard({
+              phase: "completed",
+              threadId: event.threadId,
+              text: tail,
+              done: true,
+              files: buildChangedFiles(event.threadId, event.changedPaths),
+            }),
           )
           .catch(() => {});
       }
@@ -498,6 +504,24 @@ export function createComoteState({
     });
     deliverIfFeishu(binding.channel);
     stateRef.persist?.();
+  }
+
+  // Maps a turn's absolute changedPaths to the {path, name} entries the
+  // completion card renders as 📎 push buttons, keeping only project-internal
+  // files (the click handler re-fences authoritatively) and deduping.
+  function buildChangedFiles(threadId, changedPaths) {
+    if (!Array.isArray(changedPaths) || changedPaths.length === 0) return [];
+    const binding = commandRouter.getThreadBinding(threadId);
+    const root = binding?.projectPath ?? null;
+    const seen = new Set();
+    const files = [];
+    for (const p of changedPaths) {
+      if (root && !p.startsWith(root)) continue; // only expose project-internal files
+      if (seen.has(p)) continue;
+      seen.add(p);
+      files.push({ path: p, name: p.split("/").filter(Boolean).at(-1) ?? p });
+    }
+    return files;
   }
 
   // WeChat drains via its 2.5s poll loop; Feishu has no poll loop, push now.

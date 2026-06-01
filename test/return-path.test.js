@@ -165,6 +165,68 @@ function tick() {
   return new Promise((resolve) => setTimeout(resolve, 5));
 }
 
+test("completed card includes push buttons for changed files", async () => {
+  const { transport, desktop, state } = buildState();
+  await desktop.client.connect();
+
+  // Bind a Codex thread to a Feishu conversation with a known project root.
+  state.commandRouter.conversationByIdentity.set("feishu:ou_owner", {
+    channel: "feishu",
+    conversationId: "oc_chat",
+  });
+  state.commandRouter.bindThreadForIdentity(
+    { channel: "feishu", stableId: "ou_owner" },
+    "thread_f",
+    "/home/proj",
+  );
+
+  // finishThreadCard sends the final card through driver.updateCard — capture it.
+  const calls = { sent: [], updated: [] };
+  state.runtime.feishu.__setTestDriver({
+    getStatus: () => ({ state: "configured" }),
+    verifyEvent: () => true,
+    async sendCard(message) {
+      calls.sent.push(message);
+      return { messageId: "om_live" };
+    },
+    async updateCard(message) {
+      calls.updated.push(message);
+      return { code: 0 };
+    },
+  });
+
+  // Open the active thread card.
+  transport.receive({ jsonrpc: "2.0", method: "turn/started", params: { threadId: "thread_f" } });
+  await tick();
+
+  // Codex changes an in-project file during the turn.
+  transport.receive({
+    jsonrpc: "2.0",
+    method: "item/completed",
+    params: {
+      threadId: "thread_f",
+      item: { type: "fileChange", id: "fc1", changes: [{ path: "/home/proj/out/a.png" }] },
+    },
+  });
+
+  // The turn completes, finishing the card.
+  transport.receive({
+    jsonrpc: "2.0",
+    method: "turn/completed",
+    params: { threadId: "thread_f" },
+  });
+  await tick();
+
+  const finalCard = calls.updated.at(-1)?.card;
+  assert.ok(finalCard, "the completion card was sent");
+  const buttons = finalCard.elements
+    .filter((el) => el.tag === "action")
+    .flatMap((el) => el.actions);
+  const pushButton = buttons.find((b) => b.value?.kind === "pushfile");
+  assert.ok(pushButton, "completion card has a pushfile button");
+  assert.equal(pushButton.value.path, "/home/proj/out/a.png");
+});
+
 test("a Codex approval for a Feishu thread is delivered as a card", async () => {
   const { transport, desktop, state } = buildState();
   await desktop.client.connect();
