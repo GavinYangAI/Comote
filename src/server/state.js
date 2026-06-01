@@ -48,16 +48,17 @@ export function createComoteState({
   const desktop = desktopOverride ?? new CodexDesktopConnector();
   const cli = new CodexCliConnector();
 
+  const outboundReplies = new OutboundQueue({ entries: persisted.outboundReplies ?? [] });
   const commandRouter = new CommandRouter({
     authorization,
     projects,
     sessions,
     codexDesktop: desktop,
     codexCli: cli,
+    outboundQueue: outboundReplies,
     persisted: persisted.router ?? {},
     transcript,
   });
-  const outboundReplies = new OutboundQueue({ entries: persisted.outboundReplies ?? [] });
   let wechatConfig = normalizeWeChatConfig(persisted.channelConfigs?.wechat ?? {
     enabled: true,
     accountId: process.env.COMOTE_WECHAT_ACCOUNT_ID ?? "default",

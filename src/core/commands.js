@@ -1,5 +1,6 @@
 import { describeIdentity } from "./authorization.js";
 import { normalizeChannelMessage } from "./channel.js";
+import { classifyMedia, resolveWithinProject } from "./paths.js";
 
 function isAbsolutePath(value) {
   return typeof value === "string" && value.startsWith("/");
@@ -12,6 +13,7 @@ export class CommandRouter {
     sessions,
     codexDesktop = null,
     codexCli = null,
+    outboundQueue = null,
     persisted = {},
     maxTurnsPerHour = 60,
     transcript = null,
@@ -21,6 +23,7 @@ export class CommandRouter {
     this.sessions = sessions;
     this.codexDesktop = codexDesktop;
     this.codexCli = codexCli;
+    this.outboundQueue = outboundQueue;
     this.transcript = transcript;
     // Routing state is restored from disk so a daemon restart does not lose
     // the phone user's current project / session context.
@@ -166,6 +169,9 @@ export class CommandRouter {
       if (command === "/tail") {
         return this.text(this.tailText(message.identity, rest));
       }
+      if (command === "/file") {
+        return await this.handleFileCommand(message.identity, rest);
+      }
       if (command === "/cancel") {
         return this.text(await this.cancelActiveTurn(message.identity));
       }
@@ -248,6 +254,7 @@ export class CommandRouter {
       "/new <消息> - 新建一个 Codex 对话",
       "/current - 显示当前项目和对话",
       "/tail [n] - 显示最近的本地对话消息",
+      "/file <路径> - 把项目内文件发到聊天",
       "/approve <编号> - 批准一个 Codex 请求",
       "/deny <编号> - 拒绝一个 Codex 请求",
       "/cancel - 取消当前 Codex 任务",
@@ -650,6 +657,46 @@ export class CommandRouter {
     }
     await this.codexDesktop.cancelTurn({ threadId: activeSession.id, cwd: projectPath });
     return `已取消当前 Codex 任务\n${activeSession.id}`;
+  }
+
+  // Pushes a project-internal file to the user's chat. The path is fenced
+  // inside the current project (resolveWithinProject) before any filesystem
+  // access; out-of-project or missing paths return a text message and never
+  // enqueue. The media reply is delivered by the channel runtime (Tasks 5/6).
+  async handleFileCommand(identity, rawPath) {
+    const projectPath = this.currentProjectByIdentity.get(this.identityKey(identity));
+    if (!projectPath) {
+      return this.text("还没打开项目，先用 /open <编号或路径> 选一个项目。");
+    }
+    const arg = (rawPath ?? "").trim();
+    if (!arg) {
+      return this.text("用法：/file <项目内的相对路径>，例如 /file out/chart.png");
+    }
+    const safePath = resolveWithinProject(projectPath, arg);
+    if (!safePath) {
+      return this.text("路径越界或无效，只能取项目目录内的文件。");
+    }
+    const { existsSync } = await import("node:fs");
+    const { basename } = await import("node:path");
+    if (!existsSync(safePath)) {
+      return this.text(`找不到文件：${arg}`);
+    }
+    const conversation = this.conversationByIdentity.get(this.identityKey(identity));
+    if (!conversation) {
+      return this.text("无法定位会话，请重发一条消息后再试。");
+    }
+    if (!this.outboundQueue) {
+      return this.text("当前无法发送文件：出站队列不可用。");
+    }
+    this.outboundQueue.enqueue({
+      channel: conversation.channel,
+      conversationId: conversation.conversationId,
+      ...(conversation.accountId ? { accountId: conversation.accountId } : {}),
+      kind: classifyMedia(safePath),
+      path: safePath,
+      fileName: basename(safePath),
+    });
+    return this.text(`正在发送：${basename(safePath)}`);
   }
 
   requireCurrentProject(identity) {

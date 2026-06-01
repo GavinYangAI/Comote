@@ -1,8 +1,12 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import { AuthorizationStore } from "../src/core/authorization.js";
 import { CommandRouter } from "../src/core/commands.js";
+import { OutboundQueue } from "../src/core/outbound-queue.js";
 import { ProjectStore } from "../src/core/projects.js";
 import { SessionStore } from "../src/core/sessions.js";
 
@@ -10,6 +14,7 @@ function createRouter({ desktop = null } = {}) {
   const authorization = new AuthorizationStore();
   const projects = new ProjectStore();
   const sessions = new SessionStore();
+  const outboundQueue = new OutboundQueue({});
   const identity = { channel: "wechat", stableId: "wx:owner", displayName: "Alice" };
   authorization.confirmIdentity(identity);
   projects.replaceProjects([{
@@ -18,8 +23,14 @@ function createRouter({ desktop = null } = {}) {
     source: "codex-desktop",
     status: "available",
   }]);
-  const router = new CommandRouter({ authorization, projects, sessions, codexDesktop: desktop });
-  return { router, identity, sessions };
+  const router = new CommandRouter({
+    authorization,
+    projects,
+    sessions,
+    codexDesktop: desktop,
+    outboundQueue,
+  });
+  return { router, identity, sessions, outboundQueue };
 }
 
 test("phone help lists the supported remote-control commands", async () => {
@@ -112,6 +123,51 @@ test("authorized identity is welcomed on the first message only", async () => {
   // Second message: should NOT contain welcome banner
   const second = await router.handleMessageAsync({ identity, text: "/status" });
   assert.ok(!second.text.includes("欢迎使用 Comote"), `expected no welcome banner in second reply, got: ${second.text}`);
+});
+
+test("/file enqueues a media reply for an in-project file and rejects escape", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "comote-file-"));
+  writeFileSync(join(dir, "report.pdf"), "pdf");
+
+  const { router, identity, outboundQueue } = createRouter();
+  const conversation = { channel: "feishu", conversationId: "c1" };
+  router.currentProjectByIdentity.set(router.identityKey(identity), dir);
+
+  const ok = await router.handleMessageAsync({ identity, text: "/file report.pdf", conversation });
+  assert.match(ok.text ?? "", /report\.pdf/);
+  assert.equal(
+    outboundQueue.snapshot().some((entry) => entry.kind === "file" && /report\.pdf$/.test(entry.path)),
+    true,
+  );
+
+  const before = outboundQueue.snapshot().length;
+  const bad = await router.handleMessageAsync({ identity, text: "/file ../../etc/passwd", conversation });
+  assert.match(bad.text ?? "", /越界|无效|拒绝/);
+  assert.equal(outboundQueue.snapshot().length, before);
+});
+
+test("/file without a current project tells the user to /open first", async () => {
+  const { router, identity, outboundQueue } = createRouter();
+  const reply = await router.handleMessageAsync({
+    identity,
+    text: "/file report.pdf",
+    conversation: { channel: "feishu", conversationId: "c1" },
+  });
+  assert.match(reply.text ?? "", /\/open/);
+  assert.equal(outboundQueue.snapshot().length, 0);
+});
+
+test("/file with a missing in-project file returns a not-found message without enqueue", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "comote-file-"));
+  const { router, identity, outboundQueue } = createRouter();
+  router.currentProjectByIdentity.set(router.identityKey(identity), dir);
+  const reply = await router.handleMessageAsync({
+    identity,
+    text: "/file nope.png",
+    conversation: { channel: "feishu", conversationId: "c1" },
+  });
+  assert.match(reply.text ?? "", /找不到/);
+  assert.equal(outboundQueue.snapshot().length, 0);
 });
 
 test("thread binding records the project path", () => {
