@@ -101,6 +101,35 @@ test("statusCard renders pushfile buttons for changed files on completion", () =
   assert.match(btn.text.content, /a\.png/);
 });
 
+test("statusCard falls back to the path basename when a file has no name", () => {
+  const card = statusCard({
+    phase: "completed",
+    threadId: "t1",
+    done: true,
+    files: [{ path: "/home/proj/out/chart.png" }],
+  });
+  const action = card.elements.find((e) => e.tag === "action");
+  assert.ok(action, "expected an action block");
+  const btn = action.actions[0];
+  assert.equal(btn.value.path, "/home/proj/out/chart.png");
+  assert.match(btn.text.content, /chart\.png/);
+});
+
+test("statusCard caps pushfile buttons at 8 and notes the remainder", () => {
+  const files = Array.from({ length: 9 }, (_, i) => ({
+    path: `/home/proj/out/file${i}.png`,
+    name: `file${i}.png`,
+  }));
+  const card = statusCard({ phase: "completed", threadId: "t1", done: true, files });
+  const action = card.elements.find((e) => e.tag === "action");
+  assert.ok(action, "expected an action block");
+  assert.equal(action.actions.length, 8);
+  const remainder = card.elements.find(
+    (e) => e.tag === "markdown" && /还有\s*1\s*个/.test(e.content),
+  );
+  assert.ok(remainder, "expected a markdown element noting the remaining count");
+});
+
 test("statusCard without files renders no pushfile action", () => {
   const card = statusCard({ phase: "completed", text: "done", done: true });
   const action = (card.elements || []).find((e) => e.tag === "action");

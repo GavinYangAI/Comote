@@ -92,7 +92,10 @@ export function statusCard({ phase, threadId = null, steps = 0, text = "", done 
       tag: "action",
       actions: files.slice(0, 8).map((file) => ({
         tag: "button",
-        text: { tag: "plain_text", content: `📎 ${truncate(file.name, 36)}` },
+        text: {
+          tag: "plain_text",
+          content: `📎 ${truncate(file.name || file.path.split(/[/\\]/).pop() || "", 36)}`,
+        },
         value: { kind: "pushfile", threadId, path: file.path },
       })),
     });
