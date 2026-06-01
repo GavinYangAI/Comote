@@ -182,6 +182,61 @@ export class FeishuDriver {
     return body.data?.file_key ?? null;
   }
 
+  async sendImage({ receiveId, receiveIdType = "chat_id", imageKey }) {
+    if (!receiveId) {
+      throw new Error("receiveId is required");
+    }
+    if (!imageKey) {
+      throw new Error("imageKey is required");
+    }
+    return this._sendMessage({
+      receiveId,
+      receiveIdType,
+      msgType: "image",
+      content: { image_key: imageKey },
+    });
+  }
+
+  async sendFile({ receiveId, receiveIdType = "chat_id", fileKey }) {
+    if (!receiveId) {
+      throw new Error("receiveId is required");
+    }
+    if (!fileKey) {
+      throw new Error("fileKey is required");
+    }
+    return this._sendMessage({
+      receiveId,
+      receiveIdType,
+      msgType: "file",
+      content: { file_key: fileKey },
+    });
+  }
+
+  async _sendMessage({ receiveId, receiveIdType, msgType, content }) {
+    const token = await this.getTenantAccessToken();
+    const response = await this.fetch(
+      `${this.baseUrl}/im/v1/messages?receive_id_type=${encodeURIComponent(receiveIdType)}`,
+      {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          receive_id: receiveId,
+          msg_type: msgType,
+          content: JSON.stringify(content),
+        }),
+      },
+    );
+    if (!response.ok) {
+      throw new Error(`Feishu ${msgType} send failed: ${response.status} ${await response.text()}`);
+    }
+    const body = await response.json();
+    this._assertApiSuccess(body);
+    return { messageId: body.data?.message_id ?? null, raw: body };
+  }
+
   async getTenantAccessToken() {
     if (this.tenantAccessToken && Date.now() < this.tenantAccessTokenExpiry) {
       return this.tenantAccessToken;

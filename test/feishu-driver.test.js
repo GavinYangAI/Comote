@@ -504,6 +504,29 @@ test("uploadFile throws when the upload endpoint responds with a non-ok status",
   await assert.rejects(() => driver.uploadFile(filePath, "x"), /upload failed/);
 });
 
+test("feishu driver sends image and file messages", async () => {
+  const requests = [];
+  const driver = new FeishuDriver({
+    appId: "cli_a",
+    appSecret: "secret",
+    fetchImpl: async (url, options) => {
+      requests.push({ url, options });
+      if (url.endsWith("/auth/v3/tenant_access_token/internal")) {
+        return jsonResponse({ tenant_access_token: "tok" });
+      }
+      return jsonResponse({ code: 0, data: { message_id: "m1" } });
+    },
+  });
+
+  await driver.sendImage({ receiveId: "chat_1", imageKey: "img_1" });
+  await driver.sendFile({ receiveId: "chat_1", fileKey: "file_1" });
+
+  const imageReq = requests.find((r) => JSON.parse(r.options.body).msg_type === "image");
+  const fileReq = requests.find((r) => JSON.parse(r.options.body).msg_type === "file");
+  assert.equal(JSON.parse(imageReq.options.body).content, JSON.stringify({ image_key: "img_1" }));
+  assert.equal(JSON.parse(fileReq.options.body).content, JSON.stringify({ file_key: "file_1" }));
+});
+
 function jsonResponse(body, status = 200) {
   return {
     ok: status >= 200 && status < 300,
