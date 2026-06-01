@@ -62,13 +62,13 @@ export class CommandRouter {
     this.turnTimestamps.set(key, recent);
   }
 
-  bindThreadForIdentity(identity, threadId) {
+  bindThreadForIdentity(identity, threadId, projectPath = null) {
     if (!threadId) {
       return;
     }
     const conversation = this.conversationByIdentity.get(this.identityKey(identity));
     if (conversation) {
-      this.threadBindings.set(threadId, conversation);
+      this.threadBindings.set(threadId, { ...conversation, projectPath: projectPath ?? null });
     }
   }
 
@@ -490,7 +490,7 @@ export class CommandRouter {
         const activeThread = resumed?.thread ?? thread;
         const title = this.threadTitle(activeThread, thread);
         const threadId = activeThread.id ?? thread.id;
-        this.bindThreadForIdentity(identity, threadId);
+        this.bindThreadForIdentity(identity, threadId, projectPath);
         this.sessions.upsertExternalSession({ projectPath, id: threadId, title });
         this.pendingByIdentity.delete(key);
         const recent = await this.recentDesktopThreadLines(threadId, 3);
@@ -526,7 +526,7 @@ export class CommandRouter {
     if (this.codexDesktop?.getStatus?.().state === "connected") {
       const started = await this.codexDesktop.startThread({ cwd: projectPath });
       const threadId = started.thread.id;
-      this.bindThreadForIdentity(identity, threadId);
+      this.bindThreadForIdentity(identity, threadId, projectPath);
       this.transcript?.record(threadId, "user", message);
       await this.codexDesktop.startTurn({ threadId, text: message, cwd: projectPath });
       this.sessions.upsertExternalSession({
@@ -607,7 +607,7 @@ export class CommandRouter {
       throw new Error("Codex Desktop 未连接。");
     }
     this.enforceTurnRate(identity);
-    this.bindThreadForIdentity(identity, activeSession.id);
+    this.bindThreadForIdentity(identity, activeSession.id, projectPath);
     this.transcript?.record(activeSession.id, "user", text);
     try {
       await this.codexDesktop.startTurn({ threadId: activeSession.id, text, cwd: projectPath });

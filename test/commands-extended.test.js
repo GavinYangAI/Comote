@@ -113,3 +113,13 @@ test("authorized identity is welcomed on the first message only", async () => {
   const second = await router.handleMessageAsync({ identity, text: "/status" });
   assert.ok(!second.text.includes("欢迎使用 Comote"), `expected no welcome banner in second reply, got: ${second.text}`);
 });
+
+test("thread binding records the project path", () => {
+  const { router, identity } = createRouter();
+  router.conversationByIdentity.set(router.identityKey(identity), {
+    channel: "feishu",
+    conversationId: "c1",
+  });
+  router.bindThreadForIdentity(identity, "t1", "/home/proj");
+  assert.equal(router.getThreadBinding("t1").projectPath, "/home/proj");
+});
