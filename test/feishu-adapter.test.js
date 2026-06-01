@@ -284,6 +284,69 @@ test("normalizeInbound falls back to default fileName for image and file", () =>
   assert.equal(imageMsg.attachments[0].fileName, "image.png");
 });
 
+test("handleInbound downloads attachments and prefixes the prompt", async () => {
+  const calls = [];
+  const adapter = new FeishuChannelAdapter({
+    commandRouter: {
+      handleMessageAsync: async (msg) => {
+        calls.push(msg);
+        return { kind: "text", text: "ok" };
+      },
+    },
+    sendReply: async () => {},
+    downloadAttachment: async ({ attachment }) => ({ relativePath: `.comote/uploads/${attachment.fileName}` }),
+  });
+
+  await adapter.handleInbound({
+    event: {
+      sender: { sender_id: { open_id: "u1" }, name: "A" },
+      message: {
+        message_id: "m1",
+        chat_id: "c1",
+        chat_type: "p2p",
+        message_type: "image",
+        content: JSON.stringify({ image_key: "k", file_name: "a.png" }),
+      },
+    },
+  });
+
+  assert.equal(calls.length, 1);
+  assert.match(calls[0].text, /\[附件: \.comote\/uploads\/a\.png\]/);
+});
+
+test("handleInbound without an open project asks the user to /open", async () => {
+  const replies = [];
+  let routed = false;
+  const adapter = new FeishuChannelAdapter({
+    commandRouter: {
+      handleMessageAsync: async () => {
+        routed = true;
+        return { kind: "text", text: "ok" };
+      },
+    },
+    sendReply: async (r) => replies.push(r),
+    downloadAttachment: async () => {
+      throw new Error("NO_PROJECT");
+    },
+  });
+
+  await adapter.handleInbound({
+    event: {
+      sender: { sender_id: { open_id: "u1" }, name: "A" },
+      message: {
+        message_id: "m1",
+        chat_id: "c1",
+        chat_type: "p2p",
+        message_type: "file",
+        content: JSON.stringify({ file_key: "k", file_name: "x.pdf" }),
+      },
+    },
+  });
+
+  assert.ok(replies.some((r) => /\/open/.test(r.text)));
+  assert.equal(routed, false);
+});
+
 test("normalizeInbound drops image attachment when image_key is missing", () => {
   const adapter = new FeishuChannelAdapter({ commandRouter: { handleMessageAsync: async () => ({}) } });
 

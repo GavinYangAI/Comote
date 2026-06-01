@@ -83,6 +83,22 @@ export function createComoteState({
     commandRouter,
     onDetectedIdentity: (identity) => authorization.detectIdentity(identity),
     resolveDisplayName: (openId) => feishuRuntime?.driver?.resolveUserName?.(openId) ?? null,
+    downloadAttachment: async ({ attachment, identity }) => {
+      const projectPath = commandRouter.currentProjectByIdentity.get(commandRouter.identityKey(identity));
+      if (!projectPath) {
+        throw new Error("NO_PROJECT");
+      }
+      const { join } = await import("node:path");
+      const safeName = attachment.fileName.replace(/[/\\]/g, "_");
+      const destPath = join(projectPath, ".comote", "uploads", safeName);
+      await feishuRuntime.driver.downloadMessageResource({
+        messageId: attachment.messageId,
+        fileKey: attachment.fileKey,
+        type: attachment.type === "image" ? "image" : "file",
+        destPath,
+      });
+      return { relativePath: join(".comote", "uploads", safeName) };
+    },
     sendReply: async (reply) => {
       outboundReplies.enqueue(reply);
       return { ok: true };

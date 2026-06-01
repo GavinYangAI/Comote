@@ -1,7 +1,7 @@
 import { textCard, pickerCard } from "./cards.js";
 
 export class FeishuChannelAdapter {
-  constructor({ commandRouter, sendReply, onDetectedIdentity = null, allowGroups = false, resolveDisplayName = null }) {
+  constructor({ commandRouter, sendReply, onDetectedIdentity = null, allowGroups = false, resolveDisplayName = null, downloadAttachment = null }) {
     if (!commandRouter) {
       throw new Error("commandRouter is required");
     }
@@ -10,6 +10,7 @@ export class FeishuChannelAdapter {
     this.onDetectedIdentity = onDetectedIdentity;
     this.allowGroups = allowGroups;
     this.resolveDisplayName = resolveDisplayName;
+    this.downloadAttachment = downloadAttachment;
     this.startedAt = new Date().toISOString();
   }
 
@@ -60,9 +61,36 @@ export class FeishuChannelAdapter {
 
     await this.resolveIdentityName(message.identity);
     this.onDetectedIdentity?.(message.identity);
+
+    let promptText = message.text;
+    if (message.attachments.length > 0) {
+      if (!this.downloadAttachment) {
+        return { kind: "ignored", reason: "no download capability" };
+      }
+      const prefixes = [];
+      for (const attachment of message.attachments) {
+        try {
+          const { relativePath } = await this.downloadAttachment({ attachment, identity: message.identity });
+          prefixes.push(`[附件: ${relativePath}]`);
+        } catch (error) {
+          if (error.message === "NO_PROJECT") {
+            await this.sendReply({
+              channel: "feishu",
+              conversationId: message.conversationId,
+              inReplyTo: message.messageId,
+              text: "收到文件，但还没打开项目。先用 /open <编号或路径> 选一个项目，再把文件发我。",
+            });
+            return { kind: "ignored", reason: "no project for attachment" };
+          }
+          // Non-NO_PROJECT download failure: skip this attachment gracefully.
+        }
+      }
+      promptText = `${prefixes.join("\n")}\n${message.text}`.trim();
+    }
+
     const reply = await this.commandRouter.handleMessageAsync({
       identity: message.identity,
-      text: message.text,
+      text: promptText,
       attachments: message.attachments,
       conversation: {
         channel: "feishu",
