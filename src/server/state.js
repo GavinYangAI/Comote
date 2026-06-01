@@ -2,7 +2,7 @@ import { readFile } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { isWithinDir } from "../core/paths.js";
+import { isWithinDir, resolveWithinProject, sanitizeUploadName } from "../core/paths.js";
 
 import { AuthorizationStore } from "../core/authorization.js";
 import { CommandRouter } from "../core/commands.js";
@@ -89,8 +89,15 @@ export function createComoteState({
         throw new Error("NO_PROJECT");
       }
       const { join } = await import("node:path");
-      const safeName = attachment.fileName.replace(/[/\\]/g, "_");
+      const safeName = sanitizeUploadName(attachment.fileName);
       const destPath = join(projectPath, ".comote", "uploads", safeName);
+      // Belt-and-suspenders: even after sanitizing the name, verify the final
+      // path stays inside the project. Use a DISTINCT error so an unsafe path is
+      // not conflated with the missing-project /open flow — the adapter treats
+      // any non-"NO_PROJECT" error as a graceful skip of this attachment.
+      if (!resolveWithinProject(projectPath, destPath)) {
+        throw new Error("UNSAFE_ATTACHMENT_PATH");
+      }
       await feishuRuntime.driver.downloadMessageResource({
         messageId: attachment.messageId,
         fileKey: attachment.fileKey,

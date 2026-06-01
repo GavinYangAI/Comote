@@ -347,6 +347,43 @@ test("handleInbound without an open project asks the user to /open", async () =>
   assert.equal(routed, false);
 });
 
+test("handleInbound gracefully skips an attachment when download fails (non-NO_PROJECT)", async () => {
+  const calls = [];
+  const replies = [];
+  const adapter = new FeishuChannelAdapter({
+    commandRouter: {
+      handleMessageAsync: async (msg) => {
+        calls.push(msg);
+        return { kind: "text", text: "ok" };
+      },
+    },
+    sendReply: async (r) => replies.push(r),
+    downloadAttachment: async () => {
+      throw new Error("network down");
+    },
+  });
+
+  await adapter.handleInbound({
+    event: {
+      sender: { sender_id: { open_id: "u1" }, name: "A" },
+      message: {
+        message_id: "m1",
+        chat_id: "c1",
+        chat_type: "p2p",
+        message_type: "file",
+        content: JSON.stringify({ file_key: "k", file_name: "x.pdf" }),
+      },
+    },
+  });
+
+  // (a) no /open reply is sent for a non-NO_PROJECT failure
+  assert.ok(!replies.some((r) => /\/open/.test(r.text ?? "")));
+  // (b) routing still proceeds
+  assert.equal(calls.length, 1);
+  // (c) the failed attachment contributes no `[附件: …]` prefix
+  assert.ok(!/\[附件:/.test(calls[0].text ?? ""));
+});
+
 test("normalizeInbound drops image attachment when image_key is missing", () => {
   const adapter = new FeishuChannelAdapter({ commandRouter: { handleMessageAsync: async () => ({}) } });
 

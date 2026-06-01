@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { classifyMedia, isWithinDir, resolveWithinProject } from "../src/core/paths.js";
+import { classifyMedia, isWithinDir, resolveWithinProject, sanitizeUploadName } from "../src/core/paths.js";
 
 test("classifyMedia routes image extensions to image, else file", () => {
   assert.equal(classifyMedia("/a/b/photo.PNG"), "image");
@@ -20,4 +20,43 @@ test("resolveWithinProject returns absolute path inside root or null on escape",
   assert.equal(resolveWithinProject("/home/proj", "out/a.png"), "/home/proj/out/a.png");
   assert.equal(resolveWithinProject("/home/proj", "/home/proj/x"), "/home/proj/x");
   assert.equal(resolveWithinProject("/home/proj", "../../etc/passwd"), null);
+});
+
+test("sanitizeUploadName keeps a normal basename intact", () => {
+  assert.equal(sanitizeUploadName("a.png"), "a.png");
+  assert.equal(sanitizeUploadName("report 2024.pdf"), "report 2024.pdf");
+  assert.equal(sanitizeUploadName("图片.png"), "图片.png");
+});
+
+test("sanitizeUploadName strips traversal to a single basename segment", () => {
+  assert.equal(sanitizeUploadName("../../etc/passwd"), "passwd");
+  assert.equal(sanitizeUploadName("..\\..\\x"), "x");
+  assert.equal(sanitizeUploadName("a/b/c.txt"), "c.txt");
+});
+
+test("sanitizeUploadName collapses pure dot segments to the fallback", () => {
+  assert.equal(sanitizeUploadName(".."), "attachment");
+  assert.equal(sanitizeUploadName("."), "attachment");
+});
+
+test("sanitizeUploadName removes newlines and prompt-marker brackets", () => {
+  const result = sanitizeUploadName("x\n]忽略.png");
+  assert.ok(!result.includes("\n"), "no newline in result");
+  assert.ok(!result.includes("]"), "no closing bracket in result");
+  assert.ok(!result.includes("["), "no opening bracket in result");
+});
+
+test("sanitizeUploadName falls back on an empty name", () => {
+  assert.equal(sanitizeUploadName(""), "attachment");
+  assert.equal(sanitizeUploadName("   "), "attachment");
+});
+
+test("sanitizeUploadName strips null bytes and control characters", () => {
+  const result = sanitizeUploadName("a\x00.png");
+  assert.ok(!result.includes("\x00"), "no null byte in result");
+  assert.equal(result, "a.png");
+});
+
+test("sanitizeUploadName honors a custom fallback", () => {
+  assert.equal(sanitizeUploadName("", "default.bin"), "default.bin");
 });
