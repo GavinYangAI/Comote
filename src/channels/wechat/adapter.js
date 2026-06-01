@@ -2,6 +2,9 @@ export const WECHAT_CHANNEL_ID = "comote-wechat";
 export const WECHAT_RUNTIME = "comote-native";
 export const WECHAT_DRIVER = "tencent-ilink-json-api";
 
+const WECHAT_INBOUND_MEDIA_NOTICE =
+  "微信暂不支持把图片/文件直接发给 Codex。请改用飞书，或粘贴文本/本机路径。";
+
 export class WeChatChannelAdapter {
   constructor({ commandRouter, sendReply, onDetectedIdentity = null, allowGroups = false }) {
     if (!commandRouter) {
@@ -71,6 +74,22 @@ export class WeChatChannelAdapter {
 
     this.onDetectedIdentity?.(message.identity);
 
+    // Inbound media on WeChat (AES+CDN encrypted) is not forwarded to Codex.
+    // Tell the user and, when there is no accompanying text, stop here rather
+    // than send an empty turn.
+    if (message.attachments?.length > 0) {
+      await this.sendReply({
+        channel: "wechat",
+        conversationId: message.conversationId,
+        accountId: message.accountId,
+        inReplyTo: message.messageId,
+        text: WECHAT_INBOUND_MEDIA_NOTICE,
+      });
+      if (!message.text) {
+        return { kind: "ignored", reason: "wechat inbound media is not supported" };
+      }
+    }
+
     const reply = await this.commandRouter.handleMessageAsync({
       identity: message.identity,
       text: message.text,
@@ -86,17 +105,29 @@ export class WeChatChannelAdapter {
       return reply;
     }
 
-    if (reply.text) {
+    // Personal WeChat has no native attachment send path here, so a media reply
+    // (/img, /file) is degraded to a descriptive text pointing at the file.
+    const text = reply.media ? describeMediaFallback(reply.media) : reply.text;
+    if (text) {
       await this.sendReply({
         channel: "wechat",
         conversationId: message.conversationId,
         accountId: message.accountId,
         inReplyTo: message.messageId,
-        text: reply.text,
+        text,
       });
     }
     return reply;
   }
+}
+
+function describeMediaFallback(media) {
+  const label = media.kind === "image" ? "图片" : "文件";
+  return [
+    `📎 已生成${label}：${media.name}`,
+    `路径：${media.path}`,
+    `（微信暂不支持直接发送${label}，请在飞书或电脑端查看）`,
+  ].join("\n");
 }
 
 function normalizeAttachments(attachments) {

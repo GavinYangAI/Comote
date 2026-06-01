@@ -39,6 +39,9 @@ let logsVisibleLimit = 5;
 let logsRefreshEpoch = 0;
 let phoneThreadIds = new Set();
 let phoneOnly = false;
+// threadId -> "feishu" | "wechat"; drives the channel filter chips.
+let threadChannels = new Map();
+let channelFilter = null; // null = all phone channels
 let codexProjects = [];
 let selectedProjectPath = null;
 let desktopConnected = false;
@@ -112,7 +115,14 @@ async function renderOnce() {
   const [phoneThreads] = await Promise.all([
     safeGet("/api/codex/phone-threads", []),
   ]);
-  phoneThreadIds = new Set((phoneThreads.ok ? phoneThreads.value ?? [] : []).map((threadId) => String(threadId)));
+  const phoneThreadList = phoneThreads.ok ? phoneThreads.value ?? [] : [];
+  // Tolerates both the new [{threadId, channel}] shape and the old [threadId].
+  phoneThreadIds = new Set(phoneThreadList.map((entry) => String(entry?.threadId ?? entry)));
+  threadChannels = new Map(
+    phoneThreadList
+      .filter((entry) => entry && typeof entry === "object" && entry.channel)
+      .map((entry) => [String(entry.threadId), entry.channel]),
+  );
 
   // The daemon being unreachable (or token-gated) is the one failure that
   // genuinely blocks everything — surface it explicitly instead of silently.
@@ -490,10 +500,10 @@ async function renderThreads(status) {
 // the repaint entirely so the periodic 5s refresh never wipes an expanded
 // conversation (or the user's scroll position).
 function threadListSignature(visible) {
-  return `${phoneOnly ? "1" : "0"}:${visible
+  return `${phoneOnly ? "1" : "0"}:${channelFilter ?? ""}:${visible
     .map((thread) => {
       const threadId = String(thread.id ?? "");
-      return `${threadId}~${phoneThreadIds.has(threadId) ? 1 : 0}`;
+      return `${threadId}~${phoneThreadIds.has(threadId) ? 1 : 0}~${threadChannels.get(threadId) ?? ""}`;
     })
     .join("|")}`;
 }
@@ -543,12 +553,21 @@ function findThreadRow(threadId) {
   return [...document.querySelectorAll("#threads li[data-thread-id]")].find((row) => row.dataset.threadId === threadId);
 }
 
+function channelDisplayName(channel) {
+  if (channel === "feishu") return "飞书";
+  if (channel === "wechat") return "微信";
+  return "";
+}
+
 function threadRowHtml(thread, index, fallbackCwd) {
   const threadId = String(thread.id ?? "");
   const title = thread.title ?? thread.name ?? thread.preview ?? threadId;
   const cwd = thread.cwd ?? fallbackCwd;
   const isPhone = phoneThreadIds.has(threadId);
-  const badge = isPhone ? `<span class="thread-badge">手机</span>` : "";
+  const channelLabel = channelDisplayName(threadChannels.get(threadId));
+  const badge = isPhone
+    ? `<span class="thread-badge">手机${channelLabel ? `·${channelLabel}` : ""}</span>`
+    : "";
   const state = expandedThreadStates.get(threadId) ?? defaultExpandedThreadState();
   const expanded = state.open === true;
   return `<li class="thread-row${expanded ? " expanded" : ""}" data-thread-id="${escapeAttr(threadId)}"><div class="thread-row-summary"><div class="thread-row-main"><strong>${index + 1}. ${escapeHtml(title)}</strong>${badge}<div class="meta">${escapeHtml(threadId)}</div><div class="meta">${escapeHtml(cwd)}</div></div><button class="thread-toggle-btn" type="button" aria-expanded="${expanded}" aria-label="${expanded ? "收回" : "展开"}" title="${expanded ? "收回" : "展开"}"></button></div><div class="thread-detail" ${expanded ? "" : "hidden"} data-offset="${escapeAttr(state.offset)}" data-loaded="${escapeAttr(state.loaded)}">${state.html ?? ""}</div></li>`;
@@ -570,11 +589,22 @@ function paintThreads() {
   const project = selectedProject();
   const fallbackPath = project?.path ?? "";
   const visible = phoneOnly
-    ? lastThreadList.filter((thread) => phoneThreadIds.has(String(thread.id ?? "")))
+    ? lastThreadList.filter((thread) => {
+        const threadId = String(thread.id ?? "");
+        if (!phoneThreadIds.has(threadId)) {
+          return false;
+        }
+        return !channelFilter || threadChannels.get(threadId) === channelFilter;
+      })
     : lastThreadList;
 
   if (visible.length === 0) {
-    const label = phoneOnly ? "没有经手机渠道的对话。" : `未找到${project ? ` ${escapeHtml(project.name)}` : ""}的对话。`;
+    const channelName = channelDisplayName(channelFilter);
+    const label = phoneOnly
+      ? channelName
+        ? `没有 ${channelName} 渠道的对话。`
+        : "没有经手机渠道的对话。"
+      : `未找到${project ? ` ${escapeHtml(project.name)}` : ""}的对话。`;
     target.innerHTML = `<li>${label}</li>`;
     lastPaintSignature = null;
     return;
@@ -1472,8 +1502,30 @@ async function toggleThreadDetail(row) {
 document.querySelector("#threads").addEventListener("click", handleThreadListClick);
 document.querySelector("#phoneOnlyFilter").addEventListener("change", (event) => {
   phoneOnly = event.target.checked;
+  const chips = document.querySelector("#channelFilter");
+  if (chips) {
+    chips.hidden = !phoneOnly;
+  }
+  if (!phoneOnly) {
+    channelFilter = null;
+    setActiveChannelChip("");
+  }
   paintThreads();
 });
+
+for (const chip of document.querySelectorAll("#channelFilter .chan-chip")) {
+  chip.addEventListener("click", () => {
+    channelFilter = chip.dataset.channel || null;
+    setActiveChannelChip(chip.dataset.channel || "");
+    paintThreads();
+  });
+}
+
+function setActiveChannelChip(value) {
+  for (const chip of document.querySelectorAll("#channelFilter .chan-chip")) {
+    chip.classList.toggle("active", (chip.dataset.channel || "") === value);
+  }
+}
 
 // --- Searchable project combobox ---
 function openProjectCombo() {

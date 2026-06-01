@@ -312,6 +312,25 @@ test("desktop connector starts turns and records approval requests", async () =>
   ]);
 });
 
+test("desktop connector forwards image attachments as localImage input items", async () => {
+  const transport = new MemoryTransport();
+  const connector = new CodexDesktopConnector({ transport });
+
+  connector.startTurn({
+    threadId: "thread_2",
+    text: "look at this",
+    cwd: "/repo",
+    images: ["/tmp/comote-inbound/a.png", "/tmp/comote-inbound/b.jpg"],
+  });
+  await flushAsyncWork();
+
+  assert.deepEqual(transport.sent[0].params.input, [
+    { type: "text", text: "look at this", text_elements: [] },
+    { type: "localImage", path: "/tmp/comote-inbound/a.png" },
+    { type: "localImage", path: "/tmp/comote-inbound/b.jpg" },
+  ]);
+});
+
 test("desktop connector emits thread events and routes approvals by short code", async () => {
   const transport = new MemoryTransport();
   const connector = new CodexDesktopConnector({ transport });

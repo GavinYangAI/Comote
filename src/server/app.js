@@ -196,11 +196,20 @@ async function handleApi(request, response, state) {
     return;
   }
 
-  // Thread IDs that have local phone-bridge records — lets the UI flag/filter
-  // which Codex threads have been touched over the phone channel.
+  // Threads that have local phone-bridge records, each tagged with the channel
+  // it's currently bound to (feishu/wechat) — lets the UI flag and filter which
+  // Codex threads were touched over which phone channel.
   if (request.method === "GET" && url.pathname === "/api/codex/phone-threads") {
     const threads = state.transcript?.list?.() ?? [];
-    sendJson(response, 200, threads.map((thread) => thread.threadId));
+    const router = state.commandRouter;
+    sendJson(
+      response,
+      200,
+      threads.map((thread) => ({
+        threadId: thread.threadId,
+        channel: router?.getThreadBinding?.(thread.threadId)?.channel ?? null,
+      })),
+    );
     return;
   }
 
@@ -446,6 +455,7 @@ function formatVersionResponse(state) {
   if (!state.versionChecker) {
     return {
       version,
+      pid: process.pid,
       latest: null,
       hasUpdate: false,
       releaseUrl: null,
@@ -457,6 +467,7 @@ function formatVersionResponse(state) {
   const result = state.versionChecker.getLastResult();
   return {
     version,
+    pid: process.pid,
     latest: result.latest,
     hasUpdate: Boolean(result.hasUpdate),
     releaseUrl: result.releaseUrl,

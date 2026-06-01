@@ -31,6 +31,9 @@ enum ComoteChild {
     #[cfg(not(target_os = "windows"))]
     Shell(CommandChild),
     System(SystemChild),
+    // A daemon this app adopted from a previous keep-alive session: we only hold
+    // its PID, not a Child handle, so stop/restart still work on it.
+    Pid(u32),
 }
 
 impl ComoteChild {
@@ -39,6 +42,7 @@ impl ComoteChild {
             #[cfg(not(target_os = "windows"))]
             ComoteChild::Shell(child) => Some(child.pid()),
             ComoteChild::System(child) => Some(child.id()),
+            ComoteChild::Pid(pid) => Some(*pid),
         }
     }
 
@@ -50,6 +54,19 @@ impl ComoteChild {
             }
             ComoteChild::System(mut child) => {
                 let _ = child.kill();
+            }
+            ComoteChild::Pid(pid) => {
+                #[cfg(unix)]
+                unsafe {
+                    libc::kill(pid as libc::pid_t, libc::SIGKILL);
+                }
+                #[cfg(target_os = "windows")]
+                {
+                    let _ = std::process::Command::new("taskkill")
+                        .args(["/F", "/PID", &pid.to_string()])
+                        .creation_flags(CREATE_NO_WINDOW)
+                        .output();
+                }
             }
         }
     }
@@ -94,7 +111,7 @@ const CREATE_NO_WINDOW: u32 = 0x08000000;
 
 enum ExistingService {
     None,
-    Reusable,
+    Reusable(Option<u32>),
     Mismatched(Option<String>),
 }
 
@@ -140,7 +157,9 @@ fn main() {
             // A failure here must NOT panic the app: show a recoverable error
             // page and let the user retry via the tray "重启后台服务" item.
             let startup = match existing_service {
-                ExistingService::Reusable => Ok(None),
+                // Adopt the already-running daemon by PID so quitting with
+                // keep-alive OFF (and tray restart) can actually stop it.
+                ExistingService::Reusable(pid) => Ok(pid.map(ComoteChild::Pid)),
                 _ => start_comote_sidecar_ready(app.handle(), port).map(Some),
             };
 
@@ -188,22 +207,30 @@ fn main() {
         .expect("error while building Comote");
 
     app.run(|app_handle, event| {
-        // The sidecar is stopped only on a real quit, never on window close.
-        if let RunEvent::ExitRequested { .. } = event {
-            let keep_alive = app_handle
-                .path()
-                .app_data_dir()
-                .map(|dir| load_keep_daemon_alive_from_dir(&dir))
-                .unwrap_or(DEFAULT_KEEP_DAEMON_ALIVE);
-            if keep_alive {
-                // Leave the daemon running so the phone can still reach Codex.
-                // Dropping the handle is enough; the OS reparents the child.
-                release_comote_sidecar(app_handle);
-            } else {
-                stop_comote_sidecar(app_handle);
-            }
+        // Window close only hides (see on_window_event), so the sidecar is
+        // stopped on actual app termination. ExitRequested does not fire on
+        // every quit path (e.g. an Apple-Event quit), so handle the final
+        // RunEvent::Exit too; the stop/release helpers are idempotent.
+        match event {
+            RunEvent::ExitRequested { .. } => handle_app_exit(app_handle),
+            RunEvent::Exit => handle_app_exit(app_handle),
+            _ => {}
         }
     });
+}
+
+fn handle_app_exit(app_handle: &AppHandle) {
+    let keep_alive = app_handle
+        .path()
+        .app_data_dir()
+        .map(|dir| load_keep_daemon_alive_from_dir(&dir))
+        .unwrap_or(DEFAULT_KEEP_DAEMON_ALIVE);
+    if keep_alive {
+        // Leave the daemon running so the phone can still reach Codex.
+        release_comote_sidecar(app_handle);
+    } else {
+        stop_comote_sidecar(app_handle);
+    }
 }
 
 #[tauri::command]
@@ -607,19 +634,19 @@ fn wait_for_service(port: u16) -> tauri::Result<()> {
 }
 
 fn inspect_existing_service(port: u16, expected_version: &str) -> ExistingService {
-    let Some(version) = fetch_service_version(port) else {
+    let Some((version, pid)) = fetch_service_version(port) else {
         return ExistingService::None;
     };
     match version {
         None => ExistingService::Mismatched(None),
         Some(version) if can_reuse_existing_service(Some(&version), expected_version) => {
-            ExistingService::Reusable
+            ExistingService::Reusable(pid)
         }
         Some(version) => ExistingService::Mismatched(Some(version)),
     }
 }
 
-fn fetch_service_version(port: u16) -> Option<Option<String>> {
+fn fetch_service_version(port: u16) -> Option<(Option<String>, Option<u32>)> {
     let mut stream = TcpStream::connect(("127.0.0.1", port)).ok()?;
     let timeout = Some(Duration::from_millis(600));
     let _ = stream.set_read_timeout(timeout);
@@ -632,7 +659,22 @@ fn fetch_service_version(port: u16) -> Option<Option<String>> {
         .split("\r\n\r\n")
         .nth(1)
         .unwrap_or(response.as_str());
-    Some(service_version_from_status_body(body))
+    Some((
+        service_version_from_status_body(body),
+        service_pid_from_body(body),
+    ))
+}
+
+// Pulls the daemon's process id out of the /api/version JSON ("pid":12345) so a
+// reused daemon can be adopted as a killable handle.
+fn service_pid_from_body(body: &str) -> Option<u32> {
+    let after_key = body.split("\"pid\"").nth(1)?;
+    let after_colon = after_key.split_once(':')?.1.trim_start();
+    let digits: String = after_colon
+        .chars()
+        .take_while(|c| c.is_ascii_digit())
+        .collect();
+    digits.parse().ok()
 }
 
 fn can_reuse_existing_service(found_version: Option<&str>, expected_version: &str) -> bool {
@@ -746,6 +788,15 @@ mod tests {
             service_version_from_status_body(r#"{"version":"0.2.1","latest":"0.2.1"}"#),
             Some("0.2.1".to_string())
         );
+    }
+
+    #[test]
+    fn extracts_daemon_pid_from_api_version_body() {
+        assert_eq!(
+            service_pid_from_body(r#"{"version":"0.2.4-test","pid":91632,"latest":null}"#),
+            Some(91632)
+        );
+        assert_eq!(service_pid_from_body(r#"{"version":"0.2.4-test"}"#), None);
     }
 
     #[test]

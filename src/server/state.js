@@ -14,6 +14,8 @@ import { JsonFileStore } from "../core/persistence.js";
 import { OutboundQueue } from "../core/outbound-queue.js";
 import { WeChatIlinkDriver } from "../channels/wechat/ilink-driver.js";
 import { WeChatRuntimeService } from "../channels/wechat/runtime.js";
+import { stripMarkdown } from "../channels/wechat/markdown.js";
+import { saveInboundAttachment } from "../core/attachment-store.js";
 import { FeishuDriver } from "../channels/feishu/driver.js";
 import { FeishuRuntimeService } from "../channels/feishu/runtime.js";
 import { statusCard, textCard, approvalCard } from "../channels/feishu/cards.js";
@@ -30,6 +32,7 @@ export function createComoteState({
   desktop: desktopOverride = null,
   currentVersion = null,
   versionChecker = null,
+  attachmentsDir = ".comote/attachments",
 } = {}) {
   const authorization = new AuthorizationStore({ identities: persisted.identities ?? [] });
   for (const identity of persisted.detectedIdentities ?? []) {
@@ -80,6 +83,16 @@ export function createComoteState({
     commandRouter,
     onDetectedIdentity: (identity) => authorization.detectIdentity(identity),
     resolveDisplayName: (openId) => feishuRuntime?.driver?.resolveUserName?.(openId) ?? null,
+    downloadAttachment: ({ channel, messageId, conversationId, sender, attachment }) =>
+      downloadFeishuAttachment({
+        channel,
+        messageId,
+        conversationId,
+        sender,
+        attachment,
+        driver: feishuRuntime?.driver,
+        attachmentsDir,
+      }),
     sendReply: async (reply) => {
       outboundReplies.enqueue(reply);
       return { ok: true };
@@ -454,7 +467,9 @@ export function createComoteState({
         stateRef.persist?.();
         return;
       }
-      const chunks = chunkForChannel(event.text ?? "");
+      // WeChat does not render Markdown — strip it so the reply reads cleanly.
+      const replyText = binding.channel === "wechat" ? stripMarkdown(event.text ?? "") : event.text ?? "";
+      const chunks = chunkForChannel(replyText);
       chunks.forEach((chunk, index) => {
         outboundReplies.enqueue({
           channel: binding.channel,
@@ -572,7 +587,39 @@ export async function createPersistentComoteState({ filePath = ".comote/state.js
     await versionChecker.loadCache();
     versionChecker.start();
   }
-  return createComoteState({ persisted, stateStore, currentVersion, versionChecker });
+  return createComoteState({
+    persisted,
+    stateStore,
+    currentVersion,
+    versionChecker,
+    attachmentsDir: join(dirname(filePath), "attachments"),
+  });
+}
+
+// Downloads an inbound Feishu image/file and persists it (with a manifest) under
+// attachmentsDir via the attachment store. Returns the saved local path, or null
+// when no driver is available; throws are left to the adapter (which treats a
+// failure as a dropped attachment).
+async function downloadFeishuAttachment({ channel, messageId, conversationId, sender, attachment, driver, attachmentsDir }) {
+  if (!driver?.downloadResource) {
+    return null;
+  }
+  const type = attachment.kind === "image" ? "image" : "file";
+  const { buffer, contentType } = await driver.downloadResource({
+    messageId,
+    fileKey: attachment.feishuKey,
+    type,
+  });
+  return saveInboundAttachment({
+    attachmentsDir,
+    channel,
+    messageId,
+    conversationId,
+    sender,
+    attachment,
+    buffer,
+    contentType,
+  });
 }
 
 async function readPackageVersion() {

@@ -154,6 +154,11 @@ export class FeishuRuntimeService {
     if (this.isDuplicateEvent(payload)) {
       return { kind: "ignored", reason: "duplicate event" };
     }
+    // Surface the inbound message type so image/post handling is observable in
+    // the event log (helps diagnose attachments that don't reach Codex).
+    const inboundMessageType =
+      payload?.event?.message?.message_type ?? payload?.message?.message_type ?? "unknown";
+    this.eventLog?.info("飞书入站消息", { messageType: inboundMessageType });
     const reply = await this.adapter.handleInbound(payload);
     await this.deliverQueued();
     await this.persist?.();
@@ -169,7 +174,9 @@ export class FeishuRuntimeService {
     let failed = false;
     for (const reply of this.outboundQueue.list({ channel: "feishu" })) {
       try {
-        if (reply.card) {
+        if (reply.media) {
+          await this.deliverMedia(reply);
+        } else if (reply.card) {
           await this.driver.sendCard({
             receiveId: reply.conversationId,
             receiveIdType: "chat_id",
@@ -191,7 +198,7 @@ export class FeishuRuntimeService {
         this.updateReloginState(error);
         this.eventLog?.error("飞书消息发送失败", {
           id: reply.id,
-          kind: reply.card ? "card" : "text",
+          kind: reply.media ? "media" : reply.card ? "card" : "text",
           conversationId: reply.conversationId,
           error: error.message,
         });
@@ -203,6 +210,18 @@ export class FeishuRuntimeService {
       this.needsRelogin = false;
     }
     return { outbound };
+  }
+
+  // Uploads a local image/file and sends it as a native Feishu attachment.
+  async deliverMedia(reply) {
+    const { kind, path, name } = reply.media;
+    if (kind === "image") {
+      const imageKey = await this.driver.uploadImage(path);
+      await this.driver.sendImage({ receiveId: reply.conversationId, receiveIdType: "chat_id", imageKey });
+      return;
+    }
+    const fileKey = await this.driver.uploadFile(path, name);
+    await this.driver.sendFile({ receiveId: reply.conversationId, receiveIdType: "chat_id", fileKey });
   }
 
   async openThreadCard({ threadId, conversationId, card }) {

@@ -1,8 +1,59 @@
+import { stat, realpath } from "node:fs/promises";
+import { basename, extname, resolve, sep } from "node:path";
+
 import { describeIdentity } from "./authorization.js";
 import { normalizeChannelMessage } from "./channel.js";
 
+// Feishu IM hard caps: images ≤10MB, files ≤30MB. We reject above these
+// before uploading rather than letting the API fail mid-transfer.
+const MEDIA_LIMIT_BYTES = { image: 10 * 1024 * 1024, file: 30 * 1024 * 1024 };
+
 function isAbsolutePath(value) {
   return typeof value === "string" && value.startsWith("/");
+}
+
+// Canonical (lowercase) slash commands. Used so case variants like /Projects
+// resolve to /projects.
+const CANONICAL_COMMANDS = new Set([
+  "/help", "/status", "/current", "/projects", "/open", "/sessions",
+  "/use", "/switch", "/new", "/tail", "/approve", "/deny", "/cancel",
+  "/img", "/file",
+]);
+
+// Chinese aliases → canonical command. Keys are matched both verbatim and
+// lowercased so an alias is reachable regardless of surrounding case.
+const COMMAND_ALIASES = {
+  "/项目": "/projects",
+  "/打开": "/open",
+  "/会话": "/sessions",
+  "/切换": "/use",
+  "/新建": "/new",
+  "/当前": "/current",
+  "/状态": "/status",
+  "/帮助": "/help",
+  "/最近": "/tail",
+  "/批准": "/approve",
+  "/拒绝": "/deny",
+  "/取消": "/cancel",
+  "/图片": "/img",
+  "/文件": "/file",
+};
+
+// Normalizes a raw leading token into a canonical command. Resolves Chinese
+// aliases and makes English commands case-insensitive (/Projects → /projects).
+// Non-commands (plain text, unknown slash words) are returned unchanged.
+export function resolveCommandAlias(raw) {
+  if (!raw) {
+    return raw;
+  }
+  if (COMMAND_ALIASES[raw]) {
+    return COMMAND_ALIASES[raw];
+  }
+  const lower = raw.toLowerCase();
+  if (COMMAND_ALIASES[lower]) {
+    return COMMAND_ALIASES[lower];
+  }
+  return CANONICAL_COMMANDS.has(lower) ? lower : raw;
 }
 
 export class CommandRouter {
@@ -82,7 +133,8 @@ export class CommandRouter {
       return this.deniedReply();
     }
 
-    const [command, ...args] = message.text.split(/\s+/);
+    const [rawCommand, ...args] = message.text.split(/\s+/);
+    const command = resolveCommandAlias(rawCommand);
     const rest = args.join(" ").trim();
 
     try {
@@ -138,7 +190,8 @@ export class CommandRouter {
       this.conversationByIdentity.set(this.identityKey(message.identity), message.conversation);
     }
 
-    const [command, ...args] = message.text.split(/\s+/);
+    const [rawCommand, ...args] = message.text.split(/\s+/);
+    const command = resolveCommandAlias(rawCommand);
     const rest = args.join(" ").trim();
 
     try {
@@ -169,6 +222,12 @@ export class CommandRouter {
       if (command === "/cancel") {
         return this.text(await this.cancelActiveTurn(message.identity));
       }
+      if (command === "/img") {
+        return await this.sendLocalMedia(message.identity, "image", rest);
+      }
+      if (command === "/file") {
+        return await this.sendLocalMedia(message.identity, "file", rest);
+      }
       if (command === "/approve") {
         return this.text(await this.resolveApproval(rest, "accept"));
       }
@@ -176,7 +235,7 @@ export class CommandRouter {
         return this.text(await this.resolveApproval(rest, "decline"));
       }
       if (!command.startsWith("/")) {
-        return await this.handlePlainText(message.identity, message.text);
+        return await this.handlePlainText(message.identity, message.text, message.attachments);
       }
       // handleMessage re-normalizes; normalizeChannelMessage is idempotent.
       return this.handleMessage(message);
@@ -209,6 +268,11 @@ export class CommandRouter {
     if (reply && typeof reply.text === "string" && reply.text) {
       return { ...reply, text: `${banner}\n\n${reply.text}` };
     }
+    // A media reply (e.g. /img on the first message) carries no text — keep the
+    // attachment and use the welcome banner as its caption.
+    if (reply && reply.media) {
+      return { ...reply, text: banner };
+    }
     return { kind: "text", text: banner };
   }
 
@@ -239,19 +303,21 @@ export class CommandRouter {
 
   helpText() {
     return [
-      "Comote 命令",
-      "/projects - 列出可用项目",
-      "/open <编号|路径> - 选择一个项目",
-      "/sessions - 列出 Codex Desktop 对话",
-      "/use <编号|id> - 切换到某个对话",
+      "Comote 命令（命令大小写不敏感，括号内为中文别名）",
+      "/projects (/项目) - 列出可用项目",
+      "/open (/打开) <编号|路径> - 选择一个项目",
+      "/sessions (/会话) - 列出 Codex Desktop 对话",
+      "/use (/切换) <编号|id> - 切换到某个对话",
       "/switch <编号|id> - /use 的别名",
-      "/new <消息> - 新建一个 Codex 对话",
-      "/current - 显示当前项目和对话",
-      "/tail [n] - 显示最近的本地对话消息",
-      "/approve <编号> - 批准一个 Codex 请求",
-      "/deny <编号> - 拒绝一个 Codex 请求",
-      "/cancel - 取消当前 Codex 任务",
-      "/status - 显示 Comote 状态",
+      "/new (/新建) <消息> - 新建一个 Codex 对话",
+      "/img (/图片) <路径> - 把电脑端图片发到当前聊天",
+      "/file (/文件) <路径> - 把电脑端文件发到当前聊天",
+      "/current (/当前) - 显示当前项目和对话",
+      "/tail (/最近) [n] - 显示最近的本地对话消息",
+      "/approve (/批准) <编号> - 批准一个 Codex 请求",
+      "/deny (/拒绝) <编号> - 拒绝一个 Codex 请求",
+      "/cancel (/取消) - 取消当前 Codex 任务",
+      "/status (/状态) - 显示 Comote 状态",
     ].join("\n");
   }
 
@@ -553,7 +619,7 @@ export class CommandRouter {
     return this.newSession(identity, message);
   }
 
-  async handlePlainText(identity, text) {
+  async handlePlainText(identity, text, attachments = []) {
     const key = this.identityKey(identity);
     const trimmed = text.trim();
     const pending = this.pendingByIdentity.get(key);
@@ -581,7 +647,7 @@ export class CommandRouter {
     if (!this.sessions.getActiveSession(projectPath)) {
       return this.sessionsTextAsync(identity, { choose: true });
     }
-    return this.text(await this.sendToActiveSession(identity, text));
+    return this.text(await this.sendToActiveSession(identity, text, attachments));
   }
 
   async chooseProject(identity, selector) {
@@ -597,7 +663,7 @@ export class CommandRouter {
     return { kind: "text", text: `${opened}\n\n${sessionsReply.text}`, picker: sessionsReply.picker };
   }
 
-  async sendToActiveSession(identity, text) {
+  async sendToActiveSession(identity, text, attachments = []) {
     const projectPath = this.requireCurrentProject(identity);
     const activeSession = this.sessions.getActiveSession(projectPath);
     if (!activeSession) {
@@ -608,15 +674,21 @@ export class CommandRouter {
     }
     this.enforceTurnRate(identity);
     this.bindThreadForIdentity(identity, activeSession.id);
-    this.transcript?.record(activeSession.id, "user", text);
+    // Images go to Codex as real image inputs; non-image files are referenced
+    // by local path in the prompt so Codex reads them with its file tools.
+    const images = mediaPaths(attachments, "image");
+    const turnText = buildTurnText(text, attachments);
+    // The local conversation view records a human-readable line with attachment
+    // placeholders (e.g. "[PNG图片] shot.png"); Codex still receives turnText.
+    this.transcript?.record(activeSession.id, "user", buildDisplayText(text, attachments));
     try {
-      await this.codexDesktop.startTurn({ threadId: activeSession.id, text, cwd: projectPath });
+      await this.codexDesktop.startTurn({ threadId: activeSession.id, text: turnText, cwd: projectPath, images });
     } catch (error) {
       if (!isThreadNotFoundError(error)) {
         throw error;
       }
       await this.resumeDesktopThread(activeSession.id);
-      await this.codexDesktop.startTurn({ threadId: activeSession.id, text, cwd: projectPath });
+      await this.codexDesktop.startTurn({ threadId: activeSession.id, text: turnText, cwd: projectPath, images });
     }
     return `已发送给 Codex Desktop，正在处理…\n${activeSession.id}`;
   }
@@ -652,6 +724,51 @@ export class CommandRouter {
     return `已取消当前 Codex 任务\n${activeSession.id}`;
   }
 
+  // /img and /file: send a file that lives on THIS computer out to the phone
+  // chat. The path is anchored to (and confined within) the current project
+  // directory — see resolveLocalMediaPath for the local-safety boundary.
+  async sendLocalMedia(identity, kind, rest) {
+    const projectRoot = this.requireCurrentProject(identity);
+    if (!rest) {
+      throw new Error(kind === "image" ? "用法：/img <项目内图片路径>" : "用法：/file <项目内文件路径>");
+    }
+    const { path, name } = await this.resolveLocalMediaPath(projectRoot, rest, kind);
+    return { kind: "media", text: "", media: { kind, path, name } };
+  }
+
+  // Resolves a user-supplied path to a real file inside the current project,
+  // rejecting anything outside it (symlink escape / `..` traversal) and files
+  // over the channel size cap.
+  async resolveLocalMediaPath(projectRoot, rawPath, kind) {
+    const candidate = isAbsolutePath(rawPath) ? rawPath : resolve(projectRoot, rawPath);
+    let resolved;
+    try {
+      resolved = await realpath(candidate);
+    } catch {
+      throw new Error(`找不到文件：${rawPath}`);
+    }
+    let root;
+    try {
+      root = await realpath(projectRoot);
+    } catch {
+      root = projectRoot;
+    }
+    if (resolved !== root && !resolved.startsWith(root + sep)) {
+      throw new Error("出于安全考虑，只能发送当前项目目录内的文件。");
+    }
+    const stats = await stat(resolved);
+    if (!stats.isFile()) {
+      throw new Error("路径不是一个文件。");
+    }
+    const limit = MEDIA_LIMIT_BYTES[kind];
+    if (stats.size > limit) {
+      const sizeMb = (stats.size / (1024 * 1024)).toFixed(1);
+      const limitMb = limit / (1024 * 1024);
+      throw new Error(`文件 ${sizeMb}MB 超过飞书 ${limitMb}MB 上限，请压缩或在本机查看。`);
+    }
+    return { path: resolved, name: basename(resolved) };
+  }
+
   requireCurrentProject(identity) {
     const projectPath = this.currentProjectByIdentity.get(this.identityKey(identity));
     if (!projectPath) {
@@ -676,4 +793,48 @@ export class CommandRouter {
 
 function isThreadNotFoundError(error) {
   return /thread not found/i.test(error?.message ?? String(error));
+}
+
+// Local paths of resolved inbound attachments of a given kind.
+function mediaPaths(attachments, kind) {
+  return (attachments ?? []).filter((attachment) => attachment.kind === kind && attachment.path).map((attachment) => attachment.path);
+}
+
+// Human-readable record for the local conversation view: an attachment
+// placeholder per file ("[PNG图片] shot.png" / "[PPTX文件] report.pptx") followed
+// by the user's caption. Unlike buildTurnText, this never embeds absolute paths.
+function buildDisplayText(text, attachments) {
+  const markers = (attachments ?? []).map(mediaPlaceholder).filter(Boolean);
+  const caption = (text ?? "").trim();
+  return [...markers, caption].filter(Boolean).join("\n") || caption;
+}
+
+function mediaPlaceholder(attachment) {
+  if (!attachment?.kind) {
+    return "";
+  }
+  const ext = (extname(attachment.name ?? "") || extname(attachment.path ?? ""))
+    .replace(/^\./, "")
+    .toUpperCase();
+  const noun = attachment.kind === "image" ? "图片" : "文件";
+  const label = `[${ext ? `${ext}${noun}` : noun}]`;
+  // Show a real filename when we have one (files); image keys have no extension.
+  return extname(attachment.name ?? "") ? `${label} ${attachment.name}` : label;
+}
+
+// Builds the turn text: the user's message plus a path reference for each
+// non-image file. An image-only message with no text gets a default prompt so
+// Codex has something to act on.
+function buildTurnText(text, attachments) {
+  const files = (attachments ?? []).filter((attachment) => attachment.kind !== "image" && attachment.path);
+  const hasImages = (attachments ?? []).some((attachment) => attachment.kind === "image" && attachment.path);
+  let out = text ?? "";
+  if (files.length > 0) {
+    const lines = files.map((file) => `[用户发来文件：${file.path}]`).join("\n");
+    out = out ? `${out}\n\n${lines}` : lines;
+  }
+  if (!out && hasImages) {
+    out = "请查看我发送的图片。";
+  }
+  return out;
 }

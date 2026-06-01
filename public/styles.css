@@ -1510,6 +1510,39 @@ code {
   font-weight: 600;
 }
 
+/* Channel filter chips (飞书/微信), shown when 仅手机渠道 is on. */
+.channel-filter {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: 14px;
+}
+
+.channel-filter[hidden] {
+  display: none;
+}
+
+.chan-chip {
+  padding: 2px 11px;
+  border-radius: 999px;
+  border: 1px solid var(--line-strong);
+  background: var(--surface);
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.chan-chip:hover {
+  border-color: var(--teal);
+}
+
+.chan-chip.active {
+  background: var(--teal-bg);
+  color: var(--teal-text);
+  border-color: var(--teal);
+}
+
 /* 手机 badge on threads that have phone-bridge records. */
 .thread-badge {
   display: inline-block;

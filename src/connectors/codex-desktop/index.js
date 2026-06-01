@@ -315,10 +315,17 @@ export class CodexDesktopConnector {
     return this.client.request("thread/resume", { threadId });
   }
 
-  async startTurn({ threadId, text, cwd = null }) {
+  async startTurn({ threadId, text, cwd = null, images = [] }) {
+    // The app-server input list accepts a `localImage` item for a local file
+    // path; image attachments from the phone are forwarded this way so Codex
+    // actually sees them (not just a path reference).
+    const input = [{ type: "text", text, text_elements: [] }];
+    for (const path of images) {
+      input.push({ type: "localImage", path });
+    }
     return this.client.request("turn/start", {
       threadId,
-      input: [{ type: "text", text, text_elements: [] }],
+      input,
       cwd,
       approvalsReviewer: "user",
     });
