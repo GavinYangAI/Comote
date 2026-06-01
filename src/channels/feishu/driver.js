@@ -138,6 +138,50 @@ export class FeishuDriver {
     return body;
   }
 
+  async uploadImage(localPath) {
+    const { readFile } = await import("node:fs/promises");
+    const { basename } = await import("node:path");
+    const token = await this.getTenantAccessToken();
+    const bytes = await readFile(localPath);
+    const form = new FormData();
+    form.append("image_type", "message");
+    form.append("image", new Blob([bytes]), basename(localPath));
+    const response = await this.fetch(`${this.baseUrl}/im/v1/images`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${token}` },
+      body: form,
+    });
+    if (!response.ok) {
+      throw new Error(`Feishu image upload failed: ${response.status} ${await response.text()}`);
+    }
+    const body = await response.json();
+    this._assertApiSuccess(body);
+    return body.data?.image_key ?? null;
+  }
+
+  async uploadFile(localPath, fileName) {
+    const { readFile } = await import("node:fs/promises");
+    const { basename } = await import("node:path");
+    const token = await this.getTenantAccessToken();
+    const bytes = await readFile(localPath);
+    const name = fileName ?? basename(localPath);
+    const form = new FormData();
+    form.append("file_type", "stream");
+    form.append("file_name", name);
+    form.append("file", new Blob([bytes]), name);
+    const response = await this.fetch(`${this.baseUrl}/im/v1/files`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${token}` },
+      body: form,
+    });
+    if (!response.ok) {
+      throw new Error(`Feishu file upload failed: ${response.status} ${await response.text()}`);
+    }
+    const body = await response.json();
+    this._assertApiSuccess(body);
+    return body.data?.file_key ?? null;
+  }
+
   async getTenantAccessToken() {
     if (this.tenantAccessToken && Date.now() < this.tenantAccessTokenExpiry) {
       return this.tenantAccessToken;

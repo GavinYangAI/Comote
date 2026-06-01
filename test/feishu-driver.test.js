@@ -1,5 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import { FeishuDriver, buildEventHandlers } from "../src/channels/feishu/driver.js";
 
@@ -340,6 +343,42 @@ test("getTenantAccessToken rejects all concurrent awaiters on fetch failure", as
   assert.equal(result2.status, "rejected");
   assert.match(result1.reason.message, /Feishu token failed/);
   assert.match(result2.reason.message, /Feishu token failed/);
+});
+
+test("feishu driver uploads image and file then returns keys", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "comote-up-"));
+  const imgPath = join(dir, "a.png");
+  const filePath = join(dir, "notes.txt");
+  writeFileSync(imgPath, Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+  writeFileSync(filePath, "hello");
+
+  const requests = [];
+  const driver = new FeishuDriver({
+    appId: "cli_a",
+    appSecret: "secret",
+    fetchImpl: async (url, options) => {
+      requests.push({ url, options });
+      if (url.endsWith("/auth/v3/tenant_access_token/internal")) {
+        return jsonResponse({ tenant_access_token: "tok" });
+      }
+      if (url.endsWith("/im/v1/images")) {
+        return jsonResponse({ code: 0, data: { image_key: "img_1" } });
+      }
+      if (url.endsWith("/im/v1/files")) {
+        return jsonResponse({ code: 0, data: { file_key: "file_1" } });
+      }
+      return jsonResponse({ code: 0 });
+    },
+  });
+
+  const imageKey = await driver.uploadImage(imgPath);
+  const fileKey = await driver.uploadFile(filePath, "notes.txt");
+
+  assert.equal(imageKey, "img_1");
+  assert.equal(fileKey, "file_1");
+  const imageReq = requests.find((r) => r.url.endsWith("/im/v1/images"));
+  assert.ok(imageReq.options.body instanceof FormData);
+  assert.equal(imageReq.options.headers.authorization, "Bearer tok");
 });
 
 function jsonResponse(body, status = 200) {
