@@ -527,6 +527,34 @@ test("feishu driver sends image and file messages", async () => {
   assert.equal(JSON.parse(fileReq.options.body).content, JSON.stringify({ file_key: "file_1" }));
 });
 
+test("feishu driver downloads a message resource to disk", async () => {
+  const { readFileSync } = await import("node:fs");
+  const dir = mkdtempSync(join(tmpdir(), "comote-dl-"));
+  const dest = join(dir, "got.png");
+
+  const driver = new FeishuDriver({
+    appId: "cli_a",
+    appSecret: "secret",
+    fetchImpl: async (url) => {
+      if (url.endsWith("/auth/v3/tenant_access_token/internal")) {
+        return jsonResponse({ tenant_access_token: "tok" });
+      }
+      // resource endpoint returns binary bytes
+      return new Response(Buffer.from("PNGDATA"), { status: 200 });
+    },
+  });
+
+  const out = await driver.downloadMessageResource({
+    messageId: "m1",
+    fileKey: "k1",
+    type: "image",
+    destPath: dest,
+  });
+
+  assert.equal(out, dest);
+  assert.equal(readFileSync(dest, "utf8"), "PNGDATA");
+});
+
 function jsonResponse(body, status = 200) {
   return {
     ok: status >= 200 && status < 300,

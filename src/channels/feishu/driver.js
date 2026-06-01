@@ -237,6 +237,32 @@ export class FeishuDriver {
     return { messageId: body.data?.message_id ?? null, raw: body };
   }
 
+  async downloadMessageResource({ messageId, fileKey, type = "file", destPath }) {
+    if (!messageId) {
+      throw new Error("messageId is required");
+    }
+    if (!fileKey) {
+      throw new Error("fileKey is required");
+    }
+    if (!destPath) {
+      throw new Error("destPath is required");
+    }
+    const { mkdir, writeFile } = await import("node:fs/promises");
+    const { dirname } = await import("node:path");
+    const token = await this.getTenantAccessToken();
+    const response = await this.fetch(
+      `${this.baseUrl}/im/v1/messages/${encodeURIComponent(messageId)}/resources/${encodeURIComponent(fileKey)}?type=${encodeURIComponent(type)}`,
+      { method: "GET", headers: { authorization: `Bearer ${token}` } },
+    );
+    if (!response.ok) {
+      throw new Error(`Feishu resource download failed: ${response.status} ${await response.text()}`);
+    }
+    const bytes = Buffer.from(await response.arrayBuffer());
+    await mkdir(dirname(destPath), { recursive: true });
+    await writeFile(destPath, bytes);
+    return destPath;
+  }
+
   async getTenantAccessToken() {
     if (this.tenantAccessToken && Date.now() < this.tenantAccessTokenExpiry) {
       return this.tenantAccessToken;
