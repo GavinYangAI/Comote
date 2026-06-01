@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 import { approvalResolvedCard, textCard } from "./cards.js";
 
 export class FeishuRuntimeService {
@@ -57,7 +59,15 @@ export class FeishuRuntimeService {
     this._driverGeneration += 1;
     this._startPromise = null;
     if (shouldRestart && this.driver) {
-      this.driver.stopEventStream?.();
+      // A failed close on the outgoing socket (e.g. a half-open Lark WSClient on
+      // re-bind) must not abort reconfiguration — otherwise the login confirm
+      // path throws (HTTP 500) and the freshly-scanned binding is lost. Swallow
+      // it and let the new driver take over.
+      try {
+        this.driver.stopEventStream?.();
+      } catch (error) {
+        this.lastError = error.message;
+      }
     }
     this.driver = driver;
     this.lastError = null;
@@ -130,7 +140,11 @@ export class FeishuRuntimeService {
   }
 
   stop() {
-    this.driver?.stopEventStream?.();
+    try {
+      this.driver?.stopEventStream?.();
+    } catch (error) {
+      this.lastError = error.message;
+    }
     this.running = false;
     return this.getStatus();
   }
@@ -181,12 +195,14 @@ export class FeishuRuntimeService {
             receiveId: reply.conversationId,
             receiveIdType: "chat_id",
             card: reply.card,
+            uuid: deliveryId(reply),
           });
         } else {
           await this.driver.sendText({
             receiveId: reply.conversationId,
             receiveIdType: "chat_id",
             text: reply.text,
+            uuid: deliveryId(reply),
           });
         }
         this.outboundQueue.markDelivered(reply.id);
@@ -217,11 +233,21 @@ export class FeishuRuntimeService {
     const { kind, path, name } = reply.media;
     if (kind === "image") {
       const imageKey = await this.driver.uploadImage(path);
-      await this.driver.sendImage({ receiveId: reply.conversationId, receiveIdType: "chat_id", imageKey });
+      await this.driver.sendImage({
+        receiveId: reply.conversationId,
+        receiveIdType: "chat_id",
+        imageKey,
+        uuid: deliveryId(reply),
+      });
       return;
     }
     const fileKey = await this.driver.uploadFile(path, name);
-    await this.driver.sendFile({ receiveId: reply.conversationId, receiveIdType: "chat_id", fileKey });
+    await this.driver.sendFile({
+      receiveId: reply.conversationId,
+      receiveIdType: "chat_id",
+      fileKey,
+      uuid: deliveryId(reply),
+    });
   }
 
   async openThreadCard({ threadId, conversationId, card }) {
@@ -456,6 +482,11 @@ export class FeishuRuntimeService {
 
 function isUrlVerification(payload) {
   return payload?.type === "url_verification" && Boolean(payload.challenge);
+}
+
+function deliveryId(reply) {
+  const source = reply.dedupeKey ?? reply.id;
+  return `comote-${createHash("sha256").update(String(source)).digest("hex").slice(0, 32)}`;
 }
 
 function isFeishuAuthError(error) {

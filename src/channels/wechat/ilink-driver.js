@@ -112,7 +112,7 @@ export class WeChatIlinkDriver {
     };
   }
 
-  async sendText({ conversationId, accountId = this.accountId, inReplyTo = null, text }) {
+  async sendText({ conversationId, accountId = this.accountId, inReplyTo = null, text, clientId = null }) {
     this.#requireToken();
     if (!text) {
       throw new Error("text is required");
@@ -121,13 +121,18 @@ export class WeChatIlinkDriver {
     if (!toUserId) {
       throw new Error("conversationId is required for WeChat delivery");
     }
+    // WeChat desktop (PC) collapses a lone "\n" into a space, so multi-line
+    // replies (/help, Codex output) render as one blob there while mobile honours
+    // it. Normalising to CRLF makes the desktop client break lines too; mobile
+    // still renders a single break.
+    const normalizedText = String(text).replace(/\r?\n/g, "\r\n");
     return this.#post("ilink/bot/sendmessage", {
       msg: {
         from_user_id: "",
         to_user_id: toUserId,
-        client_id: `comote-${crypto.randomUUID()}`,
+        client_id: clientId ?? `comote-${crypto.randomUUID()}`,
         context_token: inReplyTo,
-        item_list: [{ type: 1, text_item: { text } }],
+        item_list: [{ type: 1, text_item: { text: normalizedText } }],
         message_type: 2,
         message_state: 2,
       },

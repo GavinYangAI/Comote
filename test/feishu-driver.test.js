@@ -19,11 +19,12 @@ test("feishu driver verifies webhook tokens and sends text replies", async () =>
   });
 
   assert.equal(driver.verifyEvent({ token: "verify_me" }), true);
-  await driver.sendText({ receiveId: "chat_1", text: "hello" });
+  await driver.sendText({ receiveId: "chat_1", text: "hello", uuid: "comote-send-1" });
 
   assert.equal(requests.length, 2);
   assert.match(requests[1].url, /im\/v1\/messages/);
   assert.equal(requests[1].options.headers.authorization, "Bearer tenant_token");
+  assert.equal(JSON.parse(requests[1].options.body).uuid, "comote-send-1");
 });
 
 test("feishu driver starts and polls QR app registration", async () => {
@@ -105,13 +106,14 @@ test("feishu driver sends and updates interactive cards", async () => {
     },
   });
 
-  const sent = await driver.sendCard({ receiveId: "oc_chat", card: { elements: [] } });
+  const sent = await driver.sendCard({ receiveId: "oc_chat", card: { elements: [] }, uuid: "comote-card-1" });
   assert.equal(sent.messageId, "om_card_1");
 
   const sendReq = requests.find(
     (req) => req.options.method === "POST" && req.url.includes("/im/v1/messages?"),
   );
   assert.equal(JSON.parse(sendReq.options.body).msg_type, "interactive");
+  assert.equal(JSON.parse(sendReq.options.body).uuid, "comote-card-1");
 
   await driver.updateCard({ messageId: "om_card_1", card: { elements: [] } });
   const patchReq = requests.find((req) => req.options.method === "PATCH");

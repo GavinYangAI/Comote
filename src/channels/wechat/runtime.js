@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 export class WeChatRuntimeService {
   constructor({ adapter, outboundQueue, driver = null, pollIntervalMs = 2500, persist = null, cursor = null }) {
     if (!adapter) {
@@ -108,7 +110,7 @@ export class WeChatRuntimeService {
       let outbound = 0;
       for (const reply of this.outboundQueue.list({ channel: "wechat" })) {
         try {
-          await this.driver.sendText(reply);
+          await this.driver.sendText({ ...reply, clientId: deliveryId(reply) });
           this.outboundQueue.markDelivered(reply.id);
           outbound += 1;
         } catch (error) {
@@ -166,6 +168,11 @@ export class WeChatRuntimeService {
       // A failed typing indicator must never disrupt the runtime.
     }
   }
+}
+
+function deliveryId(reply) {
+  const source = reply.dedupeKey ?? reply.id;
+  return `comote-${createHash("sha256").update(String(source)).digest("hex").slice(0, 32)}`;
 }
 
 function isWeChatAuthError(error) {

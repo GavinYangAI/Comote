@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 
 import { AuthorizationStore } from "../src/core/authorization.js";
 import { CommandRouter } from "../src/core/commands.js";
@@ -203,6 +204,7 @@ test("feishu runtime delivers a queued card via sendCard", async () => {
   assert.equal(result.outbound, 1);
   assert.equal(cardCalls.length, 1);
   assert.equal(cardCalls[0].receiveId, "oc_chat");
+  assert.equal(cardCalls[0].uuid, deliveryId("card:1"));
   assert.deepEqual(outbound.list({ channel: "feishu" }), []);
 });
 
@@ -645,3 +647,7 @@ test("auth-like Feishu startup failures mark runtime as needing relogin", async 
   assert.equal(status.needsRelogin, true);
   assert.match(status.lastError, /invalid app secret/);
 });
+
+function deliveryId(source) {
+  return `comote-${createHash("sha256").update(String(source)).digest("hex").slice(0, 32)}`;
+}

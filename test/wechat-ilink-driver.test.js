@@ -159,16 +159,17 @@ test("sends text through Tencent iLink-style sendmessage endpoint", async () => 
     conversationId: "dm_wxid_owner",
     inReplyTo: "msg_1",
     text: "Comote status",
+    clientId: "comote-stable-delivery",
   });
 
   assert.equal(requests[0].url, "https://wechat.example/api/ilink/bot/sendmessage");
   const body = JSON.parse(requests[0].options.body);
-  assert.match(body.msg.client_id, /^comote-[0-9a-f-]{36}$/);
-  delete body.msg.client_id;
+  assert.equal(body.msg.client_id, "comote-stable-delivery");
   assert.deepEqual(body, {
     msg: {
       from_user_id: "",
       to_user_id: "wxid_owner",
+      client_id: "comote-stable-delivery",
       context_token: "msg_1",
       message_type: 2,
       message_state: 2,

@@ -85,7 +85,7 @@ test("sendImage and sendFile build the right msg_type and content", async () => 
   });
 
   await driver.sendImage({ receiveId: "oc_chat", imageKey: "img_1" });
-  await driver.sendFile({ receiveId: "oc_chat", fileKey: "file_1" });
+  await driver.sendFile({ receiveId: "oc_chat", fileKey: "file_1", uuid: "comote-file-1" });
 
   const sends = requests
     .filter((r) => r.options.method === "POST" && r.url.includes("/im/v1/messages?"))
@@ -94,6 +94,7 @@ test("sendImage and sendFile build the right msg_type and content", async () => 
   const fileMsg = sends.find((b) => b.msg_type === "file");
   assert.equal(imageMsg.content, JSON.stringify({ image_key: "img_1" }));
   assert.equal(fileMsg.content, JSON.stringify({ file_key: "file_1" }));
+  assert.equal(fileMsg.uuid, "comote-file-1");
 });
 
 // ── Router: /img /file security boundary ───────────────────────────────────

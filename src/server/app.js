@@ -29,8 +29,12 @@ export function createServer(state = createComoteState(), { apiToken = process.e
       }
       await serveStatic(request, response);
     } catch (error) {
+      // The settings UI only shows error.message; log the stack here so an
+      // unexpected 500 (e.g. during a channel bind) is diagnosable from the daemon.
+      console.error(`Comote API ${request.method} ${request.url} failed:`, error);
       sendJson(response, 500, { error: error.message });
     }
+
   });
 }
 

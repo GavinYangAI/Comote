@@ -52,7 +52,7 @@ export class FeishuDriver {
     return payload?.token === this.verificationToken || payload?.header?.token === this.verificationToken;
   }
 
-  async sendText({ receiveId, receiveIdType = "chat_id", text }) {
+  async sendText({ receiveId, receiveIdType = "chat_id", text, uuid = null }) {
     if (!receiveId) {
       throw new Error("receiveId is required");
     }
@@ -72,6 +72,7 @@ export class FeishuDriver {
           receive_id: receiveId,
           msg_type: "text",
           content: JSON.stringify({ text }),
+          ...(uuid ? { uuid } : {}),
         }),
       },
     );
@@ -83,7 +84,7 @@ export class FeishuDriver {
     return body;
   }
 
-  async sendCard({ receiveId, receiveIdType = "chat_id", card }) {
+  async sendCard({ receiveId, receiveIdType = "chat_id", card, uuid = null }) {
     if (!receiveId) {
       throw new Error("receiveId is required");
     }
@@ -103,6 +104,7 @@ export class FeishuDriver {
           receive_id: receiveId,
           msg_type: "interactive",
           content: JSON.stringify(card),
+          ...(uuid ? { uuid } : {}),
         }),
       },
     );
@@ -194,7 +196,7 @@ export class FeishuDriver {
     return fileKey;
   }
 
-  async sendImage({ receiveId, receiveIdType = "chat_id", imageKey }) {
+  async sendImage({ receiveId, receiveIdType = "chat_id", imageKey, uuid = null }) {
     if (!receiveId) {
       throw new Error("receiveId is required");
     }
@@ -207,10 +209,11 @@ export class FeishuDriver {
       msgType: "image",
       content: { image_key: imageKey },
       label: "image",
+      uuid,
     });
   }
 
-  async sendFile({ receiveId, receiveIdType = "chat_id", fileKey }) {
+  async sendFile({ receiveId, receiveIdType = "chat_id", fileKey, uuid = null }) {
     if (!receiveId) {
       throw new Error("receiveId is required");
     }
@@ -223,10 +226,11 @@ export class FeishuDriver {
       msgType: "file",
       content: { file_key: fileKey },
       label: "file",
+      uuid,
     });
   }
 
-  async _sendMessage({ receiveId, receiveIdType, msgType, content, label }) {
+  async _sendMessage({ receiveId, receiveIdType, msgType, content, label, uuid = null }) {
     const token = await this.getTenantAccessToken();
     const response = await this.fetch(
       `${this.baseUrl}/im/v1/messages?receive_id_type=${encodeURIComponent(receiveIdType)}`,
@@ -240,6 +244,7 @@ export class FeishuDriver {
           receive_id: receiveId,
           msg_type: msgType,
           content: JSON.stringify(content),
+          ...(uuid ? { uuid } : {}),
         }),
       },
     );

@@ -195,7 +195,14 @@ export function createComoteState({
             domain: result.domain ?? domain,
             linkedUserId: result.userId,
           });
-          feishuRuntime.configureDriver(createFeishuDriver(feishuConfig));
+          try {
+            feishuRuntime.configureDriver(createFeishuDriver(feishuConfig));
+          } catch (error) {
+            // Re-initialising the runtime must never abort the confirm: the new
+            // credentials are still saved + returned below so the page flips to
+            // "bound" and the user is detected; the runtime resyncs on next start.
+            feishuRuntime.lastError = error.message;
+          }
           let userName = null;
           try {
             userName = (await feishuRuntime.driver?.resolveUserName?.(result.userId)) ?? null;

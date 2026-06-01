@@ -266,6 +266,12 @@ export class CommandRouter {
   prependWelcome(reply) {
     const banner = this.welcomeText();
     if (reply && typeof reply.text === "string" && reply.text) {
+      // /help (and the unknown-command fallback) already returns the full help
+      // menu, which welcomeText() also embeds — appending it would print the menu
+      // twice on first contact. Keep just the banner (greeting + menu, once).
+      if (reply.text === this.helpText()) {
+        return { ...reply, text: banner };
+      }
       return { ...reply, text: `${banner}\n\n${reply.text}` };
     }
     // A media reply (e.g. /img on the first message) carries no text — keep the

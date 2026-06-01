@@ -11,7 +11,11 @@ async function getJson(path, options = {}) {
   };
   const response = await fetch(path, { ...options, headers });
   if (!response.ok) {
-    const error = new Error(`Request failed: ${response.status}`);
+    // Surface the server's real message (sent as { error }) instead of a bare
+    // status code, so a failed bind/login poll is diagnosable from the UI.
+    const body = await response.json().catch(() => null);
+    const detail = body && typeof body.error === "string" ? `：${body.error}` : "";
+    const error = new Error(`Request failed: ${response.status}${detail}`);
     error.status = response.status;
     throw error;
   }
