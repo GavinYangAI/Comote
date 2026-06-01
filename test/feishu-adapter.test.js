@@ -159,3 +159,37 @@ test("feishu adapter keeps an event-provided name without calling the resolver",
   assert.equal(detected[0].displayName, "王五");
   assert.equal(resolverCalls, 0);
 });
+
+test("normalizeInbound extracts image and file attachments", () => {
+  const adapter = new FeishuChannelAdapter({ commandRouter: { handleMessageAsync: async () => ({}) } });
+
+  const imageMsg = adapter.normalizeInbound({
+    event: {
+      sender: { sender_id: { open_id: "u1" }, name: "A" },
+      message: {
+        message_id: "m1",
+        chat_id: "c1",
+        chat_type: "p2p",
+        message_type: "image",
+        content: JSON.stringify({ image_key: "img_k" }),
+      },
+    },
+  });
+  assert.deepEqual(imageMsg.attachments, [{ type: "image", fileKey: "img_k", fileName: "image.png", messageId: "m1" }]);
+  assert.equal(imageMsg.text, "");
+
+  const fileMsg = adapter.normalizeInbound({
+    event: {
+      sender: { sender_id: { open_id: "u1" }, name: "A" },
+      message: {
+        message_id: "m2",
+        chat_id: "c1",
+        chat_type: "p2p",
+        message_type: "file",
+        content: JSON.stringify({ file_key: "file_k", file_name: "report.pdf" }),
+      },
+    },
+  });
+  assert.deepEqual(fileMsg.attachments, [{ type: "file", fileKey: "file_k", fileName: "report.pdf", messageId: "m2" }]);
+  assert.equal(fileMsg.text, "");
+});

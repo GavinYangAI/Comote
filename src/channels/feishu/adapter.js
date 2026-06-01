@@ -37,6 +37,7 @@ export class FeishuChannelAdapter {
     }
 
     const chatType = message.chat_type ?? payload.chatType ?? "p2p";
+    const messageType = message.message_type ?? payload.messageType ?? "text";
     return {
       messageId: message.message_id ?? payload.messageId ?? null,
       conversationId: message.chat_id ?? payload.chatId ?? stableId,
@@ -46,8 +47,8 @@ export class FeishuChannelAdapter {
         stableId,
         displayName: sender.name ?? payload.senderName ?? stableId,
       },
-      text: readFeishuText(message.content ?? payload.text ?? ""),
-      attachments: [],
+      text: messageType === "text" ? readFeishuText(message.content ?? payload.text ?? "") : "",
+      attachments: readFeishuAttachments(messageType, message),
     };
   }
 
@@ -135,6 +136,22 @@ function readFeishuText(content) {
   } catch {
     return content;
   }
+}
+
+function readFeishuAttachments(messageType, message) {
+  if (messageType !== "image" && messageType !== "file") {
+    return [];
+  }
+  let content = {};
+  try {
+    content = typeof message.content === "string" ? JSON.parse(message.content) : message.content ?? {};
+  } catch {
+    return [];
+  }
+  if (messageType === "image") {
+    return [{ type: "image", fileKey: content.image_key, fileName: content.file_name ?? "image.png", messageId: message.message_id ?? null }];
+  }
+  return [{ type: "file", fileKey: content.file_key, fileName: content.file_name ?? "file", messageId: message.message_id ?? null }];
 }
 
 async function noopSendReply() {
