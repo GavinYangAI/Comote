@@ -84,6 +84,29 @@ test("pickerCard renders one button per item with pick values", () => {
   assert.deepEqual(action.actions[1].value, { kind: "pick", pickKind: "session", index: "1" });
 });
 
+test("statusCard renders pushfile buttons for changed files on completion", () => {
+  const card = statusCard({
+    phase: "completed",
+    threadId: "t1",
+    text: "done",
+    done: true,
+    files: [{ path: "/home/proj/out/a.png", name: "a.png" }],
+  });
+  const action = card.elements.find((e) => e.tag === "action");
+  assert.ok(action, "expected an action block");
+  const btn = action.actions[0];
+  assert.equal(btn.value.kind, "pushfile");
+  assert.equal(btn.value.threadId, "t1");
+  assert.equal(btn.value.path, "/home/proj/out/a.png");
+  assert.match(btn.text.content, /a\.png/);
+});
+
+test("statusCard without files renders no pushfile action", () => {
+  const card = statusCard({ phase: "completed", text: "done", done: true });
+  const action = (card.elements || []).find((e) => e.tag === "action");
+  assert.equal(action, undefined);
+});
+
 test("renderMarkdown does not sever a fenced code block across elements", () => {
   const code = "const x = 1;\n".repeat(300);
   const input = `intro paragraph\n\`\`\`\n${code}\`\`\`\noutro paragraph`;
