@@ -95,6 +95,16 @@ function isPending(entry) {
 }
 
 function makeDedupeKey(reply) {
+  if (reply.kind === "image" || reply.kind === "file") {
+    return [
+      reply.channel,
+      reply.accountId ?? "",
+      reply.conversationId ?? "",
+      reply.inReplyTo ?? "",
+      reply.kind,
+      reply.path ?? "",
+    ].join("|");
+  }
   return [
     reply.channel,
     reply.accountId ?? "",

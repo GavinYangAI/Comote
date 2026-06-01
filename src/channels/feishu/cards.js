@@ -64,7 +64,7 @@ export function textCard(text) {
   };
 }
 
-export function statusCard({ phase, threadId = null, steps = 0, text = "", done = false }) {
+export function statusCard({ phase, threadId = null, steps = 0, text = "", done = false, files = [] }) {
   const meta = PHASES[phase] ?? PHASES.progress;
   const elements = [];
   if (phase === "started" || phase === "progress") {
@@ -85,6 +85,26 @@ export function statusCard({ phase, threadId = null, steps = 0, text = "", done 
         },
       ],
     });
+  }
+  if (files.length > 0 && threadId) {
+    elements.push({ tag: "markdown", content: "**Codex 改动的文件**（点按钮发到这里）：" });
+    elements.push({
+      tag: "action",
+      actions: files.slice(0, 8).map((file) => ({
+        tag: "button",
+        text: {
+          tag: "plain_text",
+          content: `📎 ${truncate(file.name || file.path.split(/[/\\]/).pop() || "", 36)}`,
+        },
+        value: { kind: "pushfile", threadId, path: file.path },
+      })),
+    });
+    if (files.length > 8) {
+      elements.push({
+        tag: "markdown",
+        content: `…还有 ${files.length - 8} 个，用 \`/file <路径>\` 单独获取。`,
+      });
+    }
   }
   return {
     config: { wide_screen_mode: true },

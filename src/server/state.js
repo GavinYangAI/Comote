@@ -1,6 +1,8 @@
 import { readFile } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+
+import { isWithinDir, resolveWithinProject, sanitizeUploadName } from "../core/paths.js";
 
 import { AuthorizationStore } from "../core/authorization.js";
 import { CommandRouter } from "../core/commands.js";
@@ -46,16 +48,17 @@ export function createComoteState({
   const desktop = desktopOverride ?? new CodexDesktopConnector();
   const cli = new CodexCliConnector();
 
+  const outboundReplies = new OutboundQueue({ entries: persisted.outboundReplies ?? [] });
   const commandRouter = new CommandRouter({
     authorization,
     projects,
     sessions,
     codexDesktop: desktop,
     codexCli: cli,
+    outboundQueue: outboundReplies,
     persisted: persisted.router ?? {},
     transcript,
   });
-  const outboundReplies = new OutboundQueue({ entries: persisted.outboundReplies ?? [] });
   let wechatConfig = normalizeWeChatConfig(persisted.channelConfigs?.wechat ?? {
     enabled: true,
     accountId: process.env.COMOTE_WECHAT_ACCOUNT_ID ?? "default",
@@ -80,6 +83,29 @@ export function createComoteState({
     commandRouter,
     onDetectedIdentity: (identity) => authorization.detectIdentity(identity),
     resolveDisplayName: (openId) => feishuRuntime?.driver?.resolveUserName?.(openId) ?? null,
+    downloadAttachment: async ({ attachment, identity }) => {
+      const projectPath = commandRouter.currentProjectByIdentity.get(commandRouter.identityKey(identity));
+      if (!projectPath) {
+        throw new Error("NO_PROJECT");
+      }
+      const { join } = await import("node:path");
+      const safeName = sanitizeUploadName(attachment.fileName);
+      const destPath = join(projectPath, ".comote", "uploads", safeName);
+      // Belt-and-suspenders: even after sanitizing the name, verify the final
+      // path stays inside the project. Use a DISTINCT error so an unsafe path is
+      // not conflated with the missing-project /open flow — the adapter treats
+      // any non-"NO_PROJECT" error as a graceful skip of this attachment.
+      if (!resolveWithinProject(projectPath, destPath)) {
+        throw new Error("UNSAFE_ATTACHMENT_PATH");
+      }
+      await feishuRuntime.driver.downloadMessageResource({
+        messageId: attachment.messageId,
+        fileKey: attachment.fileKey,
+        type: attachment.type === "image" ? "image" : "file",
+        destPath,
+      });
+      return { relativePath: join(".comote", "uploads", safeName) };
+    },
     sendReply: async (reply) => {
       outboundReplies.enqueue(reply);
       return { ok: true };
@@ -300,7 +326,13 @@ export function createComoteState({
         feishuRuntime
           .finishThreadCard(
             event.threadId,
-            statusCard({ phase: "completed", text: tail, done: true }),
+            statusCard({
+              phase: "completed",
+              threadId: event.threadId,
+              text: tail,
+              done: true,
+              files: buildChangedFiles(event.threadId, event.changedPaths),
+            }),
           )
           .catch(() => {});
       }
@@ -400,7 +432,13 @@ export function createComoteState({
         feishuRuntime
           .finishThreadCard(
             event.threadId,
-            statusCard({ phase: "completed", text: event.text ?? "", done: true }),
+            statusCard({
+              phase: "completed",
+              threadId: event.threadId,
+              text: event.text ?? "",
+              done: true,
+              files: buildChangedFiles(event.threadId, event.changedPaths),
+            }),
           )
           .then((updated) => {
             if (!updated) {
@@ -498,6 +536,24 @@ export function createComoteState({
     });
     deliverIfFeishu(binding.channel);
     stateRef.persist?.();
+  }
+
+  // Maps a turn's absolute changedPaths to the {path, name} entries the
+  // completion card renders as 📎 push buttons, keeping only project-internal
+  // files (the click handler re-fences authoritatively) and deduping.
+  function buildChangedFiles(threadId, changedPaths) {
+    if (!Array.isArray(changedPaths) || changedPaths.length === 0) return [];
+    const binding = commandRouter.getThreadBinding(threadId);
+    const root = binding?.projectPath ?? null;
+    const seen = new Set();
+    const files = [];
+    for (const p of changedPaths) {
+      if (root && !isWithinDir(root, p)) continue; // only expose project-internal files
+      if (seen.has(p)) continue;
+      seen.add(p);
+      files.push({ path: p, name: basename(p) || p });
+    }
+    return files;
   }
 
   // WeChat drains via its 2.5s poll loop; Feishu has no poll loop, push now.

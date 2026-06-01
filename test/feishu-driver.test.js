@@ -1,5 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import { FeishuDriver, buildEventHandlers } from "../src/channels/feishu/driver.js";
 
@@ -340,6 +343,216 @@ test("getTenantAccessToken rejects all concurrent awaiters on fetch failure", as
   assert.equal(result2.status, "rejected");
   assert.match(result1.reason.message, /Feishu token failed/);
   assert.match(result2.reason.message, /Feishu token failed/);
+});
+
+test("feishu driver uploads image and file then returns keys", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "comote-up-"));
+  const imgPath = join(dir, "a.png");
+  const filePath = join(dir, "notes.txt");
+  writeFileSync(imgPath, Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+  writeFileSync(filePath, "hello");
+
+  const requests = [];
+  const driver = new FeishuDriver({
+    appId: "cli_a",
+    appSecret: "secret",
+    fetchImpl: async (url, options) => {
+      requests.push({ url, options });
+      if (url.endsWith("/auth/v3/tenant_access_token/internal")) {
+        return jsonResponse({ tenant_access_token: "tok" });
+      }
+      if (url.endsWith("/im/v1/images")) {
+        return jsonResponse({ code: 0, data: { image_key: "img_1" } });
+      }
+      if (url.endsWith("/im/v1/files")) {
+        return jsonResponse({ code: 0, data: { file_key: "file_1" } });
+      }
+      return jsonResponse({ code: 0 });
+    },
+  });
+
+  const imageKey = await driver.uploadImage(imgPath);
+  const fileKey = await driver.uploadFile(filePath, "notes.txt");
+
+  assert.equal(imageKey, "img_1");
+  assert.equal(fileKey, "file_1");
+  const imageReq = requests.find((r) => r.url.endsWith("/im/v1/images"));
+  assert.ok(imageReq.options.body instanceof FormData);
+  assert.equal(imageReq.options.headers.authorization, "Bearer tok");
+});
+
+test("uploadFile sends a multipart body with stream type and explicit file name", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "comote-up-"));
+  const filePath = join(dir, "notes.txt");
+  writeFileSync(filePath, "hello");
+
+  const requests = [];
+  const driver = new FeishuDriver({
+    appId: "cli_a",
+    appSecret: "secret",
+    fetchImpl: async (url, options) => {
+      requests.push({ url, options });
+      if (url.endsWith("/auth/v3/tenant_access_token/internal")) {
+        return jsonResponse({ tenant_access_token: "tok" });
+      }
+      if (url.endsWith("/im/v1/files")) {
+        return jsonResponse({ code: 0, data: { file_key: "file_1" } });
+      }
+      return jsonResponse({ code: 0 });
+    },
+  });
+
+  await driver.uploadFile(filePath, "notes.txt");
+
+  const fileReq = requests.find((r) => r.url.endsWith("/im/v1/files"));
+  assert.ok(fileReq.options.body instanceof FormData);
+  assert.equal(fileReq.options.headers.authorization, "Bearer tok");
+  assert.equal(fileReq.options.body.get("file_type"), "stream");
+  assert.equal(fileReq.options.body.get("file_name"), "notes.txt");
+});
+
+test("uploadFile defaults file_name to the basename of localPath", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "comote-up-"));
+  const filePath = join(dir, "report.csv");
+  writeFileSync(filePath, "a,b,c");
+
+  const requests = [];
+  const driver = new FeishuDriver({
+    appId: "cli_a",
+    appSecret: "secret",
+    fetchImpl: async (url, options) => {
+      requests.push({ url, options });
+      if (url.endsWith("/auth/v3/tenant_access_token/internal")) {
+        return jsonResponse({ tenant_access_token: "tok" });
+      }
+      if (url.endsWith("/im/v1/files")) {
+        return jsonResponse({ code: 0, data: { file_key: "file_1" } });
+      }
+      return jsonResponse({ code: 0 });
+    },
+  });
+
+  await driver.uploadFile(filePath);
+
+  const fileReq = requests.find((r) => r.url.endsWith("/im/v1/files"));
+  assert.equal(fileReq.options.body.get("file_name"), "report.csv");
+});
+
+test("uploadImage sends image_type=message in the multipart body", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "comote-up-"));
+  const imgPath = join(dir, "a.png");
+  writeFileSync(imgPath, Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+
+  const requests = [];
+  const driver = new FeishuDriver({
+    appId: "cli_a",
+    appSecret: "secret",
+    fetchImpl: async (url, options) => {
+      requests.push({ url, options });
+      if (url.endsWith("/auth/v3/tenant_access_token/internal")) {
+        return jsonResponse({ tenant_access_token: "tok" });
+      }
+      if (url.endsWith("/im/v1/images")) {
+        return jsonResponse({ code: 0, data: { image_key: "img_1" } });
+      }
+      return jsonResponse({ code: 0 });
+    },
+  });
+
+  await driver.uploadImage(imgPath);
+
+  const imageReq = requests.find((r) => r.url.endsWith("/im/v1/images"));
+  assert.equal(imageReq.options.body.get("image_type"), "message");
+});
+
+test("uploadImage throws and clears the token when the API returns a nonzero code", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "comote-up-"));
+  const imgPath = join(dir, "a.png");
+  writeFileSync(imgPath, Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+
+  const driver = new FeishuDriver({
+    appId: "cli_a",
+    appSecret: "secret",
+    fetchImpl: async (url) => {
+      if (url.endsWith("/auth/v3/tenant_access_token/internal")) {
+        return jsonResponse({ tenant_access_token: "tok", expire: 7200 });
+      }
+      return jsonResponse({ code: 230002, msg: "bad" });
+    },
+  });
+
+  await assert.rejects(() => driver.uploadImage(imgPath), /Feishu API error/);
+  assert.equal(driver.tenantAccessToken, null, "cached token must be cleared on API error");
+});
+
+test("uploadFile throws when the upload endpoint responds with a non-ok status", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "comote-up-"));
+  const filePath = join(dir, "notes.txt");
+  writeFileSync(filePath, "hello");
+
+  const driver = new FeishuDriver({
+    appId: "cli_a",
+    appSecret: "secret",
+    fetchImpl: async (url) => {
+      if (url.endsWith("/auth/v3/tenant_access_token/internal")) {
+        return jsonResponse({ tenant_access_token: "tok" });
+      }
+      return new Response("boom", { status: 500 });
+    },
+  });
+
+  await assert.rejects(() => driver.uploadFile(filePath, "x"), /upload failed/);
+});
+
+test("feishu driver sends image and file messages", async () => {
+  const requests = [];
+  const driver = new FeishuDriver({
+    appId: "cli_a",
+    appSecret: "secret",
+    fetchImpl: async (url, options) => {
+      requests.push({ url, options });
+      if (url.endsWith("/auth/v3/tenant_access_token/internal")) {
+        return jsonResponse({ tenant_access_token: "tok" });
+      }
+      return jsonResponse({ code: 0, data: { message_id: "m1" } });
+    },
+  });
+
+  await driver.sendImage({ receiveId: "chat_1", imageKey: "img_1" });
+  await driver.sendFile({ receiveId: "chat_1", fileKey: "file_1" });
+
+  const imageReq = requests.find((r) => JSON.parse(r.options.body).msg_type === "image");
+  const fileReq = requests.find((r) => JSON.parse(r.options.body).msg_type === "file");
+  assert.equal(JSON.parse(imageReq.options.body).content, JSON.stringify({ image_key: "img_1" }));
+  assert.equal(JSON.parse(fileReq.options.body).content, JSON.stringify({ file_key: "file_1" }));
+});
+
+test("feishu driver downloads a message resource to disk", async () => {
+  const { readFileSync } = await import("node:fs");
+  const dir = mkdtempSync(join(tmpdir(), "comote-dl-"));
+  const dest = join(dir, "got.png");
+
+  const driver = new FeishuDriver({
+    appId: "cli_a",
+    appSecret: "secret",
+    fetchImpl: async (url) => {
+      if (url.endsWith("/auth/v3/tenant_access_token/internal")) {
+        return jsonResponse({ tenant_access_token: "tok" });
+      }
+      // resource endpoint returns binary bytes
+      return new Response(Buffer.from("PNGDATA"), { status: 200 });
+    },
+  });
+
+  const out = await driver.downloadMessageResource({
+    messageId: "m1",
+    fileKey: "k1",
+    type: "image",
+    destPath: dest,
+  });
+
+  assert.equal(out, dest);
+  assert.equal(readFileSync(dest, "utf8"), "PNGDATA");
 });
 
 function jsonResponse(body, status = 200) {

@@ -165,6 +165,91 @@ function tick() {
   return new Promise((resolve) => setTimeout(resolve, 5));
 }
 
+test("completed card includes push buttons for changed files", async () => {
+  const { transport, desktop, state } = buildState();
+  await desktop.client.connect();
+
+  // Bind a Codex thread to a Feishu conversation with a known project root.
+  state.commandRouter.conversationByIdentity.set("feishu:ou_owner", {
+    channel: "feishu",
+    conversationId: "oc_chat",
+  });
+  state.commandRouter.bindThreadForIdentity(
+    { channel: "feishu", stableId: "ou_owner" },
+    "thread_f",
+    "/home/proj",
+  );
+
+  // finishThreadCard sends the final card through driver.updateCard — capture it.
+  const calls = { sent: [], updated: [] };
+  state.runtime.feishu.__setTestDriver({
+    getStatus: () => ({ state: "configured" }),
+    verifyEvent: () => true,
+    async sendCard(message) {
+      calls.sent.push(message);
+      return { messageId: "om_live" };
+    },
+    async updateCard(message) {
+      calls.updated.push(message);
+      return { code: 0 };
+    },
+  });
+
+  // Open the active thread card.
+  transport.receive({ jsonrpc: "2.0", method: "turn/started", params: { threadId: "thread_f" } });
+  await tick();
+
+  // Codex changes files during the turn: one in-project, one OUTSIDE the root
+  // (a sibling dir that shares the root's string prefix).
+  transport.receive({
+    jsonrpc: "2.0",
+    method: "item/completed",
+    params: {
+      threadId: "thread_f",
+      item: {
+        type: "fileChange",
+        id: "fc1",
+        changes: [{ path: "/home/proj/out/a.png" }, { path: "/home/proj-evil/x.png" }],
+      },
+    },
+  });
+
+  // In the REAL Codex Desktop flow, the agent replies with text first: an
+  // item/completed agentMessage (which finalizes and DROPS the card session)
+  // arrives BEFORE turn/completed. The push buttons must render on THIS card.
+  transport.receive({
+    jsonrpc: "2.0",
+    method: "item/completed",
+    params: {
+      threadId: "thread_f",
+      item: { type: "agentMessage", id: "m1", text: "all done" },
+    },
+  });
+  await tick();
+
+  // turn/completed arrives after the card session is already gone.
+  transport.receive({
+    jsonrpc: "2.0",
+    method: "turn/completed",
+    params: { threadId: "thread_f" },
+  });
+  await tick();
+
+  const finalCard = calls.updated.at(-1)?.card;
+  assert.ok(finalCard, "the completion card was sent");
+  const buttons = finalCard.elements
+    .filter((el) => el.tag === "action")
+    .flatMap((el) => el.actions);
+  const pushButtons = buttons.filter((b) => b.value?.kind === "pushfile");
+  assert.equal(pushButtons.length, 1, "only the in-project file renders a pushfile button");
+  assert.equal(pushButtons[0].value.path, "/home/proj/out/a.png");
+  // The out-of-project sibling path must NOT produce a button.
+  assert.ok(
+    !pushButtons.some((b) => b.value.path === "/home/proj-evil/x.png"),
+    "out-of-project path must be excluded",
+  );
+});
+
 test("a Codex approval for a Feishu thread is delivered as a card", async () => {
   const { transport, desktop, state } = buildState();
   await desktop.client.connect();

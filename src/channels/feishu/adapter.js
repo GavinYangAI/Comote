@@ -1,7 +1,7 @@
 import { textCard, pickerCard } from "./cards.js";
 
 export class FeishuChannelAdapter {
-  constructor({ commandRouter, sendReply, onDetectedIdentity = null, allowGroups = false, resolveDisplayName = null }) {
+  constructor({ commandRouter, sendReply, onDetectedIdentity = null, allowGroups = false, resolveDisplayName = null, downloadAttachment = null }) {
     if (!commandRouter) {
       throw new Error("commandRouter is required");
     }
@@ -10,6 +10,7 @@ export class FeishuChannelAdapter {
     this.onDetectedIdentity = onDetectedIdentity;
     this.allowGroups = allowGroups;
     this.resolveDisplayName = resolveDisplayName;
+    this.downloadAttachment = downloadAttachment;
     this.startedAt = new Date().toISOString();
   }
 
@@ -37,6 +38,7 @@ export class FeishuChannelAdapter {
     }
 
     const chatType = message.chat_type ?? payload.chatType ?? "p2p";
+    const messageType = message.message_type ?? payload.messageType ?? "text";
     return {
       messageId: message.message_id ?? payload.messageId ?? null,
       conversationId: message.chat_id ?? payload.chatId ?? stableId,
@@ -46,8 +48,8 @@ export class FeishuChannelAdapter {
         stableId,
         displayName: sender.name ?? payload.senderName ?? stableId,
       },
-      text: readFeishuText(message.content ?? payload.text ?? ""),
-      attachments: [],
+      text: (messageType === "image" || messageType === "file") ? "" : readFeishuText(message.content ?? payload.text ?? ""),
+      attachments: readFeishuAttachments(messageType, message),
     };
   }
 
@@ -59,9 +61,36 @@ export class FeishuChannelAdapter {
 
     await this.resolveIdentityName(message.identity);
     this.onDetectedIdentity?.(message.identity);
+
+    let promptText = message.text;
+    if (message.attachments.length > 0) {
+      if (!this.downloadAttachment) {
+        return { kind: "ignored", reason: "no download capability" };
+      }
+      const prefixes = [];
+      for (const attachment of message.attachments) {
+        try {
+          const { relativePath } = await this.downloadAttachment({ attachment, identity: message.identity });
+          prefixes.push(`[附件: ${relativePath}]`);
+        } catch (error) {
+          if (error.message === "NO_PROJECT") {
+            await this.sendReply({
+              channel: "feishu",
+              conversationId: message.conversationId,
+              inReplyTo: message.messageId,
+              text: "收到文件，但还没打开项目。先用 /open <编号或路径> 选一个项目，再把文件发我。",
+            });
+            return { kind: "ignored", reason: "no project for attachment" };
+          }
+          // Non-NO_PROJECT download failure: skip this attachment gracefully.
+        }
+      }
+      promptText = `${prefixes.join("\n")}\n${message.text}`.trim();
+    }
+
     const reply = await this.commandRouter.handleMessageAsync({
       identity: message.identity,
-      text: message.text,
+      text: promptText,
       attachments: message.attachments,
       conversation: {
         channel: "feishu",
@@ -135,6 +164,28 @@ function readFeishuText(content) {
   } catch {
     return content;
   }
+}
+
+function readFeishuAttachments(messageType, message) {
+  if (messageType !== "image" && messageType !== "file") {
+    return [];
+  }
+  let content = {};
+  try {
+    content = typeof message.content === "string" ? JSON.parse(message.content) : message.content ?? {};
+  } catch {
+    return [];
+  }
+  if (messageType === "image") {
+    if (!content.image_key) {
+      return [];
+    }
+    return [{ type: "image", fileKey: content.image_key, fileName: content.file_name ?? "image.png", messageId: message.message_id ?? null }];
+  }
+  if (!content.file_key) {
+    return [];
+  }
+  return [{ type: "file", fileKey: content.file_key, fileName: content.file_name ?? "file", messageId: message.message_id ?? null }];
 }
 
 async function noopSendReply() {

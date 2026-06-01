@@ -138,6 +138,131 @@ export class FeishuDriver {
     return body;
   }
 
+  async uploadImage(localPath) {
+    const { readFile } = await import("node:fs/promises");
+    const { basename } = await import("node:path");
+    const token = await this.getTenantAccessToken();
+    const bytes = await readFile(localPath);
+    const form = new FormData();
+    form.append("image_type", "message");
+    form.append("image", new Blob([bytes]), basename(localPath));
+    const response = await this.fetch(`${this.baseUrl}/im/v1/images`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${token}` },
+      body: form,
+    });
+    if (!response.ok) {
+      throw new Error(`Feishu image upload failed: ${response.status} ${await response.text()}`);
+    }
+    const body = await response.json();
+    this._assertApiSuccess(body);
+    return body.data?.image_key ?? null;
+  }
+
+  async uploadFile(localPath, fileName) {
+    const { readFile } = await import("node:fs/promises");
+    const { basename } = await import("node:path");
+    const token = await this.getTenantAccessToken();
+    const bytes = await readFile(localPath);
+    const name = fileName ?? basename(localPath);
+    const form = new FormData();
+    form.append("file_type", "stream");
+    form.append("file_name", name);
+    form.append("file", new Blob([bytes]), name);
+    const response = await this.fetch(`${this.baseUrl}/im/v1/files`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${token}` },
+      body: form,
+    });
+    if (!response.ok) {
+      throw new Error(`Feishu file upload failed: ${response.status} ${await response.text()}`);
+    }
+    const body = await response.json();
+    this._assertApiSuccess(body);
+    return body.data?.file_key ?? null;
+  }
+
+  async sendImage({ receiveId, receiveIdType = "chat_id", imageKey }) {
+    if (!receiveId) {
+      throw new Error("receiveId is required");
+    }
+    if (!imageKey) {
+      throw new Error("imageKey is required");
+    }
+    return this._sendMessage({
+      receiveId,
+      receiveIdType,
+      msgType: "image",
+      content: { image_key: imageKey },
+    });
+  }
+
+  async sendFile({ receiveId, receiveIdType = "chat_id", fileKey }) {
+    if (!receiveId) {
+      throw new Error("receiveId is required");
+    }
+    if (!fileKey) {
+      throw new Error("fileKey is required");
+    }
+    return this._sendMessage({
+      receiveId,
+      receiveIdType,
+      msgType: "file",
+      content: { file_key: fileKey },
+    });
+  }
+
+  async _sendMessage({ receiveId, receiveIdType, msgType, content }) {
+    const token = await this.getTenantAccessToken();
+    const response = await this.fetch(
+      `${this.baseUrl}/im/v1/messages?receive_id_type=${encodeURIComponent(receiveIdType)}`,
+      {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          receive_id: receiveId,
+          msg_type: msgType,
+          content: JSON.stringify(content),
+        }),
+      },
+    );
+    if (!response.ok) {
+      throw new Error(`Feishu ${msgType} send failed: ${response.status} ${await response.text()}`);
+    }
+    const body = await response.json();
+    this._assertApiSuccess(body);
+    return { messageId: body.data?.message_id ?? null, raw: body };
+  }
+
+  async downloadMessageResource({ messageId, fileKey, type = "file", destPath }) {
+    if (!messageId) {
+      throw new Error("messageId is required");
+    }
+    if (!fileKey) {
+      throw new Error("fileKey is required");
+    }
+    if (!destPath) {
+      throw new Error("destPath is required");
+    }
+    const { mkdir, writeFile } = await import("node:fs/promises");
+    const { dirname } = await import("node:path");
+    const token = await this.getTenantAccessToken();
+    const response = await this.fetch(
+      `${this.baseUrl}/im/v1/messages/${encodeURIComponent(messageId)}/resources/${encodeURIComponent(fileKey)}?type=${encodeURIComponent(type)}`,
+      { method: "GET", headers: { authorization: `Bearer ${token}` } },
+    );
+    if (!response.ok) {
+      throw new Error(`Feishu resource download failed: ${response.status} ${await response.text()}`);
+    }
+    const bytes = Buffer.from(await response.arrayBuffer());
+    await mkdir(dirname(destPath), { recursive: true });
+    await writeFile(destPath, bytes);
+    return destPath;
+  }
+
   async getTenantAccessToken() {
     if (this.tenantAccessToken && Date.now() < this.tenantAccessTokenExpiry) {
       return this.tenantAccessToken;

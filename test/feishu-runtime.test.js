@@ -1,5 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import { AuthorizationStore } from "../src/core/authorization.js";
 import { CommandRouter } from "../src/core/commands.js";
@@ -493,4 +496,96 @@ test("start() must not leave running true if the WebSocket setup throws", async 
 
   assert.equal(runtime.getStatus().state, "configured", "state must not be running");
   assert.equal(runtime.running, false, "running flag must remain false");
+});
+
+function stubAdapter() {
+  return { handleInbound: async () => ({}), commandRouter: {} };
+}
+
+test("deliverQueued uploads then sends media; oversize falls back to text", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "comote-rt-"));
+  const small = join(dir, "a.png");
+  const big = join(dir, "big.bin");
+  writeFileSync(small, Buffer.from("img"));
+  writeFileSync(big, Buffer.alloc(21 * 1024 * 1024));
+
+  const calls = [];
+  const driver = {
+    getStatus: () => ({}),
+    uploadImage: async (p) => { calls.push(["uploadImage", p]); return "img_1"; },
+    uploadFile: async (p) => { calls.push(["uploadFile", p]); return "file_1"; },
+    sendImage: async (a) => { calls.push(["sendImage", a.imageKey]); },
+    sendFile: async (a) => { calls.push(["sendFile", a.fileKey]); },
+    sendText: async (a) => { calls.push(["sendText", a.text]); },
+    sendCard: async () => {},
+  };
+  const outboundQueue = new OutboundQueue();
+  outboundQueue.enqueue({ channel: "feishu", conversationId: "c1", kind: "image", path: small });
+  outboundQueue.enqueue({ channel: "feishu", conversationId: "c1", kind: "file", path: big, fileName: "big.bin" });
+
+  const runtime = new FeishuRuntimeService({ adapter: stubAdapter(), outboundQueue, driver });
+  await runtime.deliverQueued();
+
+  assert.deepEqual(calls[0], ["uploadImage", small]);
+  assert.deepEqual(calls[1], ["sendImage", "img_1"]);
+  assert.ok(!calls.some(([m]) => m === "uploadFile"));
+  assert.ok(calls.some(([m, t]) => m === "sendText" && /big\.bin/.test(t)));
+});
+
+test("handleCardAction pushfile enqueues media within project, rejects escape", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "comote-pf-"));
+  writeFileSync(join(dir, "a.png"), "img");
+
+  const outboundQueue = new OutboundQueue();
+  const router = {
+    getThreadBinding: (tid) =>
+      tid === "t1" ? { channel: "feishu", conversationId: "c1", projectPath: dir } : null,
+  };
+  const adapter = { handleInbound: async () => ({}), commandRouter: router };
+  const driver = {
+    getStatus: () => ({}),
+    uploadImage: async () => "img_1",
+    sendImage: async () => {},
+    sendText: async () => {},
+    sendCard: async () => {},
+  };
+  const runtime = new FeishuRuntimeService({ adapter, outboundQueue, driver });
+
+  const ok = await runtime.handleCardAction({
+    event: { action: { value: { kind: "pushfile", threadId: "t1", path: join(dir, "a.png") } }, open_id: "u1" },
+  });
+  assert.equal(ok.toast.type, "info");
+  await new Promise((r) => setTimeout(r, 10));
+  assert.equal(outboundQueue.snapshot().some((e) => e.kind === "image"), true);
+
+  const bad = await runtime.handleCardAction({
+    event: { action: { value: { kind: "pushfile", threadId: "t1", path: "/etc/passwd" } }, open_id: "u1" },
+  });
+  assert.equal(bad.toast.type, "error");
+  // The fence must block the ENQUEUE, not merely surface a toast.
+  assert.equal(
+    outboundQueue.snapshot().some((e) => e.path === "/etc/passwd"),
+    false,
+  );
+});
+
+test("handleCardAction pushfile with no binding returns error and enqueues nothing", async () => {
+  const outboundQueue = new OutboundQueue();
+  const router = { getThreadBinding: () => null };
+  const adapter = { handleInbound: async () => ({}), commandRouter: router };
+  const driver = {
+    getStatus: () => ({}),
+    uploadImage: async () => "img_1",
+    sendImage: async () => {},
+    sendText: async () => {},
+    sendCard: async () => {},
+  };
+  const runtime = new FeishuRuntimeService({ adapter, outboundQueue, driver });
+
+  const res = await runtime.handleCardAction({
+    event: { action: { value: { kind: "pushfile", threadId: "nope", path: "/etc/passwd" } }, open_id: "u1" },
+  });
+  assert.equal(res.toast.type, "error");
+  await new Promise((r) => setTimeout(r, 10));
+  assert.equal(outboundQueue.snapshot().length, 0);
 });
