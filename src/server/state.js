@@ -10,16 +10,11 @@ import { ProjectStore } from "../core/projects.js";
 import { SessionStore } from "../core/sessions.js";
 import { CodexDesktopConnector } from "../connectors/codex-desktop/index.js";
 import { CodexCliConnector } from "../connectors/codex-cli/index.js";
-import { WeChatChannelAdapter } from "../channels/wechat/adapter.js";
-import { FeishuChannelAdapter } from "../channels/feishu/adapter.js";
+import feishuPlugin from "../channels/feishu/index.js";
+import wechatPlugin from "../channels/wechat/index.js";
+import { createRegistry } from "../channels/registry.js";
 import { JsonFileStore } from "../core/persistence.js";
 import { OutboundQueue } from "../core/outbound-queue.js";
-import { WeChatIlinkDriver } from "../channels/wechat/ilink-driver.js";
-import { WeChatRuntimeService } from "../channels/wechat/runtime.js";
-import { FeishuDriver } from "../channels/feishu/driver.js";
-import { FeishuRuntimeService } from "../channels/feishu/runtime.js";
-import { createFeishuRenderer } from "../channels/feishu/renderer.js";
-import { createWeChatRenderer } from "../channels/wechat/renderer.js";
 import { EventLog } from "../core/event-log.js";
 import { SleepGuard } from "../core/sleep-guard.js";
 import { Transcript } from "../core/transcript.js";
@@ -65,106 +60,68 @@ export function createComoteState({
     persisted: persisted.router ?? {},
     transcript,
   });
-  let wechatConfig = normalizeWeChatConfig(persisted.channelConfigs?.wechat ?? {
-    enabled: true,
-    accountId: process.env.COMOTE_WECHAT_ACCOUNT_ID ?? "default",
-  });
-  let feishuConfig = normalizeFeishuConfig(persisted.channelConfigs?.feishu ?? {
-    enabled: Boolean(process.env.COMOTE_FEISHU_APP_ID && process.env.COMOTE_FEISHU_APP_SECRET),
-    appId: process.env.COMOTE_FEISHU_APP_ID ?? null,
-    appSecret: process.env.COMOTE_FEISHU_APP_SECRET ?? null,
-    verificationToken: process.env.COMOTE_FEISHU_VERIFICATION_TOKEN ?? null,
-    encryptKey: process.env.COMOTE_FEISHU_ENCRYPT_KEY ?? null,
-    domain: process.env.COMOTE_FEISHU_DOMAIN ?? "feishu",
-  });
-  const wechat = new WeChatChannelAdapter({
-    commandRouter,
-    onDetectedIdentity: (identity) => authorization.detectIdentity(identity),
-    sendReply: async (reply) => {
-      outboundReplies.enqueue(reply);
-      return { ok: true };
+  const registry = createRegistry([feishuPlugin, wechatPlugin]);
+
+  // Per-channel seed configs (env-var defaults), keyed by plugin id. Normalized
+  // through each plugin's normalizeConfig below.
+  const channelSeeds = {
+    wechat: persisted.channelConfigs?.wechat ?? {
+      enabled: true,
+      accountId: process.env.COMOTE_WECHAT_ACCOUNT_ID ?? "default",
     },
-  });
-  const feishu = new FeishuChannelAdapter({
-    commandRouter,
-    onDetectedIdentity: (identity) => authorization.detectIdentity(identity),
-    resolveDisplayName: (openId) => feishuRuntime?.driver?.resolveUserName?.(openId) ?? null,
-    downloadAttachment: async ({ attachment, identity }) => {
-      const projectPath = commandRouter.currentProjectByIdentity.get(commandRouter.identityKey(identity));
-      if (!projectPath) {
-        throw new Error("NO_PROJECT");
-      }
-      const { join } = await import("node:path");
-      const safeName = sanitizeUploadName(attachment.fileName);
-      const destPath = join(projectPath, ".comote", "uploads", safeName);
-      // Belt-and-suspenders: even after sanitizing the name, verify the final
-      // path stays inside the project. Use a DISTINCT error so an unsafe path is
-      // not conflated with the missing-project /open flow — the adapter treats
-      // any non-"NO_PROJECT" error as a graceful skip of this attachment.
-      if (!resolveWithinProject(projectPath, destPath)) {
-        throw new Error("UNSAFE_ATTACHMENT_PATH");
-      }
-      await feishuRuntime.driver.downloadMessageResource({
-        messageId: attachment.messageId,
-        fileKey: attachment.fileKey,
-        type: attachment.type === "image" ? "image" : "file",
-        destPath,
-      });
-      return { relativePath: join(".comote", "uploads", safeName) };
+    feishu: persisted.channelConfigs?.feishu ?? {
+      enabled: Boolean(process.env.COMOTE_FEISHU_APP_ID && process.env.COMOTE_FEISHU_APP_SECRET),
+      appId: process.env.COMOTE_FEISHU_APP_ID ?? null,
+      appSecret: process.env.COMOTE_FEISHU_APP_SECRET ?? null,
+      verificationToken: process.env.COMOTE_FEISHU_VERIFICATION_TOKEN ?? null,
+      encryptKey: process.env.COMOTE_FEISHU_ENCRYPT_KEY ?? null,
+      domain: process.env.COMOTE_FEISHU_DOMAIN ?? "feishu",
     },
-    sendReply: async (reply) => {
-      outboundReplies.enqueue(reply);
-      return { ok: true };
-    },
-  });
-  const feishuRenderer = createFeishuRenderer();
-  const wechatRenderer = createWeChatRenderer();
-  const wechatRuntime = new WeChatRuntimeService({
-    adapter: wechat,
-    outboundQueue: outboundReplies,
-    renderer: wechatRenderer,
-    driver: createWeChatDriver(wechatConfig),
-    persist: async () => stateRef.persist?.(),
-    cursor: persisted.wechatCursor ?? null,
-  });
-  const feishuRuntime = new FeishuRuntimeService({
-    adapter: feishu,
-    outboundQueue: outboundReplies,
-    renderer: feishuRenderer,
-    driver: createFeishuDriver(feishuConfig),
-    persist: async () => stateRef.persist?.(),
-    eventLog,
-  });
-  const runtime = {
+  };
+
+  // The channelStacks map holds the fully-wired {plugin, config, renderer,
+  // adapter, runtime, driver} stack per channel. Stacks are built below; the
+  // adapter closures and runtime opts are channel-specific (perChannelWiring).
+  const channelStacks = new Map();
+
+  // Per-channel ADAPTER options + runtime opts + login closures. The feishu
+  // adapter closures reference the feishu RUNTIME, which is created AFTER the
+  // adapter; they resolve `stack.runtime` at call time (preserving the old
+  // hoisted-`feishuRuntime` closure behavior).
+  //
+  // perChannelWiring holds the host-side bits the registry can't own: adapter
+  // options and login closures that capture host services (commandRouter,
+  // outboundReplies, authorization, stateRef.persist). The plugin owns pure
+  // construction (driver/adapter/runtime/renderer + config); everything that
+  // closes over this server's runtime state lives here, keyed by channel id.
+  const perChannelWiring = {
     wechat: {
-      getConfig() {
-        return publicWeChatConfig(wechatConfig);
+      buildAdapterOpts: (_stack) => ({
+        commandRouter,
+        onDetectedIdentity: (identity) => authorization.detectIdentity(identity),
+        sendReply: async (reply) => {
+          outboundReplies.enqueue(reply);
+          return { ok: true };
+        },
+      }),
+      buildRuntimeOpts: (stack) => ({
+        adapter: stack.adapter,
+        outboundQueue: outboundReplies,
+        renderer: stack.renderer,
+        driver: stack.driver,
+        persist: async () => stateRef.persist?.(),
+        cursor: persisted.wechatCursor ?? null,
+      }),
+      // WeChat login lives on the runtime; getLoginStatus reconfigures the
+      // driver + persists when the result is storable.
+      startLogin(stack) {
+        return stack.runtime.startLogin();
       },
-      async configure(config) {
-        wechatConfig = normalizeWeChatConfig({ ...wechatConfig, ...config });
-        wechatRuntime.configureDriver(createWeChatDriver(wechatConfig));
-        return this.getConfig();
-      },
-      getStatus() {
-        return wechatRuntime.getStatus();
-      },
-      pollOnce() {
-        return wechatRuntime.pollOnce();
-      },
-      start() {
-        return wechatRuntime.start();
-      },
-      stop() {
-        return wechatRuntime.stop();
-      },
-      startLogin() {
-        return wechatRuntime.startLogin();
-      },
-      async getLoginStatus({ loginId }) {
-        return wechatRuntime.getLoginStatus({ loginId }).then(async (result) => {
-          if (shouldStoreWeChatLoginResult(result)) {
-            wechatConfig = normalizeWeChatConfig({
-              ...wechatConfig,
+      async getLoginStatus(stack, { loginId }) {
+        return stack.runtime.getLoginStatus({ loginId }).then(async (result) => {
+          if (stack.plugin.shouldStoreLoginResult(result)) {
+            stack.config = stack.plugin.normalizeConfig({
+              ...stack.config,
               enabled: true,
               accountId: result.accountId,
               token: result.token,
@@ -172,7 +129,7 @@ export function createComoteState({
               linkedUserId: result.userId,
               linkedUserName: result.userName ?? null,
             });
-            wechatRuntime.configureDriver(createWeChatDriver(wechatConfig));
+            stack.runtime.configureDriver(stack.plugin.createDriver(stack.config));
             await stateRef.persist?.();
           }
           return result;
@@ -180,69 +137,161 @@ export function createComoteState({
       },
     },
     feishu: {
-      getConfig() {
-        return publicFeishuConfig(feishuConfig);
+      buildAdapterOpts: (stack) => ({
+        commandRouter,
+        onDetectedIdentity: (identity) => authorization.detectIdentity(identity),
+        resolveDisplayName: (openId) => stack.runtime?.driver?.resolveUserName?.(openId) ?? null,
+        downloadAttachment: async ({ attachment, identity }) => {
+          const projectPath = commandRouter.currentProjectByIdentity.get(commandRouter.identityKey(identity));
+          if (!projectPath) {
+            throw new Error("NO_PROJECT");
+          }
+          const { join } = await import("node:path");
+          const safeName = sanitizeUploadName(attachment.fileName);
+          const destPath = join(projectPath, ".comote", "uploads", safeName);
+          // Belt-and-suspenders: even after sanitizing the name, verify the final
+          // path stays inside the project. Use a DISTINCT error so an unsafe path is
+          // not conflated with the missing-project /open flow — the adapter treats
+          // any non-"NO_PROJECT" error as a graceful skip of this attachment.
+          if (!resolveWithinProject(projectPath, destPath)) {
+            throw new Error("UNSAFE_ATTACHMENT_PATH");
+          }
+          await stack.runtime.driver.downloadMessageResource({
+            messageId: attachment.messageId,
+            fileKey: attachment.fileKey,
+            type: attachment.type === "image" ? "image" : "file",
+            destPath,
+          });
+          return { relativePath: join(".comote", "uploads", safeName) };
+        },
+        sendReply: async (reply) => {
+          outboundReplies.enqueue(reply);
+          return { ok: true };
+        },
+      }),
+      buildRuntimeOpts: (stack) => ({
+        adapter: stack.adapter,
+        outboundQueue: outboundReplies,
+        renderer: stack.renderer,
+        driver: stack.driver,
+        persist: async () => stateRef.persist?.(),
+        eventLog,
+      }),
+      // Feishu login uses a dedicated registration login driver; getLoginStatus
+      // reconfigures the driver + resolves the user name + persists + starts the
+      // runtime when the result is storable.
+      startLogin(stack, { domain = stack.config.domain } = {}) {
+        return stack.plugin.createLoginDriver({ domain }).startLogin({ domain });
       },
-      async configure(config) {
-        feishuConfig = normalizeFeishuConfig({ ...feishuConfig, ...normalizeFeishuSecretPatch(config) });
-        feishuRuntime.configureDriver(createFeishuDriver(feishuConfig));
-        return this.getConfig();
-      },
-      getStatus() {
-        return feishuRuntime.getStatus();
-      },
-      start() {
-        return feishuRuntime.start();
-      },
-      stop() {
-        return feishuRuntime.stop();
-      },
-      startLogin({ domain = feishuConfig.domain } = {}) {
-        return createFeishuLoginDriver({ domain }).startLogin({ domain });
-      },
-      async getLoginStatus({ loginId, domain = feishuConfig.domain, interval, expireIn }) {
-        const result = await createFeishuLoginDriver({ domain }).getLoginStatus({
+      async getLoginStatus(stack, { loginId, domain = stack.config.domain, interval, expireIn }) {
+        const result = await stack.plugin.createLoginDriver({ domain }).getLoginStatus({
           loginId,
           domain,
           interval,
           expireIn,
         });
-        if (shouldStoreFeishuLoginResult(result)) {
-          feishuConfig = normalizeFeishuConfig({
-            ...feishuConfig,
+        if (stack.plugin.shouldStoreLoginResult(result)) {
+          stack.config = stack.plugin.normalizeConfig({
+            ...stack.config,
             enabled: true,
             appId: result.appId,
             appSecret: result.appSecret,
             domain: result.domain ?? domain,
             linkedUserId: result.userId,
           });
-          feishuRuntime.configureDriver(createFeishuDriver(feishuConfig));
+          stack.runtime.configureDriver(stack.plugin.createDriver(stack.config));
           let userName = null;
           try {
-            userName = (await feishuRuntime.driver?.resolveUserName?.(result.userId)) ?? null;
+            userName = (await stack.runtime.driver?.resolveUserName?.(result.userId)) ?? null;
           } catch {
             userName = null;
           }
-          feishuConfig = normalizeFeishuConfig({ ...feishuConfig, linkedUserName: userName });
+          stack.config = stack.plugin.normalizeConfig({ ...stack.config, linkedUserName: userName });
           result.userName = userName;
           await stateRef.persist?.();
-          await feishuRuntime.start().catch((error) => {
-            feishuRuntime.lastError = error.message;
+          await stack.runtime.start().catch((error) => {
+            stack.runtime.lastError = error.message;
           });
         }
         return result;
       },
-      handleInbound(payload) {
-        return feishuRuntime.handleInbound(payload);
-      },
-      __setTestDriver(testDriver) {
-        feishuRuntime.configureDriver(testDriver);
-      },
-      deliverQueued() {
-        return feishuRuntime.deliverQueued();
-      },
     },
   };
+
+  // Build each channel stack off the registry + plugin factories. The adapter is
+  // created before the runtime (its closures reference the stack's runtime at
+  // call time), then the runtime is attached to the stack.
+  for (const plugin of registry.listChannels()) {
+    const id = plugin.meta.id;
+    const wiring = perChannelWiring[id];
+    if (!wiring) throw new Error(`no host wiring for channel "${id}" — add an entry to perChannelWiring`);
+    const stack = {
+      plugin,
+      config: plugin.normalizeConfig(channelSeeds[id]),
+      renderer: plugin.createRenderer(),
+      adapter: null,
+      runtime: null,
+      driver: null,
+    };
+    stack.adapter = plugin.createAdapter(wiring.buildAdapterOpts(stack));
+    stack.driver = plugin.createDriver(stack.config);
+    stack.runtime = plugin.createRuntime(wiring.buildRuntimeOpts(stack));
+    channelStacks.set(id, stack);
+  }
+
+  // routeDesktopEvent + auto-start use these runtimes directly (live thread
+  // cards / typing) — keep them as locals so that logic is UNCHANGED.
+  const feishuRuntime = channelStacks.get("feishu").runtime;
+  const wechatRuntime = channelStacks.get("wechat").runtime;
+
+  // Build a runtime WRAPPER per channel from its stack. Common methods (getConfig
+  // → publicConfig, configure, getStatus, start, stop) are generic; channel-
+  // specific methods are exposed conditionally based on the plugin meta.
+  function buildRuntimeWrapper(stack) {
+    const { plugin } = stack;
+    const wiring = perChannelWiring[plugin.meta.id];
+    const wrapper = {
+      getConfig() {
+        return plugin.publicConfig(stack.config);
+      },
+      async configure(config) {
+        const patch = plugin.normalizeSecretPatch ? plugin.normalizeSecretPatch(config) : config;
+        stack.config = plugin.normalizeConfig({ ...stack.config, ...patch });
+        stack.runtime.configureDriver(plugin.createDriver(stack.config));
+        return this.getConfig();
+      },
+      getStatus() {
+        return stack.runtime.getStatus();
+      },
+      start() {
+        return stack.runtime.start();
+      },
+      stop() {
+        return stack.runtime.stop();
+      },
+    };
+    // Poll-mode channels expose pollOnce (manual drain).
+    if (plugin.meta.inboundMode === "poll") {
+      wrapper.pollOnce = () => stack.runtime.pollOnce();
+    }
+    // Push-mode channels expose inbound webhook + test seam + manual delivery.
+    if (plugin.meta.inboundMode === "push") {
+      wrapper.handleInbound = (payload) => stack.runtime.handleInbound(payload);
+      wrapper.__setTestDriver = (testDriver) => stack.runtime.configureDriver(testDriver);
+      wrapper.deliverQueued = () => stack.runtime.deliverQueued();
+    }
+    // QR-bound channels expose login start/status (with channel-specific
+    // side-effects preserved byte-faithfully via perChannelWiring).
+    if (plugin.meta.binding === "qr") {
+      wrapper.startLogin = (opts) => wiring.startLogin(stack, opts);
+      wrapper.getLoginStatus = (opts) => wiring.getLoginStatus(stack, opts);
+    }
+    return wrapper;
+  }
+
+  const runtime = Object.fromEntries(
+    [...channelStacks].map(([id, stack]) => [id, buildRuntimeWrapper(stack)]),
+  );
 
   const stateRef = {
     authorization,
@@ -270,14 +319,13 @@ export function createComoteState({
         detectedIdentities: authorization.listDetectedIdentities(),
         sessions: sessions.snapshot(),
         outboundReplies: outboundReplies.snapshot(),
-        channelConfigs: {
-          wechat: wechatConfig,
-          feishu: feishuConfig,
-        },
+        channelConfigs: Object.fromEntries(
+          [...channelStacks].map(([id, stack]) => [id, stack.config]),
+        ),
         router: commandRouter.snapshot(),
         events: eventLog.snapshot(),
         transcript: transcript.snapshot(),
-        wechatCursor: wechatRuntime.cursor,
+        wechatCursor: channelStacks.get("wechat").runtime.cursor,
       });
     },
     async discoverProjects() {
@@ -290,10 +338,10 @@ export function createComoteState({
       }
       return projects.listProjects();
     },
-    channels: {
-      wechat,
-      feishu,
-    },
+    channels: Object.fromEntries(
+      [...channelStacks].map(([id, stack]) => [id, stack.adapter]),
+    ),
+    registry,
     runtime,
     connectors: {
       desktop,
@@ -587,6 +635,9 @@ export function createComoteState({
     }
   }
 
+  // point-in-time config snapshot, used only for auto-start enabled-gating
+  const wechatConfig = channelStacks.get("wechat").config;
+  const feishuConfig = channelStacks.get("feishu").config;
   if (autoStartWeChatRuntime && wechatConfig.enabled && wechatConfig.token) {
     wechatRuntime.start();
     eventLog.info("微信运行时已自动启动", { accountId: wechatConfig.accountId });
@@ -628,112 +679,4 @@ async function readPackageVersion() {
   } catch {
     return null;
   }
-}
-
-function normalizeWeChatConfig(config = {}) {
-  return {
-    enabled: config.enabled !== false,
-    baseUrl: config.baseUrl ?? null,
-    token: config.token ?? null,
-    accountId: config.accountId ?? "default",
-    linkedUserId: config.linkedUserId ?? null,
-    linkedUserName: config.linkedUserName ?? null,
-  };
-}
-
-function publicWeChatConfig(config) {
-  return {
-    enabled: config.enabled,
-    accountId: config.accountId,
-    linkedUserId: config.linkedUserId,
-    linkedUserName: config.linkedUserName,
-    loggedIn: Boolean(config.token),
-  };
-}
-
-export function shouldStoreWeChatLoginResult(result) {
-  const state = result.state?.toString?.().toLowerCase?.() ?? "";
-  if (["expired", "cancelled", "canceled", "failed", "error"].includes(state)) {
-    return false;
-  }
-  return Boolean(result.token && result.accountId);
-}
-
-function createWeChatDriver(config) {
-  if (!config.enabled) {
-    return null;
-  }
-  return new WeChatIlinkDriver({
-    ...(config.baseUrl ? { baseUrl: config.baseUrl } : {}),
-    token: config.token,
-    accountId: config.accountId,
-  });
-}
-
-function normalizeFeishuConfig(config = {}) {
-  return {
-    enabled: Boolean(config.enabled),
-    appId: config.appId ?? null,
-    appSecret: config.appSecret ?? null,
-    verificationToken: config.verificationToken ?? null,
-    encryptKey: config.encryptKey ?? null,
-    baseUrl: config.baseUrl ?? null,
-    domain: config.domain ?? "feishu",
-    linkedUserId: config.linkedUserId ?? null,
-    linkedUserName: config.linkedUserName ?? null,
-  };
-}
-
-function normalizeFeishuSecretPatch(config = {}) {
-  const patch = { ...config };
-  if (patch.appSecret === "" || patch.appSecret === "********") {
-    delete patch.appSecret;
-  }
-  if (patch.verificationToken === "" || patch.verificationToken === "********") {
-    delete patch.verificationToken;
-  }
-  if (patch.encryptKey === "" || patch.encryptKey === "********") {
-    delete patch.encryptKey;
-  }
-  return patch;
-}
-
-function publicFeishuConfig(config) {
-  return {
-    enabled: config.enabled,
-    appId: config.appId,
-    hasAppSecret: Boolean(config.appSecret),
-    hasVerificationToken: Boolean(config.verificationToken),
-    hasEncryptKey: Boolean(config.encryptKey),
-    configured: Boolean(config.enabled && config.appId && config.appSecret),
-    domain: config.domain,
-    linkedUserId: config.linkedUserId,
-    linkedUserName: config.linkedUserName,
-  };
-}
-
-function createFeishuDriver(config) {
-  if (!config.enabled || !config.appId || !config.appSecret) {
-    return null;
-  }
-  return new FeishuDriver({
-    appId: config.appId,
-    appSecret: config.appSecret,
-    verificationToken: config.verificationToken,
-    encryptKey: config.encryptKey,
-    domain: config.domain,
-    ...(config.baseUrl ? { baseUrl: config.baseUrl } : {}),
-  });
-}
-
-function createFeishuLoginDriver({ domain = "feishu" } = {}) {
-  return new FeishuDriver({
-    appId: "comote-registration",
-    appSecret: "comote-registration",
-    domain,
-  });
-}
-
-function shouldStoreFeishuLoginResult(result) {
-  return Boolean(result?.appId && result?.appSecret);
 }
