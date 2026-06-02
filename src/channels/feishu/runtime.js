@@ -1,5 +1,6 @@
 import { approvalResolvedCard } from "./cards.js";
 import { classifyMedia, resolveWithinProject } from "../../core/paths.js";
+import { t } from "../../core/i18n/index.js";
 
 export const MAX_MEDIA_BYTES = 20 * 1024 * 1024;
 
@@ -214,7 +215,7 @@ export class FeishuRuntimeService {
       await this.driver.sendText({
         receiveId: reply.conversationId,
         receiveIdType: "chat_id",
-        text: `⚠️ 文件不存在，无法发送：${reply.path}`,
+        text: t("feishu.media.missing", { path: reply.path }),
       });
       return;
     }
@@ -222,7 +223,11 @@ export class FeishuRuntimeService {
       await this.driver.sendText({
         receiveId: reply.conversationId,
         receiveIdType: "chat_id",
-        text: `⚠️ 文件超过 20MB，未发送：${basename(reply.path)}（${Math.round(size / 1024 / 1024)}MB）。可在本机直接查看：${reply.path}`,
+        text: t("feishu.media.tooLarge", {
+          name: basename(reply.path),
+          size: Math.round(size / 1024 / 1024),
+          path: reply.path,
+        }),
       });
       return;
     }
@@ -338,18 +343,23 @@ export class FeishuRuntimeService {
           .catch(() => {});
       }
       const accepted = action.value.decision === "accept";
-      return { toast: { type: accepted ? "success" : "info", content: accepted ? "已批准" : "已拒绝" } };
+      return {
+        toast: {
+          type: accepted ? "success" : "info",
+          content: accepted ? t("feishu.toast.approved") : t("feishu.toast.rejected"),
+        },
+      };
     }
     if (action.value.kind === "cancel") {
       await router?.cancelThread?.(action.value.threadId);
-      return { toast: { type: "info", content: "已请求取消任务" } };
+      return { toast: { type: "info", content: t("feishu.toast.cancelRequested") } };
     }
     if (action.value.kind === "pushfile") {
       const binding = router?.getThreadBinding?.(action.value.threadId);
       const projectPath = binding?.projectPath ?? null;
       const conversationId = binding?.conversationId ?? action.chatId ?? null;
       if (!projectPath || !conversationId) {
-        return { toast: { type: "error", content: "无法定位项目，请重开会话" } };
+        return { toast: { type: "error", content: t("feishu.toast.noProject") } };
       }
       const safePath = resolveWithinProject(projectPath, action.value.path);
       if (!safePath) {
@@ -358,7 +368,7 @@ export class FeishuRuntimeService {
           projectPath,
           path: action.value.path,
         });
-        return { toast: { type: "error", content: "路径越界，已拒绝" } };
+        return { toast: { type: "error", content: t("feishu.toast.pathDenied") } };
       }
       const { basename } = await import("node:path");
       this.outboundQueue.enqueue({
@@ -372,7 +382,7 @@ export class FeishuRuntimeService {
       void this.deliverQueued().catch((err) =>
         this.eventLog?.error?.("飞书推送文件：发送失败", { error: err.message }),
       );
-      return { toast: { type: "info", content: "推送中…" } };
+      return { toast: { type: "info", content: t("feishu.toast.pushing") } };
     }
     if (action.value.kind === "pick") {
       const conversation = router?.conversationByIdentity?.get(`feishu:${action.openId}`);
@@ -385,7 +395,7 @@ export class FeishuRuntimeService {
         conversationId,
       });
       if (!router || !action.openId || !conversationId) {
-        return { toast: { type: "error", content: "无法定位会话，请直接回复编号" } };
+        return { toast: { type: "error", content: t("feishu.toast.noConversation") } };
       }
       // Feishu's card-action callback has a tight timeout (~3s). Routing the
       // pick involves a Codex Desktop RPC + sending a follow-up card, which
@@ -399,7 +409,7 @@ export class FeishuRuntimeService {
         pickKind: action.value.pickKind,
         conversationId,
       });
-      return { toast: { type: "info", content: "处理中…" } };
+      return { toast: { type: "info", content: t("feishu.toast.processing") } };
     }
     return {};
   }
@@ -423,7 +433,7 @@ export class FeishuRuntimeService {
       await this.adapter
         .sendReplyCard({
           conversationId,
-          reply: { kind: "text", text: `操作失败：${error.message}` },
+          reply: { kind: "text", text: t("feishu.reply.actionFailed", { error: error.message }) },
         })
         .catch(() => {});
       await this.deliverQueued().catch(() => {});
