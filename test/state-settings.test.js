@@ -16,3 +16,10 @@ test("setLocale updates settings and i18n; getSettings reflects it", () => {
   // i18n locale is a module-level global; reset so later tests aren't affected.
   setLocale("zh");
 });
+
+test("an invalid persisted locale is normalized in both i18n and settings", () => {
+  const state = createComoteState({ persisted: { settings: { locale: "de" } } });
+  assert.equal(getLocale(), "zh");
+  assert.equal(state.getSettings().locale, "zh");
+  setLocale("zh");
+});

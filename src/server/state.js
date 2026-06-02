@@ -34,8 +34,9 @@ export function createComoteState({
   currentVersion = null,
   versionChecker = null,
 } = {}) {
-  const settings = { locale: persisted?.settings?.locale ?? DEFAULT_LOCALE };
-  setI18nLocale(settings.locale);
+  // Route the persisted value through i18n's validation so a hand-edited or
+  // stale state.json can't desync settings.locale from the locale actually served.
+  const settings = { locale: setI18nLocale(persisted?.settings?.locale ?? DEFAULT_LOCALE) };
 
   const authorization = new AuthorizationStore({ identities: persisted.identities ?? [] });
   for (const identity of persisted.detectedIdentities ?? []) {
