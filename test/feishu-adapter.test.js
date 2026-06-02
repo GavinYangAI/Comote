@@ -312,7 +312,7 @@ test("handleInbound downloads attachments and prefixes the prompt", async () => 
   });
 
   assert.equal(calls.length, 1);
-  assert.match(calls[0].text, /\[附件: \.comote\/uploads\/a\.png\]/);
+  assert.match(calls[0].text, /\[attachment: \.comote\/uploads\/a\.png\]/);
 });
 
 test("handleInbound without an open project asks the user to /open", async () => {
@@ -401,8 +401,8 @@ test("handleInbound gracefully skips an attachment when download fails (non-NO_P
   assert.ok(!replies.some((r) => /\/open/.test(r.text ?? "")));
   // (b) routing still proceeds
   assert.equal(calls.length, 1);
-  // (c) the failed attachment contributes no `[附件: …]` prefix
-  assert.ok(!/\[附件:/.test(calls[0].text ?? ""));
+  // (c) the failed attachment contributes no `[attachment: …]` prefix
+  assert.ok(!/\[attachment:/.test(calls[0].text ?? ""));
 });
 
 test("normalizeInbound drops image attachment when image_key is missing", () => {

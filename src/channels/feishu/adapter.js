@@ -72,7 +72,9 @@ export class FeishuChannelAdapter {
       for (const attachment of message.attachments) {
         try {
           const { relativePath } = await this.downloadAttachment({ attachment, identity: message.identity });
-          prefixes.push(`[附件: ${relativePath}]`);
+          // Locale-neutral marker: it's a prompt prefix fed to Codex, kept
+          // language-independent so it doesn't mix Chinese into a non-zh session.
+          prefixes.push(`[attachment: ${relativePath}]`);
         } catch (error) {
           if (error.message === "NO_PROJECT") {
             await this.sendReply({

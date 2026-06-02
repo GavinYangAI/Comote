@@ -9,7 +9,7 @@ export function classifyMedia(filePath) {
 
 // Sanitizes a channel-controlled file name into a single safe path segment for
 // the .comote/uploads directory. The result also lands inside the Codex prompt
-// as `[附件: …]`, so it must contain no path separators, control characters, or
+// as `[attachment: …]`, so it must contain no path separators, control characters, or
 // bracket characters that could break the prompt marker.
 export function sanitizeUploadName(fileName, fallback = "attachment") {
   // Basename only: drop everything up to and including the last / or \.
@@ -18,7 +18,7 @@ export function sanitizeUploadName(fileName, fallback = "attachment") {
   // but keep the rule explicit so future edits don't reintroduce them).
   name = name.replace(/[/\\]/g, "_");
   // Strip control characters and null bytes — these break fs calls, and
-  // newlines in particular allow breaking out of the `[附件: …]` prompt marker.
+  // newlines in particular allow breaking out of the `[attachment: …]` prompt marker.
   // eslint-disable-next-line no-control-regex
   name = name.replace(/[\x00-\x1f\x7f]/g, "");
   // Strip bracket characters that could otherwise break the prompt marker.
