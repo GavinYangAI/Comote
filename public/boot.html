@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Comote</title>
+    <style>
+      :root {
+        --canvas: #fbfaf9;
+        --ink: #1f2430;
+        --muted: #525a68;
+        --subtle: #6b7280;
+        --line: #e5e3de;
+        --surface-low: #f4f3f1;
+        --teal: #2f9e8f;
+        --error: #ba1a1a;
+      }
+      * { box-sizing: border-box; }
+      html, body { height: 100%; margin: 0; }
+      body {
+        background: var(--canvas);
+        color: var(--ink);
+        font-family: -apple-system, "Segoe UI", system-ui, "PingFang SC",
+          "Microsoft YaHei", sans-serif;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        -webkit-user-select: none;
+        user-select: none;
+      }
+      .boot {
+        width: min(560px, 86vw);
+        text-align: center;
+        padding: 32px;
+      }
+      .logo {
+        width: 56px;
+        height: 56px;
+        margin: 0 auto 18px;
+        display: block;
+      }
+      h1 { font-size: 20px; margin: 0 0 8px; font-weight: 650; }
+      p { margin: 6px 0; color: var(--muted); font-size: 14px; line-height: 1.6; }
+      .spinner {
+        width: 26px;
+        height: 26px;
+        margin: 22px auto 8px;
+        border: 3px solid var(--line);
+        border-top-color: var(--teal);
+        border-radius: 50%;
+        animation: spin 0.9s linear infinite;
+      }
+      @keyframes spin { to { transform: rotate(360deg); } }
+      @media (prefers-reduced-motion: reduce) {
+        .spinner { animation: none; }
+      }
+      .error-title { color: var(--error); }
+      .logpath {
+        display: block;
+        margin: 14px auto 6px;
+        padding: 10px 12px;
+        max-width: 100%;
+        overflow-wrap: anywhere;
+        background: var(--surface-low);
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        font-family: ui-monospace, "SFMono-Regular", "Cascadia Code", Consolas,
+          monospace;
+        font-size: 12.5px;
+        color: var(--ink);
+        -webkit-user-select: text;
+        user-select: text;
+      }
+      .hint { color: var(--subtle); font-size: 12.5px; }
+      [hidden] { display: none !important; }
+    </style>
+  </head>
+  <body>
+    <main class="boot">
+      <img class="logo" src="./logo.svg" alt="Comote" />
+
+      <section id="loading">
+        <h1>正在启动 Comote…</h1>
+        <div class="spinner" aria-hidden="true"></div>
+        <p>本地服务启动中，首次启动在 Windows 上可能需要十几秒，请稍候。</p>
+      </section>
+
+      <section id="error" hidden>
+        <h1 class="error-title">Comote 启动失败</h1>
+        <p>本地服务未能在限定时间内启动。请把下面的日志文件发给开发者，便于定位原因：</p>
+        <code class="logpath" id="logpath"></code>
+        <p class="hint">关闭并重新打开 Comote 可重试。</p>
+      </section>
+    </main>
+
+    <script>
+      // Called from the Rust side (show_launch_error) when the local service
+      // could not be reached. Flip from the loading state to a readable error
+      // that points at the launch log.
+      window.__comoteLaunchError = function (logPath) {
+        var loading = document.getElementById("loading");
+        var error = document.getElementById("error");
+        if (loading) loading.hidden = true;
+        if (error) error.hidden = false;
+        var el = document.getElementById("logpath");
+        if (el) el.textContent = logPath || "";
+      };
+    </script>
+  </body>
+</html>
