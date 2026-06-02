@@ -22,8 +22,12 @@ export function routerReplyToSemantic(reply, target) {
   if (reply.picker) {
     return { ...base, kind: "picker", pickKind: reply.picker.pickKind, items: reply.picker.items, text: reply.text ?? "" };
   }
-  if (reply.kind === "ignored" || reply.kind === "denied") {
-    return reply.text ? { ...base, kind: "text", text: reply.text } : null;
+  // denied/ignored are never delivered: the existing adapters suppress the
+  // repeat "not authorized" denial so an unconfirmed user isn't spammed. Welcome
+  // and notice results (first-contact) use kind "notice"/"error" and DO carry
+  // text, so they fall through to the text branch below and are sent.
+  if (reply.kind === "denied" || reply.kind === "ignored") {
+    return null;
   }
   if (typeof reply.text === "string" && reply.text.length > 0) {
     return { ...base, kind: "text", text: reply.text };

@@ -34,3 +34,20 @@ test("routerReplyToSemantic returns null when there is nothing to send", () => {
   assert.equal(routerReplyToSemantic({ kind: "ignored" }, { channel: "feishu", conversationId: "c1" }), null);
   assert.equal(routerReplyToSemantic(null, { channel: "feishu", conversationId: "c1" }), null);
 });
+
+test("routerReplyToSemantic keeps denied silent even when it carries text", () => {
+  const target = { channel: "feishu", conversationId: "c1" };
+  assert.equal(routerReplyToSemantic({ kind: "denied", text: "not authorized" }, target), null);
+});
+
+test("routerReplyToSemantic keeps ignored silent even when it carries text", () => {
+  const target = { channel: "wechat", conversationId: "c1" };
+  assert.equal(routerReplyToSemantic({ kind: "ignored", text: "ignored" }, target), null);
+});
+
+test("routerReplyToSemantic still sends first-contact notice text", () => {
+  const target = { channel: "feishu", conversationId: "c1" };
+  const out = routerReplyToSemantic({ kind: "notice", text: "welcome" }, target);
+  assert.equal(out.kind, "text");
+  assert.equal(out.text, "welcome");
+});
