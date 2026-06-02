@@ -20,4 +20,6 @@ export default {
   "card.approval.rejectedBody": "リクエストを拒否しました。",
   "card.picker.project": "プロジェクトを選択",
   "card.picker.conversation": "会話を選択",
+  "card.steps.running": "**{steps}** ステップ完了…",
+  "card.steps.starting": "起動中…",
 };

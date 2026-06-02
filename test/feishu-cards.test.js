@@ -157,3 +157,11 @@ test("status card title and cancel button localize to en", () => {
   assert.equal(action.actions[0].text.content, "Cancel task");
   setLocale("zh");
 });
+
+test("steps line localizes to en", () => {
+  setLocale("en");
+  const card = statusCard({ phase: "progress", threadId: "t1", steps: 3 });
+  const md = card.elements.find((e) => e.tag === "markdown" && /step/.test(e.content));
+  assert.match(md.content, /3.*step/);
+  setLocale("zh");
+});

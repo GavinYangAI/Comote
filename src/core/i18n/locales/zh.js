@@ -20,4 +20,6 @@ export default {
   "card.approval.rejectedBody": "已拒绝该请求。",
   "card.picker.project": "请选择项目",
   "card.picker.conversation": "请选择对话",
+  "card.steps.running": "已执行 **{steps}** 步…",
+  "card.steps.starting": "正在启动…",
 };

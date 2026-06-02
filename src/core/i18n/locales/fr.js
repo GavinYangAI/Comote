@@ -20,4 +20,6 @@ export default {
   "card.approval.rejectedBody": "Demande refusée.",
   "card.picker.project": "Choisir un projet",
   "card.picker.conversation": "Choisir une conversation",
+  "card.steps.running": "**{steps}** étape(s) effectuée(s)…",
+  "card.steps.starting": "Démarrage…",
 };

@@ -190,7 +190,7 @@ export function pickerCard({ kind, title, items = [], text = "" }) {
 }
 
 function stepsLine(steps) {
-  return steps > 0 ? `已执行 **${steps}** 步…` : "正在启动…";
+  return steps > 0 ? t("card.steps.running", { steps }) : t("card.steps.starting");
 }
 
 function truncate(value, max) {

@@ -20,4 +20,6 @@ export default {
   "card.approval.rejectedBody": "요청을 거부했습니다.",
   "card.picker.project": "프로젝트 선택",
   "card.picker.conversation": "대화 선택",
+  "card.steps.running": "**{steps}**단계 완료…",
+  "card.steps.starting": "시작 중…",
 };
