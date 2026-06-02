@@ -18,7 +18,8 @@ import { WeChatIlinkDriver } from "../channels/wechat/ilink-driver.js";
 import { WeChatRuntimeService } from "../channels/wechat/runtime.js";
 import { FeishuDriver } from "../channels/feishu/driver.js";
 import { FeishuRuntimeService } from "../channels/feishu/runtime.js";
-import { statusCard, textCard, approvalCard } from "../channels/feishu/cards.js";
+import { createFeishuRenderer } from "../channels/feishu/renderer.js";
+import { createWeChatRenderer } from "../channels/wechat/renderer.js";
 import { EventLog } from "../core/event-log.js";
 import { SleepGuard } from "../core/sleep-guard.js";
 import { Transcript } from "../core/transcript.js";
@@ -116,9 +117,12 @@ export function createComoteState({
       return { ok: true };
     },
   });
+  const feishuRenderer = createFeishuRenderer();
+  const wechatRenderer = createWeChatRenderer();
   const wechatRuntime = new WeChatRuntimeService({
     adapter: wechat,
     outboundQueue: outboundReplies,
+    renderer: wechatRenderer,
     driver: createWeChatDriver(wechatConfig),
     persist: async () => stateRef.persist?.(),
     cursor: persisted.wechatCursor ?? null,
@@ -126,6 +130,7 @@ export function createComoteState({
   const feishuRuntime = new FeishuRuntimeService({
     adapter: feishu,
     outboundQueue: outboundReplies,
+    renderer: feishuRenderer,
     driver: createFeishuDriver(feishuConfig),
     persist: async () => stateRef.persist?.(),
     eventLog,
@@ -324,7 +329,7 @@ export function createComoteState({
           .openThreadCard({
             threadId: event.threadId,
             conversationId: startedBinding.conversationId,
-            card: statusCard({ phase: "started", threadId: event.threadId }),
+            card: feishuRuntime.buildStatusCard({ phase: "started", threadId: event.threadId }),
           })
           .catch((error) => {
             feishuRuntime.lastError = error.message;
@@ -340,7 +345,7 @@ export function createComoteState({
         feishuRuntime
           .finishThreadCard(
             event.threadId,
-            statusCard({
+            feishuRuntime.buildStatusCard({
               phase: "completed",
               threadId: event.threadId,
               text: tail,
@@ -383,7 +388,7 @@ export function createComoteState({
         progressByThread.set(event.threadId, entry);
         feishuRuntime.updateThreadCard(
           event.threadId,
-          statusCard({
+          feishuRuntime.buildStatusCard({
             phase: "progress",
             threadId: event.threadId,
             steps: entry.count,
@@ -402,6 +407,7 @@ export function createComoteState({
             channel: binding.channel,
             conversationId: binding.conversationId,
             ...(binding.accountId ? { accountId: binding.accountId } : {}),
+            kind: "text",
             text: t("state.progress.reply", { steps: entry.count }),
             dedupeKey: `progress:${event.threadId}:${now}`,
           });
@@ -420,7 +426,7 @@ export function createComoteState({
       streamTextByThread.set(event.threadId, event.text ?? "");
       feishuRuntime.updateThreadCard(
         event.threadId,
-        statusCard({
+        feishuRuntime.buildStatusCard({
           phase: "streaming",
           threadId: event.threadId,
           text: event.text ?? "",
@@ -446,7 +452,7 @@ export function createComoteState({
         feishuRuntime
           .finishThreadCard(
             event.threadId,
-            statusCard({
+            feishuRuntime.buildStatusCard({
               phase: "completed",
               threadId: event.threadId,
               text: event.text ?? "",
@@ -460,7 +466,8 @@ export function createComoteState({
               outboundReplies.enqueue({
                 channel: "feishu",
                 conversationId: binding.conversationId,
-                card: textCard(event.text ?? ""),
+                kind: "text",
+                text: event.text ?? "",
                 dedupeKey: `agent:${event.itemId ?? event.threadId}`,
               });
               deliverIfFeishu("feishu");
@@ -472,53 +479,55 @@ export function createComoteState({
         stateRef.persist?.();
         return;
       }
-      const chunks = chunkForChannel(event.text ?? "");
-      chunks.forEach((chunk, index) => {
-        outboundReplies.enqueue({
-          channel: binding.channel,
-          conversationId: binding.conversationId,
-          ...(binding.accountId ? { accountId: binding.accountId } : {}),
-          text: chunks.length > 1 ? `(${index + 1}/${chunks.length})\n${chunk}` : chunk,
-          dedupeKey: `agent:${event.itemId ?? event.threadId}:${index}`,
-        });
+      // Chunking moved to the wechat renderer — enqueue ONE semantic text reply.
+      outboundReplies.enqueue({
+        channel: binding.channel,
+        conversationId: binding.conversationId,
+        ...(binding.accountId ? { accountId: binding.accountId } : {}),
+        kind: "text",
+        text: event.text ?? "",
+        dedupeKey: `agent:${event.itemId ?? event.threadId}`,
       });
       deliverIfFeishu(binding.channel);
       stateRef.persist?.();
       return;
     }
 
-    let binding = null;
-    let text = null;
-    let dedupeKey = null;
     if (event.type === "approval") {
-      binding = commandRouter.getThreadBinding(event.approval.threadId);
+      const binding = commandRouter.getThreadBinding(event.approval.threadId);
       eventLog.warn("Codex 请求审批", {
         shortCode: event.approval.shortCode,
         threadId: event.approval.threadId,
       });
-      if (binding?.channel === "feishu") {
-        outboundReplies.enqueue({
-          channel: "feishu",
-          conversationId: binding.conversationId,
-          card: approvalCard({
-            shortCode: event.approval.shortCode,
-            detail: approvalDetail(event.approval),
-          }),
-          dedupeKey: `approval:${event.approval.id}`,
+      if (!binding) {
+        eventLog.warn("收到 Codex 输出但找不到对应会话，未转发", {
+          threadId: event.approval.threadId,
         });
-        deliverIfFeishu("feishu");
-        stateRef.persist?.();
         return;
       }
-      text = describeApprovalForChat(event.approval);
-      dedupeKey = `approval:${event.approval.id}`;
-    } else if (event.type === "error") {
-      const errorBinding = commandRouter.getThreadBinding(event.threadId);
-      if (errorBinding?.channel === "feishu" && feishuRuntime.hasThreadCard(event.threadId)) {
+      // Both channels enqueue a channel-neutral SEMANTIC approval reply; the
+      // renderer turns it into a card (feishu) or text (wechat) at delivery.
+      outboundReplies.enqueue({
+        channel: binding.channel,
+        conversationId: binding.conversationId,
+        ...(binding.accountId ? { accountId: binding.accountId } : {}),
+        kind: "approval",
+        code: event.approval.shortCode,
+        approval: event.approval,
+        dedupeKey: `approval:${event.approval.id}`,
+      });
+      deliverIfFeishu(binding.channel);
+      stateRef.persist?.();
+      return;
+    }
+
+    if (event.type === "error") {
+      const binding = commandRouter.getThreadBinding(event.threadId);
+      if (binding?.channel === "feishu" && feishuRuntime.hasThreadCard(event.threadId)) {
         feishuRuntime
           .finishThreadCard(
             event.threadId,
-            statusCard({
+            feishuRuntime.buildStatusCard({
               phase: "error",
               text: t("state.error.card", { message: event.message }),
               done: true,
@@ -530,30 +539,25 @@ export function createComoteState({
         eventLog.error("Codex 错误", { threadId: event.threadId, message: event.message });
         return;
       }
-      binding = commandRouter.getThreadBinding(event.threadId);
-      text = t("state.error.reply", { message: event.message });
-      dedupeKey = `error:${event.threadId ?? ""}:${Date.now()}`;
       eventLog.error("Codex 错误", { threadId: event.threadId, message: event.message });
-    }
-
-    if (!text) {
-      return;
-    }
-    if (!binding) {
-      eventLog.warn("收到 Codex 输出但找不到对应会话，未转发", {
-        threadId: event.threadId ?? event.approval?.threadId ?? null,
+      if (!binding) {
+        eventLog.warn("收到 Codex 输出但找不到对应会话，未转发", {
+          threadId: event.threadId ?? null,
+        });
+        return;
+      }
+      outboundReplies.enqueue({
+        channel: binding.channel,
+        conversationId: binding.conversationId,
+        ...(binding.accountId ? { accountId: binding.accountId } : {}),
+        kind: "text",
+        text: t("state.error.reply", { message: event.message }),
+        dedupeKey: `error:${event.threadId ?? ""}:${Date.now()}`,
       });
+      deliverIfFeishu(binding.channel);
+      stateRef.persist?.();
       return;
     }
-    outboundReplies.enqueue({
-      channel: binding.channel,
-      conversationId: binding.conversationId,
-      ...(binding.accountId ? { accountId: binding.accountId } : {}),
-      text,
-      dedupeKey,
-    });
-    deliverIfFeishu(binding.channel);
-    stateRef.persist?.();
   }
 
   // Maps a turn's absolute changedPaths to the {path, name} entries the
@@ -624,81 +628,6 @@ async function readPackageVersion() {
   } catch {
     return null;
   }
-}
-
-// Splits a long Codex reply into chat-sized chunks. The full text is always
-// kept in the transcript, so an over-long reply is capped here, not lost.
-function chunkForChannel(text, size = 1500, maxChunks = 6) {
-  const value = String(text ?? "").trim();
-  if (!value) {
-    return [];
-  }
-  const chunks = [];
-  for (let index = 0; index < value.length; index += size) {
-    chunks.push(value.slice(index, index + size));
-  }
-  if (chunks.length > maxChunks) {
-    const kept = chunks.slice(0, maxChunks);
-    kept[maxChunks - 1] += "\n" + t("state.chunk.truncated");
-    return kept;
-  }
-  return chunks;
-}
-
-function describeApprovalForChat(approval) {
-  const params = approval.params ?? {};
-  const lines = [t("state.approval.title", { code: approval.shortCode })];
-  if (Array.isArray(approval.changes) && approval.changes.length > 0) {
-    lines.push(summarizeChanges(approval.changes));
-  } else {
-    const detail = params.command ?? params.reason ?? approval.method;
-    const cwd = params.cwd ? "\n" + t("state.approval.cwd", { cwd: params.cwd }) : "";
-    lines.push(`${detail}${cwd}`);
-  }
-  lines.push(t("state.approval.instructions", { code: approval.shortCode }));
-  return lines.join("\n\n");
-}
-
-// Markdown body for a Feishu approval card — reuses the diff/command summary.
-function approvalDetail(approval) {
-  const params = approval.params ?? {};
-  if (Array.isArray(approval.changes) && approval.changes.length > 0) {
-    return summarizeChanges(approval.changes);
-  }
-  const detail = params.command ?? params.reason ?? approval.method;
-  const cwd = params.cwd ? "\n\n" + t("state.approval.cwdMarkdown", { cwd: params.cwd }) : "";
-  return `\`${detail}\`${cwd}`;
-}
-
-function summarizeChanges(changes) {
-  const rows = changes.slice(0, 10).map((change) => {
-    const kind =
-      change.kind?.type === "add"
-        ? t("state.changes.kind.add")
-        : change.kind?.type === "delete"
-          ? t("state.changes.kind.delete")
-          : t("state.changes.kind.modify");
-    const { added, removed } = countDiffLines(change.diff);
-    const stat = added || removed ? ` (+${added} -${removed})` : "";
-    return `  ${kind} ${change.path}${stat}`;
-  });
-  if (changes.length > 10) {
-    rows.push("  " + t("state.changes.more", { count: changes.length - 10 }));
-  }
-  return [t("state.changes.summary", { count: changes.length }), ...rows].join("\n");
-}
-
-function countDiffLines(diff) {
-  let added = 0;
-  let removed = 0;
-  for (const line of String(diff ?? "").split("\n")) {
-    if (line.startsWith("+") && !line.startsWith("+++")) {
-      added += 1;
-    } else if (line.startsWith("-") && !line.startsWith("---")) {
-      removed += 1;
-    }
-  }
-  return { added, removed };
 }
 
 function normalizeWeChatConfig(config = {}) {
