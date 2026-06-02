@@ -1,0 +1,56 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import wechatPlugin from "../src/channels/wechat/index.js";
+import { WeChatChannelAdapter } from "../src/channels/wechat/adapter.js";
+import { WeChatRuntimeService } from "../src/channels/wechat/runtime.js";
+
+test("wechat plugin exposes meta + factories", () => {
+  assert.equal(wechatPlugin.meta.id, "wechat");
+  assert.equal(wechatPlugin.meta.inboundMode, "poll");
+  assert.equal(wechatPlugin.meta.binding, "qr");
+  assert.deepEqual(wechatPlugin.meta.capabilities, { cards: 0, media: 0, liveUpdates: 0, typing: 1 });
+  for (const fn of ["createDriver", "createAdapter", "createRuntime", "createRenderer", "normalizeConfig", "publicConfig"]) {
+    assert.equal(typeof wechatPlugin[fn], "function");
+  }
+});
+
+test("createDriver returns null when disabled", () => {
+  assert.equal(wechatPlugin.createDriver({ enabled: false }), null);
+});
+
+test("publicConfig reflects login state without leaking the token", () => {
+  // publicWeChatConfig reports a `loggedIn` boolean (Boolean(config.token))
+  // and never includes the raw token field.
+  const loggedIn = wechatPlugin.publicConfig(
+    wechatPlugin.normalizeConfig({ enabled: true, token: "secret-token", accountId: "acct" }),
+  );
+  assert.equal(loggedIn.loggedIn, true);
+  assert.equal("token" in loggedIn, false);
+  assert.equal(loggedIn.accountId, "acct");
+
+  const loggedOut = wechatPlugin.publicConfig(
+    wechatPlugin.normalizeConfig({ enabled: true }),
+  );
+  assert.equal(loggedOut.loggedIn, false);
+  assert.equal("token" in loggedOut, false);
+});
+
+test("createAdapter/createRuntime construct the wechat classes", () => {
+  const adapter = wechatPlugin.createAdapter({
+    commandRouter: { handleMessageAsync: async () => ({}) },
+    sendReply: async () => {},
+  });
+  assert.ok(adapter instanceof WeChatChannelAdapter);
+
+  const runtime = wechatPlugin.createRuntime({
+    adapter,
+    outboundQueue: {},
+    renderer: wechatPlugin.createRenderer(),
+  });
+  assert.ok(runtime instanceof WeChatRuntimeService);
+});
+
+test("meta is complete", () => {
+  assert.equal(typeof wechatPlugin.meta.displayName, "string");
+  assert.deepEqual(wechatPlugin.meta.configFields, []);
+});
