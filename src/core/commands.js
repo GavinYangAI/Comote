@@ -1,5 +1,6 @@
 import { describeIdentity } from "./authorization.js";
 import { normalizeChannelMessage } from "./channel.js";
+import { t } from "./i18n/index.js";
 import { classifyMedia, resolveWithinProject } from "./paths.js";
 
 function isAbsolutePath(value) {
@@ -59,7 +60,7 @@ export class CommandRouter {
     const windowStart = now - 3600_000;
     const recent = (this.turnTimestamps.get(key) ?? []).filter((ts) => ts > windowStart);
     if (recent.length >= this.maxTurnsPerHour) {
-      throw new Error(`已达到每小时 ${this.maxTurnsPerHour} 次 Codex 任务上限，请稍后再试。`);
+      throw new Error(t("cmd.rate.limit", { max: this.maxTurnsPerHour }));
     }
     recent.push(now);
     this.turnTimestamps.set(key, recent);
@@ -193,21 +194,21 @@ export class CommandRouter {
 
   unauthorizedNoticeText() {
     return [
-      "你好，我是 Comote —— 把这台电脑上的 Codex 桥接到手机的助手。",
-      "你的身份还没有被机主确认，暂时不能操作 Codex。",
-      "请让机主在 Comote 桌面端的「授权用户」里确认你，确认后即可使用。",
+      t("cmd.auth.noticeIntro"),
+      t("cmd.auth.noticePending"),
+      t("cmd.auth.noticeAction"),
     ].join("\n");
   }
 
   deniedReply() {
     return {
       kind: "denied",
-      text: "这个身份还没有在本机 Comote 里确认，暂时无法控制 Codex。",
+      text: t("cmd.auth.denied"),
     };
   }
 
   welcomeText() {
-    return ["已确认你的身份，欢迎使用 Comote。", "", this.helpText()].join("\n");
+    return [t("cmd.auth.welcome"), "", this.helpText()].join("\n");
   }
 
   prependWelcome(reply) {
@@ -233,7 +234,7 @@ export class CommandRouter {
       throw new Error("threadId is required");
     }
     if (!this.codexDesktop?.cancelTurn) {
-      throw new Error("Codex Desktop 取消功能当前不可用。");
+      throw new Error(t("cmd.cancel.unavailable"));
     }
     await this.codexDesktop.cancelTurn({ threadId });
     return { ok: true };
@@ -244,39 +245,24 @@ export class CommandRouter {
   }
 
   helpText() {
-    return [
-      "Comote 命令",
-      "/projects - 列出可用项目",
-      "/open <编号|路径> - 选择一个项目",
-      "/sessions - 列出 Codex Desktop 对话",
-      "/use <编号|id> - 切换到某个对话",
-      "/switch <编号|id> - /use 的别名",
-      "/new <消息> - 新建一个 Codex 对话",
-      "/current - 显示当前项目和对话",
-      "/tail [n] - 显示最近的本地对话消息",
-      "/file <路径> - 把项目内文件发到聊天",
-      "/approve <编号> - 批准一个 Codex 请求",
-      "/deny <编号> - 拒绝一个 Codex 请求",
-      "/cancel - 取消当前 Codex 任务",
-      "/status - 显示 Comote 状态",
-    ].join("\n");
+    return [t("cmd.help.title"), t("cmd.help.body")].join("\n");
   }
 
   statusText(identity) {
     const projectPath = this.currentProjectByIdentity.get(this.identityKey(identity));
     const activeSession = projectPath ? this.sessions.getActiveSession(projectPath) : null;
     return [
-      "Comote 状态",
-      `用户：${describeIdentity(identity)}`,
-      `项目：${projectPath ?? "无"}`,
-      `对话：${activeSession?.title ?? "无"}`,
+      t("cmd.status.title"),
+      t("cmd.status.user", { user: describeIdentity(identity) }),
+      t("cmd.status.project", { project: projectPath ?? t("cmd.status.none") }),
+      t("cmd.status.session", { session: activeSession?.title ?? t("cmd.status.none") }),
     ].join("\n");
   }
 
   projectsText() {
     const projects = this.projects.listProjects();
     if (projects.length === 0) {
-      return "还没有发现任何项目。";
+      return t("cmd.projects.none");
     }
     return projects
       .map((project) => `${project.id}. ${project.name}\n   ${project.path}\n   status: ${project.status}`)
@@ -290,12 +276,12 @@ export class CommandRouter {
         const key = this.identityKey(identity);
         this.lastProjectsByIdentity.set(key, desktopProjects);
         this.pendingByIdentity.set(key, { type: "choose_project" });
-        return this.pickerFromProjects(desktopProjects, "请选择要操作的 Codex Desktop 项目：");
+        return this.pickerFromProjects(desktopProjects, t("cmd.projects.chooseDesktop"));
       }
       const key = this.identityKey(identity);
       this.lastProjectsByIdentity.set(key, []);
       this.pendingByIdentity.delete(key);
-      return this.text("没有找到 Codex Desktop 项目。请先在 Codex Desktop 里打开一个项目。");
+      return this.text(t("cmd.projects.noDesktop"));
     }
     const localProjects = this.projects.listProjects();
     const key = this.identityKey(identity);
@@ -306,19 +292,19 @@ export class CommandRouter {
     if (localProjects.length === 0) {
       return this.text(this.projectsText());
     }
-    return this.pickerFromProjects(localProjects, "可用项目：");
+    return this.pickerFromProjects(localProjects, t("cmd.projects.available"));
   }
 
   openProject(identity, selector) {
     if (!selector) {
-      throw new Error("用法：/open <项目编号或路径>");
+      throw new Error(t("cmd.open.usage"));
     }
     const project = this.projects.resolveProject(selector);
     if (project.status === "excluded") {
-      throw new Error(`该路径属于敏感目录，已被排除：${project.path}`);
+      throw new Error(t("cmd.open.excluded", { path: project.path }));
     }
     this.currentProjectByIdentity.set(this.identityKey(identity), project.path);
-    return `已进入 ${project.name}\n${project.path}`;
+    return t("cmd.open.entered", { name: project.name, path: project.path });
   }
 
   async openProjectAsync(identity, selector) {
@@ -337,18 +323,18 @@ export class CommandRouter {
       return null;
     }
     this.currentProjectByIdentity.set(this.identityKey(identity), project.path);
-    return `已进入 ${project.name}\n${project.path}`;
+    return t("cmd.open.entered", { name: project.name, path: project.path });
   }
 
   formatProjects(projects) {
     return projects
       .map((project, index) => {
         const id = project.id ?? String(index + 1);
-        const activeTag = project.active ? "  ← 当前工作区" : "";
+        const activeTag = project.active ? `  ${t("cmd.projects.activeTag")}` : "";
         return [
           `${id}. ${project.name}${activeTag}`,
           `   ${project.path}`,
-          `   来源: ${this.projectSourceLabel(project)}`,
+          `   ${t("cmd.projects.sourceLabel", { source: this.projectSourceLabel(project) })}`,
           `   status: ${project.status}`,
         ].join("\n");
       })
@@ -360,7 +346,7 @@ export class CommandRouter {
       label: project.name,
       index: String(index + 1),
     }));
-    const text = [title, this.formatProjects(projects), "回复数字选择项目。"].join("\n\n");
+    const text = [title, this.formatProjects(projects), t("cmd.projects.replyNumber")].join("\n\n");
     return { kind: "text", text, picker: { pickKind: "project", items } };
   }
 
@@ -383,7 +369,7 @@ export class CommandRouter {
     const projectPath = this.requireCurrentProject(identity);
     const sessions = this.sessions.listSessions(projectPath);
     if (sessions.length === 0) {
-      return "当前项目还没有对话。发送 /new <消息> 新建一个。";
+      return t("cmd.session.none");
     }
     return sessions.map((session, index) => `${index + 1}. ${session.title}\n   ${session.id}`).join("\n\n");
   }
@@ -391,7 +377,7 @@ export class CommandRouter {
   pickerFromSessions(entries, { preamble = "" } = {}) {
     // entries: [{ label, index }] already including the "0. 新建对话" row.
     const lines = entries.map((entry) => `${entry.index}. ${entry.label}`);
-    const text = [preamble, "请选择对话：", lines.join("\n\n")]
+    const text = [preamble, t("cmd.session.choose"), lines.join("\n\n")]
       .filter(Boolean)
       .join("\n\n");
     return { kind: "text", text, picker: { pickKind: "session", items: entries } };
@@ -407,7 +393,7 @@ export class CommandRouter {
       const response = await this.codexDesktop.listThreads({ cwd: projectPath });
       const threads = response.data ?? response.threads ?? [];
       const entries = [
-        { label: "新建对话", index: "0" },
+        { label: t("cmd.session.newLabel"), index: "0" },
         ...threads.map((thread, index) => ({
           label: this.threadTitle(thread),
           index: String(index + 1),
@@ -417,7 +403,7 @@ export class CommandRouter {
     }
     const sessions = this.sessions.listSessions(projectPath);
     const entries = [
-      { label: "新建对话", index: "0" },
+      { label: t("cmd.session.newLabel"), index: "0" },
       ...sessions.map((session, index) => ({
         label: session.title,
         index: String(index + 1),
@@ -456,7 +442,7 @@ export class CommandRouter {
   }
 
   formatTranscriptLine(message) {
-    const role = message.role === "user" ? "你" : "Codex";
+    const role = message.role === "user" ? t("cmd.transcript.you") : "Codex";
     const text = String(message.text ?? "").trim();
     return `**${role}：** ${text}`;
   }
@@ -464,19 +450,19 @@ export class CommandRouter {
   useSession(identity, selector) {
     const projectPath = this.requireCurrentProject(identity);
     const session = this.sessions.useSession(projectPath, selector);
-    return `已切换到对话 ${session.title}\n${session.id}`;
+    return t("cmd.use.switched", { title: session.title, id: session.id });
   }
 
   tailText(identity, countText) {
     const projectPath = this.requireCurrentProject(identity);
     const activeSession = this.sessions.getActiveSession(projectPath);
     if (!activeSession) {
-      throw new Error("请先用 /use <编号> 选择一个对话，或用 /new <消息> 新建一个。");
+      throw new Error(t("cmd.session.needActive"));
     }
     const count = Math.min(Math.max(Number(countText || 5) || 5, 1), 20);
     const messages = activeSession.messages.slice(-count);
     if (messages.length === 0) {
-      return "当前对话还没有本地消息记录。";
+      return t("cmd.tail.empty");
     }
     return messages.map((message) => `${message.role}: ${message.text}`).join("\n");
   }
@@ -486,7 +472,7 @@ export class CommandRouter {
     const key = this.identityKey(identity);
     if (selector === "0") {
       this.pendingByIdentity.set(key, { type: "await_new_session_message", projectPath });
-      return "请输入新对话的第一条消息。";
+      return t("cmd.session.promptFirstMessage");
     }
     if (this.codexDesktop?.getStatus?.().state === "connected") {
       const response = await this.codexDesktop.listThreads({ cwd: projectPath });
@@ -502,9 +488,9 @@ export class CommandRouter {
         this.pendingByIdentity.delete(key);
         const recent = await this.recentDesktopThreadLines(threadId, 3);
         const recentBlock = recent.length > 0
-          ? `\n\n最近 ${recent.length} 条：\n${recent.join("\n")}`
-          : "\n\n这条对话还没有可读取的历史，发消息即可继续。";
-        return `已进入对话：${title}${recentBlock}\n\n现在可以直接发消息。`;
+          ? `\n\n${t("cmd.use.recentHeader", { count: recent.length })}\n${recent.join("\n")}`
+          : `\n\n${t("cmd.use.noHistory")}`;
+        return `${t("cmd.use.resumed", { title })}${recentBlock}\n\n${t("cmd.use.continueHint")}`;
       }
     }
     const result = this.useSession(identity, selector);
@@ -519,7 +505,7 @@ export class CommandRouter {
       title: message || "New Comote session",
       firstMessage: message,
     });
-    return `已创建对话 ${session.title}\n${session.id}`;
+    return t("cmd.new.created", { title: session.title, id: session.id });
   }
 
   async newSessionAsync(identity, message) {
@@ -527,7 +513,7 @@ export class CommandRouter {
     const key = this.identityKey(identity);
     if (!message) {
       this.pendingByIdentity.set(key, { type: "await_new_session_message", projectPath });
-      return "请输入新对话的第一条消息。";
+      return t("cmd.session.promptFirstMessage");
     }
     this.enforceTurnRate(identity);
     if (this.codexDesktop?.getStatus?.().state === "connected") {
@@ -543,7 +529,7 @@ export class CommandRouter {
         messages: message ? [{ role: "user", text: message }] : [],
       });
       this.pendingByIdentity.delete(key);
-      return `已新建对话，并发送给 Codex Desktop。\n${threadId}`;
+      return t("cmd.new.sentDesktop", { id: threadId });
     }
     if (this.codexCli?.runPrompt) {
       const result = await this.codexCli.runPrompt({ cwd: projectPath, text: message });
@@ -554,7 +540,7 @@ export class CommandRouter {
         messages: message ? [{ role: "user", text: message }] : [],
       });
       this.pendingByIdentity.delete(key);
-      return `已启动 Codex CLI 备用会话 ${message || result.id}\n${result.output}`;
+      return t("cmd.new.startedCli", { name: message || result.id, output: result.output });
     }
     this.pendingByIdentity.delete(key);
     return this.newSession(identity, message);
@@ -570,13 +556,13 @@ export class CommandRouter {
     }
     if (pending?.type === "choose_session") {
       if (!/^\d+$/.test(trimmed)) {
-        return this.text("请回复对话编号，或回复 0 新建对话。");
+        return this.text(t("cmd.session.replyNumberOrNew"));
       }
       return this.text(await this.useSessionAsync(identity, trimmed));
     }
     if (pending?.type === "await_new_session_message") {
       if (!trimmed) {
-        return this.text("请输入新对话的第一条消息。");
+        return this.text(t("cmd.session.promptFirstMessage"));
       }
       return this.text(await this.newSessionAsync(identity, trimmed));
     }
@@ -596,8 +582,8 @@ export class CommandRouter {
     const opened = this.openProjectFromLastList(identity, selector);
     if (!opened) {
       return this.text([
-        "没有找到这个项目编号。",
-        "请回复列表里的数字，或发送 /projects 重新查看项目。",
+        t("cmd.choose.notFound"),
+        t("cmd.choose.retry"),
       ].join("\n"));
     }
     const sessionsReply = await this.sessionsTextAsync(identity, { choose: true });
@@ -608,10 +594,10 @@ export class CommandRouter {
     const projectPath = this.requireCurrentProject(identity);
     const activeSession = this.sessions.getActiveSession(projectPath);
     if (!activeSession) {
-      throw new Error("请先用 /use <编号> 选择一个对话，或用 /new <消息> 新建一个。");
+      throw new Error(t("cmd.session.needActive"));
     }
     if (this.codexDesktop?.getStatus?.().state !== "connected") {
-      throw new Error("Codex Desktop 未连接。");
+      throw new Error(t("cmd.desktop.notConnected"));
     }
     this.enforceTurnRate(identity);
     this.bindThreadForIdentity(identity, activeSession.id, projectPath);
@@ -625,7 +611,7 @@ export class CommandRouter {
       await this.resumeDesktopThread(activeSession.id);
       await this.codexDesktop.startTurn({ threadId: activeSession.id, text, cwd: projectPath });
     }
-    return `已发送给 Codex Desktop，正在处理…\n${activeSession.id}`;
+    return t("cmd.send.processing", { id: activeSession.id });
   }
 
   async resumeDesktopThread(threadId) {
@@ -637,26 +623,28 @@ export class CommandRouter {
 
   async resolveApproval(selector, decision) {
     if (!selector) {
-      throw new Error(decision === "accept" ? "用法：/approve <编号>" : "用法：/deny <编号>");
+      throw new Error(decision === "accept" ? t("cmd.approve.usage") : t("cmd.deny.usage"));
     }
     if (!this.codexDesktop?.resolveApproval) {
-      throw new Error("Codex Desktop 审批功能当前不可用。");
+      throw new Error(t("cmd.approve.unavailable"));
     }
     await this.codexDesktop.resolveApproval(selector, decision);
-    return decision === "accept" ? `已批准 ${selector}` : `已拒绝 ${selector}`;
+    return decision === "accept"
+      ? t("cmd.approve.approved", { selector })
+      : t("cmd.deny.rejected", { selector });
   }
 
   async cancelActiveTurn(identity) {
     const projectPath = this.requireCurrentProject(identity);
     const activeSession = this.sessions.getActiveSession(projectPath);
     if (!activeSession) {
-      throw new Error("请先用 /use <编号> 选择一个对话，或用 /new <消息> 新建一个。");
+      throw new Error(t("cmd.session.needActive"));
     }
     if (!this.codexDesktop?.cancelTurn) {
-      throw new Error("Codex Desktop 取消功能当前不可用。");
+      throw new Error(t("cmd.cancel.unavailable"));
     }
     await this.codexDesktop.cancelTurn({ threadId: activeSession.id, cwd: projectPath });
-    return `已取消当前 Codex 任务\n${activeSession.id}`;
+    return t("cmd.cancel.cancelled", { id: activeSession.id });
   }
 
   // Pushes a project-internal file to the user's chat. The path is fenced
@@ -666,30 +654,30 @@ export class CommandRouter {
   async handleFileCommand(identity, rawPath) {
     const projectPath = this.currentProjectByIdentity.get(this.identityKey(identity));
     if (!projectPath) {
-      return this.text("还没打开项目，先用 /open <编号或路径> 选一个项目。");
+      return this.text(t("cmd.file.needOpen"));
     }
     const arg = (rawPath ?? "").trim();
     if (!arg) {
-      return this.text("用法：/file <项目内的相对路径>，例如 /file out/chart.png");
+      return this.text(t("cmd.file.usage"));
     }
     const safePath = resolveWithinProject(projectPath, arg);
     if (!safePath) {
-      return this.text("路径越界或无效，只能取项目目录内的文件。");
+      return this.text(t("cmd.file.outOfBounds"));
     }
     const { existsSync } = await import("node:fs");
     const { basename } = await import("node:path");
     if (!existsSync(safePath)) {
-      return this.text(`找不到文件：${arg}`);
+      return this.text(t("cmd.file.notFound", { arg }));
     }
     const conversation = this.conversationByIdentity.get(this.identityKey(identity));
     if (!conversation) {
-      return this.text("无法定位会话，请重发一条消息后再试。");
+      return this.text(t("cmd.file.noConversation"));
     }
     if (conversation.channel !== "feishu") {
-      return this.text("/file 目前仅支持飞书渠道。");
+      return this.text(t("cmd.file.feishuOnly"));
     }
     if (!this.outboundQueue) {
-      return this.text("当前无法发送文件：出站队列不可用。");
+      return this.text(t("cmd.file.queueUnavailable"));
     }
     this.outboundQueue.enqueue({
       channel: conversation.channel,
@@ -699,13 +687,13 @@ export class CommandRouter {
       path: safePath,
       fileName: basename(safePath),
     });
-    return this.text(`正在发送：${basename(safePath)}`);
+    return this.text(t("cmd.file.sending", { name: basename(safePath) }));
   }
 
   requireCurrentProject(identity) {
     const projectPath = this.currentProjectByIdentity.get(this.identityKey(identity));
     if (!projectPath) {
-      throw new Error("请先用 /open <项目编号或路径> 选择一个项目。");
+      throw new Error(t("cmd.project.needOpen"));
     }
     return projectPath;
   }
