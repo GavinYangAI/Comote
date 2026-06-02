@@ -167,6 +167,13 @@ test("pollOnce throws when no driver configured", async () => {
   await assert.rejects(() => runtime.pollOnce(), /driver is not configured/);
 });
 
+test("handleInbound routes through adapter then drains the queue", async () => {
+  const { runtime, queue, rendered } = makeRuntime();
+  runtime.adapter.handleInbound = async () => { queue.enqueue({ channel: "test", conversationId: "c1", kind: "text", text: "z", dedupeKey: "t:z" }); };
+  await runtime.handleInbound({ id: "x" });
+  assert.deepEqual(rendered.map((r) => r.text), ["z"]);
+});
+
 test("pollOnce calls _handleFetchError on a fetch failure (override point)", async () => {
   const queue = new OutboundQueue();
   const seen = [];

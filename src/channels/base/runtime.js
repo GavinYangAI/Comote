@@ -72,8 +72,7 @@ export class BaseChannelRuntime {
         await this.driver.startEventStream({
           onEvent: async (payload) => {
             try {
-              await this.adapter.handleInbound(payload);
-              await this.deliverQueued();
+              await this.handleInbound(payload);
             } catch (error) {
               this.eventLog?.error?.(`${this.channelId} 入站处理失败`, { error: error.message });
             }
@@ -125,6 +124,15 @@ export class BaseChannelRuntime {
   // propagates. Default does nothing; the error is rethrown by pollOnce.
   // A channel subclass overrides this to e.g. set needsRelogin and stop().
   _handleFetchError(error) {}
+
+  // Canonical inbound entry (push event or external webhook). Subclasses may
+  // override to add channel-specific pre-checks (url_verification, event-id
+  // dedup) before delegating to the adapter and draining the queue.
+  async handleInbound(payload) {
+    await this.adapter.handleInbound(payload);
+    await this.deliverQueued();
+    return { kind: "ok" };
+  }
 
   async pollOnce() {
     if (!this.driver) {
