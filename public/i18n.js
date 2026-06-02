@@ -1559,6 +1559,9 @@ export function tWeb(key, vars) {
 // DOM application — only called in the browser at runtime (never in unit tests).
 // data-i18n="key" sets textContent; data-i18n-attr="placeholder:key; title:key" sets attributes.
 export function applyTranslations(root = document) {
+  // Keep the document's lang attribute in sync so screen readers / the browser
+  // know the active language (it starts as a static zh-CN default in the HTML).
+  if (root.documentElement) root.documentElement.lang = current;
   root.querySelectorAll("[data-i18n]").forEach((el) => {
     el.textContent = tWeb(el.getAttribute("data-i18n"));
   });
