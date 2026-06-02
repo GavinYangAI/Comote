@@ -126,7 +126,7 @@ test("buildEventHandlers wires inbound events and card actions", async () => {
   const seen = [];
   const handlers = buildEventHandlers({
     onEvent: async (data) => seen.push(["event", data]),
-    onCardAction: async (data) => {
+    onAction: async (data) => {
       seen.push(["card", data]);
       return { toast: { type: "info", content: "ok" } };
     },
