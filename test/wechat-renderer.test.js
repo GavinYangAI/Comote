@@ -1,0 +1,95 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import { createWeChatRenderer } from "../src/channels/wechat/renderer.js";
+import { t } from "../src/core/i18n/index.js";
+
+function stubDriver() {
+  const sent = [];
+  return { sent, sendText: async (a) => { sent.push(a); return { ok: true }; } };
+}
+
+test("text reply is sent as one sendText when short", async () => {
+  const r = createWeChatRenderer();
+  const driver = stubDriver();
+  await r.render({ kind: "text", conversationId: "dm_x", text: "hi" }, { driver });
+  assert.equal(driver.sent.length, 1);
+  assert.equal(driver.sent[0].text, "hi");
+});
+
+test("long text reply is chunked with (i/n) prefixes", async () => {
+  const r = createWeChatRenderer();
+  const driver = stubDriver();
+  await r.render({ kind: "text", conversationId: "dm_x", text: "a".repeat(3200) }, { driver });
+  assert.equal(driver.sent.length, 3);            // 1500-char chunks
+  assert.match(driver.sent[0].text, /^\(1\/3\)/);
+});
+
+test("approval reply degrades to chat text (code + command + /approve)", async () => {
+  const r = createWeChatRenderer();
+  const driver = stubDriver();
+  await r.render({ kind: "approval", conversationId: "dm_x", code: "a1",
+    approval: { shortCode: "a1", method: "exec", params: { command: "rm -rf build" } } }, { driver });
+  assert.match(driver.sent[0].text, /rm -rf build/);
+  assert.match(driver.sent[0].text, /\/approve a1/);
+});
+
+test("picker reply degrades to the picker text", async () => {
+  const r = createWeChatRenderer();
+  const driver = stubDriver();
+  await r.render({ kind: "picker", conversationId: "dm_x", text: "1. p\n2. q", items: [] }, { driver });
+  assert.equal(driver.sent[0].text, "1. p\n2. q");
+});
+
+test("empty text reply sends nothing", async () => {
+  const r = createWeChatRenderer();
+  const driver = stubDriver();
+  await r.render({ kind: "text", conversationId: "dm_x", text: "" }, { driver });
+  assert.equal(driver.sent.length, 0);
+});
+
+test("render passes accountId and inReplyTo through to sendText when present", async () => {
+  const r = createWeChatRenderer();
+  const driver = stubDriver();
+  await r.render({ kind: "text", conversationId: "dm_x", accountId: "acc1", inReplyTo: "m9", text: "hi" }, { driver });
+  assert.equal(driver.sent[0].accountId, "acc1");
+  assert.equal(driver.sent[0].inReplyTo, "m9");
+});
+
+test("render omits accountId and inReplyTo when absent", async () => {
+  const r = createWeChatRenderer();
+  const driver = stubDriver();
+  await r.render({ kind: "text", conversationId: "dm_x", text: "hi" }, { driver });
+  assert.ok(!("accountId" in driver.sent[0]));
+  assert.ok(!("inReplyTo" in driver.sent[0]));
+});
+
+test("a reply longer than maxChunks is capped at 6 chunks with a truncation marker", async () => {
+  const r = createWeChatRenderer();
+  const driver = stubDriver();
+  await r.render({ kind: "text", conversationId: "dm_x", text: "a".repeat(10000) }, { driver });
+  assert.equal(driver.sent.length, 6);
+  assert.match(driver.sent[5].text, /^\(6\/6\)/);
+  // last chunk carries the truncation notice (t("state.chunk.truncated"))
+  assert.ok(driver.sent[5].text.includes(t("state.chunk.truncated")));
+});
+
+test("approvalResolved reply sends nothing", async () => {
+  const r = createWeChatRenderer();
+  const driver = stubDriver();
+  await r.render({ kind: "approvalResolved", conversationId: "dm_x", code: "a1", decision: "accept" }, { driver });
+  assert.equal(driver.sent.length, 0);
+});
+
+test("media reply degrades to a paperclip filename line", async () => {
+  const r = createWeChatRenderer();
+  const driver = stubDriver();
+  await r.render({ kind: "media", conversationId: "dm_x", mediaKind: "file", path: "/p/report.pdf", fileName: "report.pdf" }, { driver });
+  assert.match(driver.sent[0].text, /report\.pdf/);
+});
+
+test("media reply with no name/path sends nothing", async () => {
+  const r = createWeChatRenderer();
+  const driver = stubDriver();
+  await r.render({ kind: "media", conversationId: "dm_x", mediaKind: "file" }, { driver });
+  assert.equal(driver.sent.length, 0);
+});

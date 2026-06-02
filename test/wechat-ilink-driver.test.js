@@ -274,6 +274,41 @@ test("wechat driver leaves userName null when iLink omits the nickname", async (
   assert.equal(status.userName, null);
 });
 
+test("exposes fetchUpdates as a seam that delegates to getUpdates", async () => {
+  const driver = new WeChatIlinkDriver({
+    baseUrl: "https://wechat.example/api/",
+    token: "secret",
+    accountId: "wx_account_1",
+    fetchImpl: async () =>
+      jsonResponse({
+        data: {
+          updates: [{ from_user_id: "wxid_owner", text: "/status", message_id: "m1" }],
+          next_cursor: "cursor_2",
+        },
+      }),
+  });
+
+  assert.equal(typeof driver.fetchUpdates, "function");
+
+  const calls = [];
+  const originalGetUpdates = driver.getUpdates.bind(driver);
+  driver.getUpdates = (options) => {
+    calls.push(options);
+    return originalGetUpdates(options);
+  };
+
+  const opts = { cursor: "cursor_1" };
+  const fetchResult = await driver.fetchUpdates(opts);
+
+  // fetchUpdates must route through getUpdates with the same options...
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0], opts);
+  // ...and return exactly what getUpdates returns for that input.
+  const expected = await originalGetUpdates(opts);
+  assert.deepEqual(fetchResult, expected);
+  assert.equal(fetchResult.nextCursor, "cursor_2");
+});
+
 function jsonResponse(body, status = 200) {
   return {
     ok: status >= 200 && status < 300,

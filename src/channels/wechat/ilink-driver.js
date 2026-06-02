@@ -49,6 +49,11 @@ export class WeChatIlinkDriver {
     };
   }
 
+  // Base runtime's poll loop calls fetchUpdates(); keep getUpdates() too.
+  fetchUpdates(options = {}) {
+    return this.getUpdates(options);
+  }
+
   normalizeUpdate(update) {
     const sender = update.sender ?? update.from ?? {};
     const message = update.message ?? update.msg ?? update;

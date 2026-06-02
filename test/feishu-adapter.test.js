@@ -75,7 +75,7 @@ test("authorized Feishu messages route through Comote", async () => {
   assert.match(sent[0].text, /1\. comote/);
 });
 
-test("feishu adapter renders a picker reply as a button card", async () => {
+test("feishu adapter enqueues a semantic picker reply", async () => {
   const sent = [];
   const adapter = new FeishuChannelAdapter({
     commandRouter: {
@@ -104,9 +104,10 @@ test("feishu adapter renders a picker reply as a button card", async () => {
   });
 
   assert.equal(sent.length, 1);
-  const action = sent[0].card.elements.find((el) => el.tag === "action");
-  assert.ok(action, "picker reply produced a button card");
-  assert.equal(action.actions[0].value.kind, "pick");
+  assert.equal(sent[0].kind, "picker");
+  assert.equal(sent[0].pickKind, "session");
+  assert.deepEqual(sent[0].items, [{ label: "新建对话", index: "0" }]);
+  assert.equal(sent[0].text, "请选择对话：\n\n0. 新建对话");
 });
 
 test("feishu adapter resolves a missing sender name before detecting the identity", async () => {

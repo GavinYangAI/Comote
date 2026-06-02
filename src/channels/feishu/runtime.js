@@ -1,31 +1,45 @@
+import { BaseChannelRuntime } from "../base/runtime.js";
+import { routerReplyToSemantic } from "../base/messages.js";
 import { approvalResolvedCard } from "./cards.js";
+import { createFeishuRenderer } from "./renderer.js";
 import { classifyMedia, resolveWithinProject } from "../../core/paths.js";
 import { t } from "../../core/i18n/index.js";
 
-export const MAX_MEDIA_BYTES = 20 * 1024 * 1024;
+// Re-exported for back-compat: the media size guard now lives in the renderer
+// (A5), but external references still import it from here.
+export { MAX_MEDIA_BYTES } from "./renderer.js";
 
-export class FeishuRuntimeService {
-  constructor({ adapter, outboundQueue, driver = null, persist = null, eventLog = null, cardUpdateIntervalMs = 700 }) {
+// Feishu runtime. Inbound (push event stream), outbound queue delivery via the
+// renderer, status, and driver wiring are all owned by BaseChannelRuntime. This
+// subclass keeps only what is genuinely feishu-specific: the url_verification
+// handshake + at-least-once event dedup (handleInbound override), the live
+// "thread card" used to stream Codex status (open/update-throttled/finish),
+// card-button callbacks (handleCardAction via the driver's onAction hook), and
+// async pick dispatch.
+export class FeishuRuntimeService extends BaseChannelRuntime {
+  constructor({ adapter, outboundQueue, renderer, driver = null, persist = null, eventLog = null, cardUpdateIntervalMs = 700 }) {
     if (!adapter) {
       throw new Error("adapter is required");
     }
     if (!outboundQueue) {
       throw new Error("outboundQueue is required");
     }
-    this.adapter = adapter;
-    this.outboundQueue = outboundQueue;
-    this.driver = driver;
-    this.persist = persist;
-    this.eventLog = eventLog;
-    this.lastError = null;
-    // Re-entry guard for deliverQueued: serializes concurrent drains so the same
-    // queued entry is never sent twice. `_deliverPending` requests one more drain
-    // pass when a trigger arrives while a drain is already running.
-    this._delivering = false;
-    this._deliverPending = false;
-    this.startedAt = new Date().toISOString();
-    this.running = false;
-    this._startPromise = null;
+    // The renderer is the feishu semantic-reply renderer (A5). It is supplied
+    // by callers (and by every test via makeRuntime); we default to a fresh one
+    // so the not-yet-migrated state.js construction (A12 wires it explicitly)
+    // keeps working. The runtime always has a working renderer either way.
+    super({
+      channelId: "feishu",
+      inboundMode: "push",
+      adapter,
+      outboundQueue,
+      // Intentional fallback: state.js injects a renderer explicitly; the default covers constructions that omit one (e.g. tests).
+      renderer: renderer ?? createFeishuRenderer(),
+      driver,
+      persist,
+      eventLog,
+      dedupMax: 500,
+    });
     this.cardUpdateIntervalMs = cardUpdateIntervalMs;
     // threadId -> { messageId, conversationId, lastSentAt, pendingCard, timer }
     this.cardSessions = new Map();
@@ -34,6 +48,70 @@ export class FeishuRuntimeService {
     // processed (and routed to Codex) twice.
     this.recentEventIds = new Set();
     this.recentEventOrder = [];
+    // Card-action button callbacks come back through the driver's onAction hook;
+    // the base start() wires this into driver.startEventStream.
+    this.onAction = (action) => this.handleCardAction(action);
+  }
+
+  // Status cards are built by the renderer so callers and the queue path share
+  // one card shape.
+  buildStatusCard(status) {
+    return this.renderer.buildStatusCard(status);
+  }
+
+  // Override start() to preserve two feishu-specific guarantees the base does
+  // not provide: (1) a missing/incomplete driver throws rather than silently
+  // no-ops, and (2) a WebSocket setup failure rejects (the base swallows it).
+  // Re-entry is guarded by the base `running` flag set synchronously before the
+  // await, so concurrent start() calls invoke startEventStream exactly once.
+  async start() {
+    if (!this.driver?.startEventStream) {
+      throw new Error("Feishu WebSocket driver is not configured");
+    }
+    if (this.running) {
+      return this.getStatus();
+    }
+    this.running = true;
+    this.startedAt = new Date().toISOString();
+    this.lastError = null;
+    try {
+      await this.driver.startEventStream({
+        onEvent: async (payload) => {
+          try {
+            await this.handleInbound(payload);
+          } catch (error) {
+            this.eventLog?.error?.("feishu 入站处理失败", { error: error.message });
+          }
+        },
+        onAction: this.onAction ?? (async () => ({})),
+        onError: (error) => {
+          this.lastError = error?.message ?? String(error);
+          this.running = false;
+        },
+      });
+    } catch (e) {
+      this.running = false;
+      throw e;
+    }
+    return this.getStatus();
+  }
+
+  // Override configureDriver to restart asynchronously and swallow the restart
+  // error into lastError — the base restarts synchronously and our start() now
+  // rejects on failure, which would surface as an unhandled rejection.
+  configureDriver(driver) {
+    const wasRunning = this.running;
+    if (wasRunning && this.driver) {
+      this.driver.stopEventStream?.();
+    }
+    this.driver = driver;
+    this.lastError = null;
+    this.running = false;
+    if (wasRunning) {
+      void this.start().catch((e) => {
+        this.lastError = e.message;
+      });
+    }
   }
 
   // Returns true when this event was already handled. Keys on the Feishu event
@@ -59,72 +137,9 @@ export class FeishuRuntimeService {
     return false;
   }
 
-  configureDriver(driver) {
-    const wasRunning = this.running;
-    if (wasRunning && this.driver) {
-      this.driver.stopEventStream?.();
-    }
-    this.driver = driver;
-    this.lastError = null;
-    this.running = false;
-    if (wasRunning) {
-      void this.start().catch((e) => {
-        this.lastError = e.message;
-      });
-    }
-  }
-
-  getStatus() {
-    return {
-      state: this.running ? "running" : this.driver ? "configured" : "not_configured",
-      lastError: this.lastError,
-      startedAt: this.startedAt,
-      driver: this.driver?.getStatus?.() ?? null,
-    };
-  }
-
-  async start() {
-    if (!this.driver?.startEventStream) {
-      throw new Error("Feishu WebSocket driver is not configured");
-    }
-    if (this.running) {
-      return this.getStatus();
-    }
-    if (this._startPromise) {
-      return this._startPromise;
-    }
-    this._startPromise = (async () => {
-      // Do NOT set running = true before startEventStream resolves; if it throws
-      // we must not leave running in an inconsistent state.
-      try {
-        await this.driver.startEventStream({
-          onEvent: async (event) => this.handleInbound(event),
-          onCardAction: async (action) => this.handleCardAction(action),
-          onError: (error) => {
-            this.lastError = error.message;
-            this.running = false;
-          },
-        });
-      } catch (e) {
-        this.running = false;
-        throw e;
-      }
-      this.running = true;
-      return this.getStatus();
-    })();
-    try {
-      return await this._startPromise;
-    } finally {
-      this._startPromise = null;
-    }
-  }
-
-  stop() {
-    this.driver?.stopEventStream?.();
-    this.running = false;
-    return this.getStatus();
-  }
-
+  // Override the base inbound entry: the url_verification handshake and
+  // at-least-once event dedup run before the shared adapter + queue pipeline.
+  // Used by both the WS event stream and the inbound webhook.
   async handleInbound(payload) {
     if (!this.driver) {
       throw new Error("Feishu driver is not configured");
@@ -142,102 +157,7 @@ export class FeishuRuntimeService {
     await this.deliverQueued();
     await this.persist?.();
     this.lastError = null;
-    return reply;
-  }
-
-  async deliverQueued() {
-    if (!this.driver) {
-      throw new Error("Feishu driver is not configured");
-    }
-    // A drain is already in flight: don't run a second concurrent loop over the
-    // same queue snapshot (it would resend entries not yet marked delivered).
-    // Flag that another pass is needed and let the active drain pick it up.
-    if (this._delivering) {
-      this._deliverPending = true;
-      return { outbound: 0, coalesced: true };
-    }
-    this._delivering = true;
-    try {
-      let outbound = 0;
-      do {
-        this._deliverPending = false;
-        outbound += await this._drainQueueOnce();
-      } while (this._deliverPending);
-      this.lastError = null;
-      return { outbound };
-    } finally {
-      this._delivering = false;
-    }
-  }
-
-  async _drainQueueOnce() {
-    let outbound = 0;
-    for (const reply of this.outboundQueue.list({ channel: "feishu" })) {
-      try {
-        if (reply.kind === "image" || reply.kind === "file") {
-          await this._deliverMedia(reply);
-        } else if (reply.card) {
-          await this.driver.sendCard({
-            receiveId: reply.conversationId,
-            receiveIdType: "chat_id",
-            card: reply.card,
-          });
-        } else {
-          await this.driver.sendText({
-            receiveId: reply.conversationId,
-            receiveIdType: "chat_id",
-            text: reply.text,
-          });
-        }
-        this.outboundQueue.markDelivered(reply.id);
-        outbound += 1;
-      } catch (error) {
-        this.outboundQueue.markFailed(reply.id, error);
-        this.eventLog?.error("飞书消息发送失败", {
-          id: reply.id,
-          kind: reply.kind === "image" || reply.kind === "file" ? reply.kind : reply.card ? "card" : "text",
-          conversationId: reply.conversationId,
-          error: error.message,
-        });
-      }
-    }
-    await this.persist?.();
-    return outbound;
-  }
-
-  async _deliverMedia(reply) {
-    const { stat } = await import("node:fs/promises");
-    const { basename } = await import("node:path");
-    let size = 0;
-    try {
-      size = (await stat(reply.path)).size;
-    } catch {
-      await this.driver.sendText({
-        receiveId: reply.conversationId,
-        receiveIdType: "chat_id",
-        text: t("feishu.media.missing", { path: reply.path }),
-      });
-      return;
-    }
-    if (size > MAX_MEDIA_BYTES) {
-      await this.driver.sendText({
-        receiveId: reply.conversationId,
-        receiveIdType: "chat_id",
-        text: t("feishu.media.tooLarge", {
-          name: basename(reply.path),
-          size: Math.round(size / 1024 / 1024),
-          path: reply.path,
-        }),
-      });
-      return;
-    }
-    if (reply.kind === "image") {
-      const imageKey = await this.driver.uploadImage(reply.path);
-      await this.driver.sendImage({ receiveId: reply.conversationId, receiveIdType: "chat_id", imageKey });
-    } else {
-      const fileKey = await this.driver.uploadFile(reply.path, reply.fileName ?? basename(reply.path));
-      await this.driver.sendFile({ receiveId: reply.conversationId, receiveIdType: "chat_id", fileKey });
-    }
+    return reply ?? { kind: "ok" };
   }
 
   async openThreadCard({ threadId, conversationId, card }) {
@@ -374,7 +294,8 @@ export class FeishuRuntimeService {
       this.outboundQueue.enqueue({
         channel: "feishu",
         conversationId,
-        kind: classifyMedia(safePath),
+        kind: "media",
+        mediaKind: classifyMedia(safePath),
         path: safePath,
         fileName: basename(safePath),
       });
@@ -430,13 +351,14 @@ export class FeishuRuntimeService {
           : await router.useSessionAsync(identity, selector);
     } catch (error) {
       this.eventLog?.error("飞书卡片点击：路由失败", { error: error.message });
-      await this.adapter
-        .sendReplyCard({
-          conversationId,
-          reply: { kind: "text", text: t("feishu.reply.actionFailed", { error: error.message }) },
-        })
-        .catch(() => {});
-      await this.deliverQueued().catch(() => {});
+      // Enqueue a semantic failure reply; the feishu renderer turns it into a
+      // text card at delivery (replaces the removed adapter card-send method).
+      const failReply = { kind: "text", text: t("feishu.reply.actionFailed", { error: error.message }) };
+      const semantic = routerReplyToSemantic(failReply, { channel: "feishu", conversationId });
+      if (semantic) {
+        await this.adapter.sendReply(semantic).catch(() => {});
+        await this.deliverQueued().catch(() => {});
+      }
       return;
     }
     const normalized = typeof reply === "string" ? { kind: "text", text: reply } : reply;
@@ -450,9 +372,16 @@ export class FeishuRuntimeService {
     // dedupeKey to bypass the outbound queue's content-based dedup.
     const dedupeKey = `feishu:pick:${identity.stableId}:${pickKind}:${selector}:${Date.now()}`;
     try {
-      await this.adapter.sendReplyCard({ conversationId, reply: normalized, dedupeKey });
-      await this.deliverQueued();
-      this.eventLog?.info("飞书卡片回复已派发");
+      // The renderer (A5) builds the card from the semantic reply at delivery,
+      // so enqueue a semantic picker/text reply rather than a prebuilt card.
+      // routerReplyToSemantic returns null for denied/ignored and for empty
+      // text — matching the old code's `!reply.text` bail.
+      const semantic = routerReplyToSemantic(normalized, { channel: "feishu", conversationId });
+      if (semantic) {
+        await this.adapter.sendReply({ ...semantic, dedupeKey });
+        await this.deliverQueued();
+        this.eventLog?.info("飞书卡片回复已派发");
+      }
     } catch (error) {
       this.eventLog?.error("飞书卡片回复派发失败", { error: error.message });
     }

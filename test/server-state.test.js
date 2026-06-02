@@ -1,11 +1,12 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { createComoteState, shouldStoreWeChatLoginResult } from "../src/server/state.js";
+import { createComoteState } from "../src/server/state.js";
+import wechatPlugin from "../src/channels/wechat/index.js";
 
 test("stores WeChat login results when token and account id are present", () => {
   assert.equal(
-    shouldStoreWeChatLoginResult({
+    wechatPlugin.shouldStoreLoginResult({
       state: "success",
       accountId: "wx_account_1",
       token: "bot_token_1",
@@ -13,7 +14,7 @@ test("stores WeChat login results when token and account id are present", () => 
     true,
   );
   assert.equal(
-    shouldStoreWeChatLoginResult({
+    wechatPlugin.shouldStoreLoginResult({
       state: "wait",
       accountId: "wx_account_1",
       token: "bot_token_1",
@@ -21,7 +22,7 @@ test("stores WeChat login results when token and account id are present", () => 
     true,
   );
   assert.equal(
-    shouldStoreWeChatLoginResult({
+    wechatPlugin.shouldStoreLoginResult({
       state: "wait",
       accountId: null,
       token: null,
@@ -29,7 +30,7 @@ test("stores WeChat login results when token and account id are present", () => 
     false,
   );
   assert.equal(
-    shouldStoreWeChatLoginResult({
+    wechatPlugin.shouldStoreLoginResult({
       state: "expired",
       accountId: "wx_account_1",
       token: "bot_token_1",

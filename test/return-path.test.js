@@ -81,11 +81,13 @@ test("Codex approval requests are pushed to the phone with a short code", async 
     params: { threadId: "thread_42", command: "rm -rf build", cwd: "/repo" },
   });
 
+  // routeDesktopEvent now enqueues a channel-neutral SEMANTIC approval reply;
+  // the text rendering (请求审批 / rm -rf build / /approve a1) is exercised by
+  // the wechat-renderer test. Here we assert the semantic shape.
   const queued = state.outboundReplies.list({ channel: "wechat" });
   assert.equal(queued.length, 1);
-  assert.match(queued[0].text, /请求审批/);
-  assert.match(queued[0].text, /rm -rf build/);
-  assert.match(queued[0].text, /\/approve a1/);
+  assert.equal(queued[0].kind, "approval");
+  assert.equal(queued[0].code, "a1");
 });
 
 test("agent output for an unbound thread is logged but not delivered", async () => {

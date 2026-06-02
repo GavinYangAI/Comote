@@ -56,3 +56,22 @@ test("prefixes downloaded attachment paths into the prompt", async () => {
   assert.match(calls[0], /\[attachment: \.comote\/uploads\/a\.png\]/);
   assert.match(calls[0], /see/);
 });
+
+test("noProjectMessage override is used for the attachment NO_PROJECT reply", async () => {
+  const sent = [];
+  class A extends BaseChannelAdapter {
+    normalizeInbound() {
+      return { messageId: "m", conversationId: "c", conversationType: "direct",
+        identity: { channel: "x", stableId: "s" }, text: "", attachments: [{ id: 1 }] };
+    }
+  }
+  const adapter = new A({
+    channelId: "x",
+    commandRouter: { handleMessageAsync: async () => ({ kind: "text", text: "" }) },
+    sendReply: async (r) => sent.push(r),
+    downloadAttachment: async () => { throw new Error("NO_PROJECT"); },
+    noProjectMessage: () => "CUSTOM_NO_PROJECT",
+  });
+  await adapter.handleInbound({});
+  assert.equal(sent[0].text, "CUSTOM_NO_PROJECT");
+});

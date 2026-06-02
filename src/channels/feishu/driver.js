@@ -366,13 +366,13 @@ export class FeishuDriver {
     };
   }
 
-  async startEventStream({ onEvent, onCardAction = null, onError = null }) {
+  async startEventStream({ onEvent, onAction = null, onError = null }) {
     const Lark = await import("@larksuiteoapi/node-sdk");
     const dispatcher = new Lark.EventDispatcher({
       encryptKey: this.encryptKey ?? "",
       verificationToken: this.verificationToken ?? "",
     });
-    dispatcher.register(buildEventHandlers({ onEvent, onCardAction }));
+    dispatcher.register(buildEventHandlers({ onEvent, onAction }));
     if (this.wsClient) {
       this.stopEventStream();
     }
@@ -409,11 +409,11 @@ export class FeishuDriver {
 
 // Builds the handler table for the Lark EventDispatcher. Pure + exported so
 // the wiring is unit-testable without spinning up a real WebSocket client.
-export function buildEventHandlers({ onEvent, onCardAction = null }) {
+export function buildEventHandlers({ onEvent, onAction = null }) {
   return {
     "im.message.receive_v1": async (data) => onEvent(data),
     "card.action.trigger": async (data) => {
-      const result = await onCardAction?.(data);
+      const result = await onAction?.(data);
       return result ?? {};
     },
   };

@@ -95,13 +95,13 @@ function isPending(entry) {
 }
 
 function makeDedupeKey(reply) {
-  if (reply.kind === "image" || reply.kind === "file") {
+  if (reply.kind === "media") {
     return [
       reply.channel,
       reply.accountId ?? "",
       reply.conversationId ?? "",
       reply.inReplyTo ?? "",
-      reply.kind,
+      "media",
       reply.path ?? "",
     ].join("|");
   }

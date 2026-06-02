@@ -8,6 +8,7 @@ import { ProjectStore } from "../src/core/projects.js";
 import { SessionStore } from "../src/core/sessions.js";
 import { WeChatChannelAdapter } from "../src/channels/wechat/adapter.js";
 import { WeChatRuntimeService } from "../src/channels/wechat/runtime.js";
+import { createWeChatRenderer } from "../src/channels/wechat/renderer.js";
 
 test("wechat runtime polls updates, routes commands, and delivers queued replies", async () => {
   const authorization = new AuthorizationStore();
@@ -29,7 +30,7 @@ test("wechat runtime polls updates, routes commands, and delivers queued replies
   const delivered = [];
   const driver = {
     getStatus: () => ({ state: "configured" }),
-    async getUpdates() {
+    async fetchUpdates() {
       return {
         nextCursor: "cursor_2",
         updates: [
@@ -58,7 +59,7 @@ test("wechat runtime polls updates, routes commands, and delivers queued replies
     },
   };
 
-  const runtime = new WeChatRuntimeService({ adapter, outboundQueue: outbound, driver });
+  const runtime = new WeChatRuntimeService({ adapter, outboundQueue: outbound, renderer: createWeChatRenderer(), driver });
   const result = await runtime.pollOnce();
 
   assert.equal(result.inbound, 1);
@@ -79,9 +80,10 @@ test("wechat runtime dedup ignores a redelivered duplicate message", async () =>
       },
     },
     outboundQueue: new OutboundQueue(),
+    renderer: createWeChatRenderer(),
     driver: {
       getStatus: () => ({ state: "configured" }),
-      async getUpdates() {
+      async fetchUpdates() {
         return { updates: [] };
       },
       normalizeUpdate(update) {
@@ -112,7 +114,7 @@ test("wechat runtime dedup ignores a redelivered duplicate message", async () =>
   const deliveredDuplicates = [];
   const driver2 = {
     getStatus: () => ({ state: "configured" }),
-    async getUpdates() {
+    async fetchUpdates() {
       return {
         nextCursor: "cursor_2",
         updates: [update1, update1], // Same message delivered twice
@@ -136,6 +138,7 @@ test("wechat runtime dedup ignores a redelivered duplicate message", async () =>
       },
     },
     outboundQueue: new OutboundQueue(),
+    renderer: createWeChatRenderer(),
     driver: driver2,
   });
 
@@ -150,7 +153,7 @@ test("wechat runtime tracks bounded set of seen message ids without rebuilding",
     let callCount = 0;
     return {
       getStatus: () => ({ state: "configured" }),
-      async getUpdates() {
+      async fetchUpdates() {
         // Return a batch of messages on each call, cycling through to deliver all
         if (callCount === 0) {
           callCount++;
@@ -200,6 +203,7 @@ test("wechat runtime tracks bounded set of seen message ids without rebuilding",
       handleInbound: async () => ({ kind: "text", text: "ok" }),
     },
     outboundQueue: new OutboundQueue(),
+    renderer: createWeChatRenderer(),
     driver: createDriver(messageIds),
   });
 
@@ -207,10 +211,12 @@ test("wechat runtime tracks bounded set of seen message ids without rebuilding",
   await runtime.pollOnce();
   await runtime.pollOnce();
 
-  // Verify the tracking set stays bounded and does not exceed cap
+  // Verify the tracking set stays bounded and does not exceed cap.
+  // Dedup now lives in the base DedupTracker (runtime._dedup): .seen is the Set,
+  // .has(id) the membership check, cap 1000 via dedupMax.
   assert.ok(
-    runtime.seenMessageIds.size <= cap,
-    `set size (${runtime.seenMessageIds.size}) must not exceed cap (${cap})`
+    runtime._dedup.seen.size <= cap,
+    `set size (${runtime._dedup.seen.size}) must not exceed cap (${cap})`
   );
 
   // Verify that after processing 1100 messages, the oldest 100 are evicted
@@ -218,7 +224,7 @@ test("wechat runtime tracks bounded set of seen message ids without rebuilding",
   for (let i = 1; i <= 100; i++) {
     const msgId = `msg_${i}`;
     assert.equal(
-      runtime.seenMessageIds.has(msgId),
+      runtime._dedup.has(msgId),
       false,
       `old message ${msgId} should have been evicted after cap exceeded`
     );
@@ -229,7 +235,7 @@ test("wechat runtime tracks bounded set of seen message ids without rebuilding",
   let recentCount = 0;
   for (let i = 101; i <= cap + 100; i++) {
     const msgId = `msg_${i}`;
-    if (runtime.seenMessageIds.has(msgId)) {
+    if (runtime._dedup.has(msgId)) {
       recentCount += 1;
     }
   }

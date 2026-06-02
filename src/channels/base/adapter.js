@@ -12,6 +12,7 @@ export class BaseChannelAdapter {
     resolveIdentityName = null,
     downloadAttachment = null,
     allowGroups = false,
+    noProjectMessage = null,
   }) {
     this.channelId = channelId;
     this.commandRouter = commandRouter;
@@ -20,6 +21,13 @@ export class BaseChannelAdapter {
     this.resolveIdentityName = resolveIdentityName;
     this.downloadAttachment = downloadAttachment;
     this.allowGroups = allowGroups;
+    this.noProjectMessage = noProjectMessage;
+  }
+
+  _noProjectText() {
+    if (typeof this.noProjectMessage === "function") return this.noProjectMessage();
+    if (typeof this.noProjectMessage === "string") return this.noProjectMessage;
+    return "收到文件，但还没打开项目。先用 /open 选一个项目，再把文件发我。";
   }
 
   // Subclasses MUST override.
@@ -49,7 +57,7 @@ export class BaseChannelAdapter {
               conversationId: message.conversationId,
               kind: "text",
               inReplyTo: message.messageId,
-              text: "收到文件，但还没打开项目。先用 /open 选一个项目，再把文件发我。",
+              text: this._noProjectText(),
             });
             return { kind: "ignored", reason: "no project for attachment" };
           }
