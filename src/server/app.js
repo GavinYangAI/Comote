@@ -225,155 +225,154 @@ async function handleApi(request, response, state) {
     return;
   }
 
-  if (request.method === "GET" && url.pathname === "/api/channels/wechat/status") {
-    sendJson(response, 200, state.channels.wechat.getStatus());
-    return;
-  }
-
-  if (request.method === "GET" && url.pathname === "/api/channels/wechat/config") {
-    sendJson(response, 200, state.runtime?.wechat?.getConfig?.() ?? {});
-    return;
-  }
-
-  if (request.method === "PUT" && url.pathname === "/api/channels/wechat/config") {
-    const body = await readJsonBody(request);
-    await state.runtime.wechat.configure(body);
-    await state.persist?.();
-    sendJson(response, 200, state.runtime.wechat.getConfig());
-    return;
-  }
-
-  if (request.method === "GET" && url.pathname === "/api/channels/wechat/runtime") {
-    sendJson(response, 200, state.runtime?.wechat?.getStatus?.() ?? { state: "not_configured" });
-    return;
-  }
-
-  if (request.method === "POST" && url.pathname === "/api/channels/wechat/runtime/poll") {
-    const result = await state.runtime.wechat.pollOnce();
-    await state.persist?.();
-    sendJson(response, 200, result);
-    return;
-  }
-
-  if (request.method === "POST" && url.pathname === "/api/channels/wechat/runtime/start") {
-    sendJson(response, 200, state.runtime.wechat.start());
-    return;
-  }
-
-  if (request.method === "POST" && url.pathname === "/api/channels/wechat/runtime/stop") {
-    sendJson(response, 200, state.runtime.wechat.stop());
-    return;
-  }
-
-  if (request.method === "POST" && url.pathname === "/api/channels/wechat/login/start") {
-    sendJson(response, 200, await state.runtime.wechat.startLogin());
-    return;
-  }
-
-  if (request.method === "GET" && url.pathname === "/api/channels/wechat/login/status") {
-    sendJson(response, 200, await state.runtime.wechat.getLoginStatus({
-      loginId: url.searchParams.get("loginId"),
-    }));
-    return;
-  }
-
-  if (request.method === "GET" && url.pathname === "/api/channels/feishu/status") {
-    sendJson(response, 200, state.channels.feishu.getStatus());
-    return;
-  }
-
-  if (request.method === "GET" && url.pathname === "/api/channels/feishu/config") {
-    sendJson(response, 200, state.runtime?.feishu?.getConfig?.() ?? {});
-    return;
-  }
-
-  if (request.method === "PUT" && url.pathname === "/api/channels/feishu/config") {
-    const body = await readJsonBody(request);
-    const config = await state.runtime.feishu.configure(body);
-    await state.persist?.();
-    sendJson(response, 200, config);
-    return;
-  }
-
-  if (request.method === "GET" && url.pathname === "/api/channels/feishu/runtime") {
-    sendJson(response, 200, state.runtime?.feishu?.getStatus?.() ?? { state: "not_configured" });
-    return;
-  }
-
-  if (request.method === "POST" && url.pathname === "/api/channels/feishu/runtime/start") {
-    sendJson(response, 200, await state.runtime.feishu.start());
-    return;
-  }
-
-  if (request.method === "POST" && url.pathname === "/api/channels/feishu/runtime/stop") {
-    sendJson(response, 200, state.runtime.feishu.stop());
-    return;
-  }
-
-  if (request.method === "POST" && url.pathname === "/api/channels/feishu/runtime/deliver") {
-    const result = await state.runtime.feishu.deliverQueued();
-    await state.persist?.();
-    sendJson(response, 200, result);
-    return;
-  }
-
-  if (request.method === "POST" && url.pathname === "/api/channels/feishu/login/start") {
-    const body = await readJsonBody(request);
-    sendJson(response, 200, await state.runtime.feishu.startLogin({ domain: body.domain ?? "feishu" }));
-    return;
-  }
-
-  if (request.method === "GET" && url.pathname === "/api/channels/feishu/login/status") {
-    sendJson(response, 200, await state.runtime.feishu.getLoginStatus({
-      loginId: url.searchParams.get("loginId"),
-      domain: url.searchParams.get("domain") ?? undefined,
-      interval: Number(url.searchParams.get("interval") || 5),
-      expireIn: Number(url.searchParams.get("expireIn") || 600),
-    }));
-    return;
-  }
-
-
-  if (request.method === "POST" && url.pathname === "/api/channels/wechat/inbound") {
-    const body = await readJsonBody(request);
-    const reply = await state.channels.wechat.handleInbound(body);
-    state.eventLog?.info("收到微信消息");
-    await state.persist?.();
-    sendJson(response, 200, reply);
-    return;
-  }
-
-  if (request.method === "POST" && url.pathname === "/api/channels/feishu/inbound") {
-    const body = await readJsonBody(request);
-    const reply = state.runtime?.feishu?.handleInbound
-      ? await state.runtime.feishu.handleInbound(body)
-      : await state.channels.feishu.handleInbound(body);
-    await state.persist?.();
-    if (reply.kind === "challenge") {
-      sendJson(response, 200, { challenge: reply.challenge });
-      return;
-    }
-    sendJson(response, 200, reply);
-    return;
-  }
-
+  // The outbound replies list (no channel id) is served explicitly — the
+  // generic :id/sub matcher below requires a sub-segment so it won't catch it.
   if (request.method === "GET" && url.pathname === "/api/channels/outbound-replies") {
     sendJson(response, 200, state.outboundReplies?.list?.() ?? []);
     return;
   }
 
-  if (request.method === "GET" && url.pathname === "/api/channels/wechat/outbound") {
-    sendJson(response, 200, state.outboundReplies?.list?.({ channel: "wechat" }) ?? []);
-    return;
-  }
+  // Generic per-channel dispatch: /api/channels/:id/:sub. The channel set and
+  // its capabilities (poll vs push, qr login) come from the registry + plugin
+  // meta, so adding a channel = registering a plugin (no edits here). Behavior
+  // for every (method, sub) pair below is byte-identical to the old per-channel
+  // ladder this replaces.
+  const channelRoute = url.pathname.match(/^\/api\/channels\/([^/]+)\/(.+)$/);
+  if (channelRoute) {
+    const id = decodeURIComponent(channelRoute[1]);
+    const sub = channelRoute[2];
+    const plugin = state.registry?.getChannel?.(id) ?? null;
+    const runtime = state.runtime?.[id] ?? null;
+    const adapter = state.channels?.[id] ?? null;
+    if (!runtime && !adapter) {
+      sendJson(response, 404, { error: "not found" });
+      return;
+    }
 
-  if (request.method === "POST" && url.pathname.startsWith("/api/channels/wechat/outbound/")) {
-    const suffix = url.pathname.slice("/api/channels/wechat/outbound/".length);
-    const id = decodeURIComponent(suffix.replace(/\/ack$/, ""));
-    state.outboundReplies.ack(id);
-    await state.persist?.();
-    response.writeHead(204);
-    response.end();
+    // Capability gates. When the registry exposes plugin meta we drive off it;
+    // otherwise (e.g. hand-built mock state) we duck-type the runtime wrapper,
+    // which state.js builds with exactly these methods per meta — so the two
+    // forms agree.
+    const canPoll = plugin
+      ? plugin.meta.inboundMode === "poll"
+      : typeof runtime?.pollOnce === "function";
+    const canDeliver = plugin
+      ? plugin.meta.inboundMode === "push"
+      : typeof runtime?.deliverQueued === "function";
+    const isPush = plugin
+      ? plugin.meta.inboundMode === "push"
+      : typeof runtime?.handleInbound === "function";
+    const canLogin = plugin
+      ? plugin.meta.binding === "qr"
+      : typeof runtime?.startLogin === "function";
+
+    if (request.method === "GET" && sub === "status") {
+      // /status reads the ADAPTER (not the runtime).
+      sendJson(response, 200, adapter.getStatus());
+      return;
+    }
+
+    if (request.method === "GET" && sub === "config") {
+      sendJson(response, 200, runtime?.getConfig?.() ?? {});
+      return;
+    }
+
+    if (request.method === "PUT" && sub === "config") {
+      const body = await readJsonBody(request);
+      // configure() returns the public config in both channel wrappers.
+      const config = await runtime.configure(body);
+      await state.persist?.();
+      sendJson(response, 200, config);
+      return;
+    }
+
+    if (request.method === "GET" && sub === "runtime") {
+      sendJson(response, 200, runtime?.getStatus?.() ?? { state: "not_configured" });
+      return;
+    }
+
+    if (request.method === "POST" && sub === "runtime/start") {
+      // feishu.start() is async, wechat's is sync — await is harmless on both.
+      sendJson(response, 200, await runtime.start());
+      return;
+    }
+
+    if (request.method === "POST" && sub === "runtime/stop") {
+      sendJson(response, 200, runtime.stop());
+      return;
+    }
+
+    if (request.method === "POST" && sub === "runtime/poll" && canPoll) {
+      const result = await runtime.pollOnce();
+      await state.persist?.();
+      sendJson(response, 200, result);
+      return;
+    }
+
+    if (request.method === "POST" && sub === "runtime/deliver" && canDeliver) {
+      const result = await runtime.deliverQueued();
+      await state.persist?.();
+      sendJson(response, 200, result);
+      return;
+    }
+
+    if (request.method === "POST" && sub === "login/start" && canLogin) {
+      const body = await readJsonBody(request);
+      // feishu reads body.domain; wechat.startLogin() ignores its argument, so
+      // passing the domain superset is harmless and keeps this channel-agnostic.
+      sendJson(response, 200, await runtime.startLogin({ domain: body.domain ?? "feishu" }));
+      return;
+    }
+
+    if (request.method === "GET" && sub === "login/status" && canLogin) {
+      // feishu reads domain/interval/expireIn; wechat reads only loginId. Build
+      // the superset of args — extra keys are ignored by wechat.getLoginStatus.
+      sendJson(response, 200, await runtime.getLoginStatus({
+        loginId: url.searchParams.get("loginId"),
+        domain: url.searchParams.get("domain") ?? undefined,
+        interval: Number(url.searchParams.get("interval") || 5),
+        expireIn: Number(url.searchParams.get("expireIn") || 600),
+      }));
+      return;
+    }
+
+    if (request.method === "POST" && sub === "inbound") {
+      const body = await readJsonBody(request);
+      // Push channels use the RUNTIME's handleInbound (challenge + dedup) with a
+      // fallback to the adapter; poll channels use the adapter directly.
+      const target = runtime?.handleInbound ? runtime : adapter;
+      const reply = await target.handleInbound(body);
+      // Poll channels (wechat) log an inbound notice; push channels (feishu) do
+      // not. Preserve the exact existing wechat log string.
+      if (!isPush) {
+        state.eventLog?.info("收到微信消息");
+      }
+      await state.persist?.();
+      if (reply.kind === "challenge") {
+        sendJson(response, 200, { challenge: reply.challenge });
+        return;
+      }
+      sendJson(response, 200, reply);
+      return;
+    }
+
+    if (request.method === "GET" && sub === "outbound") {
+      sendJson(response, 200, state.outboundReplies?.list?.({ channel: id }) ?? []);
+      return;
+    }
+
+    const ackMatch = request.method === "POST" && sub.match(/^outbound\/(.+)\/ack$/);
+    if (ackMatch) {
+      const replyId = decodeURIComponent(ackMatch[1]);
+      state.outboundReplies.ack(replyId);
+      await state.persist?.();
+      response.writeHead(204);
+      response.end();
+      return;
+    }
+
+    // Unknown (method, sub) for a known channel → fall through to 404.
+    sendJson(response, 404, { error: "not found" });
     return;
   }
 
