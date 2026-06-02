@@ -106,6 +106,43 @@ export class BaseChannelRuntime {
     this._timer.unref?.();
   }
 
+  // Override point: how to derive a stable inbound id for dedup from a normalized
+  // payload. Default reads payload.message.id (matches wechat); a channel whose
+  // updates carry a different id field can override.
+  dedupKeyOf(payload) {
+    return payload?.message?.id ?? null;
+  }
+
+  async pollOnce() {
+    if (!this.driver) {
+      throw new Error(`${this.channelId} driver is not configured`);
+    }
+    if (this._polling) {
+      return { inbound: 0, outbound: 0, cursor: this.cursor, skipped: true };
+    }
+    this._polling = true;
+    try {
+      const result = await this.driver.fetchUpdates({ cursor: this.cursor });
+      this.cursor = result.nextCursor ?? this.cursor;
+      let inbound = 0;
+      for (const update of result.updates ?? []) {
+        const payload = this.driver.normalizeUpdate(update);
+        const id = this.dedupKeyOf(payload);
+        if (id != null && !this._dedup.add(id)) {
+          continue;
+        }
+        await this.adapter.handleInbound(payload);
+        inbound += 1;
+      }
+      const { outbound } = await this.deliverQueued();
+      await this.persist?.();
+      this.lastError = null;
+      return { inbound, outbound, cursor: this.cursor };
+    } finally {
+      this._polling = false;
+    }
+  }
+
   async deliverQueued() {
     if (!this.driver) {
       throw new Error(`${this.channelId} driver is not configured`);

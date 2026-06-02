@@ -97,3 +97,55 @@ test("push start is a no-op without a driver", async () => {
   await runtime.start();
   assert.equal(runtime.running, false);
 });
+
+test("poll mode pollOnce fetches, dedups, routes, delivers, advances cursor", async () => {
+  const handled = [];
+  const rendered = [];
+  const queue = new OutboundQueue();
+  const updates = [{ raw: 1 }, { raw: 2 }, { raw: 1 }]; // third is a duplicate by id
+  const runtime = new BaseChannelRuntime({
+    channelId: "test",
+    inboundMode: "poll",
+    adapter: {
+      handleInbound: async (payload) => {
+        handled.push(payload.message.id);
+        queue.enqueue({ channel: "test", conversationId: "c1", kind: "text", text: `r${payload.message.id}`, dedupeKey: `t:${payload.message.id}` });
+      },
+    },
+    outboundQueue: queue,
+    renderer: { render: async (r) => rendered.push(r.text) },
+    driver: {
+      getStatus: () => ({ state: "configured" }),
+      fetchUpdates: async () => ({ updates, nextCursor: "cur2" }),
+      normalizeUpdate: (u) => ({ message: { id: String(u.raw) } }),
+    },
+  });
+  const result = await runtime.pollOnce();
+  assert.equal(result.inbound, 2);        // duplicate id "1" skipped
+  assert.equal(runtime.cursor, "cur2");
+  assert.deepEqual(handled, ["1", "2"]);
+  assert.deepEqual(rendered.sort(), ["r1", "r2"]);
+});
+
+test("pollOnce guards against overlapping runs", async () => {
+  const queue = new OutboundQueue();
+  const runtime = new BaseChannelRuntime({
+    channelId: "test", inboundMode: "poll",
+    adapter: { handleInbound: async () => {} }, outboundQueue: queue,
+    renderer: { render: async () => {} },
+    driver: { getStatus: () => ({}), fetchUpdates: async () => ({ updates: [], nextCursor: null }), normalizeUpdate: (u) => u },
+  });
+  runtime._polling = true; // simulate an in-flight poll
+  const result = await runtime.pollOnce();
+  assert.equal(result.skipped, true);
+});
+
+test("pollOnce throws when no driver configured", async () => {
+  const queue = new OutboundQueue();
+  const runtime = new BaseChannelRuntime({
+    channelId: "test", inboundMode: "poll",
+    adapter: { handleInbound: async () => {} }, outboundQueue: queue,
+    renderer: { render: async () => {} }, driver: null,
+  });
+  await assert.rejects(() => runtime.pollOnce(), /driver is not configured/);
+});
