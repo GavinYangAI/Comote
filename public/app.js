@@ -41,17 +41,28 @@ let activeFeishuLogin = null;
 let feishuLoginPollTimer = null;
 let refreshTimer = null;
 let rendering = false;
+let renderQueued = false;
 let logsOffset = 0;
 let conversationThreads = [];
 let conversationShown = 0;
 
 async function render() {
+  // Coalesce instead of dropping: a call arriving mid-render queues one more
+  // pass so a language switch (onLangChange awaits render()) reliably repaints
+  // dynamic tWeb() text at the now-current locale even if it coincides with an
+  // in-flight auto-refresh render.
   if (rendering) {
+    renderQueued = true;
     return;
   }
   rendering = true;
   try {
-    await renderOnce();
+    do {
+      // Clear before awaiting; any call during this pass re-sets the flag and
+      // earns exactly one more iteration — bounded, no spin, no deadlock.
+      renderQueued = false;
+      await renderOnce();
+    } while (renderQueued);
   } finally {
     rendering = false;
   }
@@ -136,22 +147,18 @@ function renderReadiness(status, wechatConfigResult, feishuConfigResult, identit
     {
       done: desktopState === "connected" || desktopState === "available",
       label: tWeb("web.readiness.step1.label"),
-      hint: tWeb("web.readiness.step1.hint"),
     },
     {
       done: Boolean(wechatConfig.loggedIn || feishuConfig.configured),
       label: tWeb("web.readiness.step2.label"),
-      hint: tWeb("web.readiness.step2.hint"),
     },
     {
       done: identities.length > 0,
       label: tWeb("web.readiness.step3.label"),
-      hint: tWeb("web.readiness.step3.hint"),
     },
     {
       done: wechatRuntime.state === "running" || feishuRuntime.state === "running",
       label: tWeb("web.readiness.step4.label"),
-      hint: tWeb("web.readiness.step4.hint"),
     },
   ];
   // Hide the whole section once setup is complete — no clutter for return users.
