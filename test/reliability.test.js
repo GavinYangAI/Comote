@@ -103,7 +103,7 @@ test("wechat runtime ignores a re-delivered message instead of re-routing it", a
     driver: {
       getStatus: () => ({ state: "configured" }),
       // Every poll returns the same message — the cursor never advances past it.
-      getUpdates: async () => ({ updates: [{ raw: 1 }], nextCursor: "c1" }),
+      fetchUpdates: async () => ({ updates: [{ raw: 1 }], nextCursor: "c1" }),
       normalizeUpdate: () => ({ message: { id: "msg_1", text: "暂停" }, peer: {}, conversation: {} }),
     },
   });
@@ -121,7 +121,7 @@ test("wechat runtime does not run overlapping polls", async () => {
     outboundQueue: { list: () => [] },
     driver: {
       getStatus: () => ({ state: "configured" }),
-      getUpdates: async () => {
+      fetchUpdates: async () => {
         inFlight += 1;
         maxConcurrent = Math.max(maxConcurrent, inFlight);
         await new Promise((resolve) => setTimeout(resolve, 30));
@@ -142,7 +142,7 @@ test("wechat runtime flags needsRelogin and stops polling on an auth error", asy
     outboundQueue: { list: () => [] },
     driver: {
       getStatus: () => ({ state: "configured" }),
-      getUpdates: async () => {
+      fetchUpdates: async () => {
         throw new Error("WeChat API ilink/bot/getupdates failed: 401 unauthorized");
       },
     },

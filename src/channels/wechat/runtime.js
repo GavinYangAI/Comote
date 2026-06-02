@@ -1,144 +1,66 @@
-export class WeChatRuntimeService {
-  constructor({ adapter, outboundQueue, driver = null, pollIntervalMs = 2500, persist = null, cursor = null }) {
+import { BaseChannelRuntime } from "../base/runtime.js";
+import { createWeChatRenderer } from "./renderer.js";
+
+// WeChat runtime. Inbound (poll loop), outbound queue delivery via the renderer,
+// status, dedup (DedupTracker), and cursor advance are all owned by
+// BaseChannelRuntime's poll path. This subclass keeps only what is genuinely
+// wechat-specific: the auth-failure policy (an expired bot token must stop the
+// loop and flag a rebind), login passthrough (startLogin/getLoginStatus), the
+// typing indicator, and the cursor/needsRelogin status fields.
+export class WeChatRuntimeService extends BaseChannelRuntime {
+  constructor({ adapter, outboundQueue, renderer, driver = null, pollIntervalMs = 2500, persist = null, cursor = null }) {
     if (!adapter) {
       throw new Error("adapter is required");
     }
     if (!outboundQueue) {
       throw new Error("outboundQueue is required");
     }
-    this.adapter = adapter;
-    this.outboundQueue = outboundQueue;
-    this.driver = driver;
-    this.pollIntervalMs = pollIntervalMs;
-    this.persist = persist;
+    super({
+      channelId: "wechat",
+      inboundMode: "poll",
+      adapter,
+      outboundQueue,
+      // The renderer is the wechat semantic-reply renderer (A9). Callers (and
+      // every test via createWeChatRenderer()) supply it; we default to a fresh
+      // one so the not-yet-migrated state.js construction keeps working. The
+      // runtime always has a working renderer either way.
+      // TODO(A12): require renderer once state.js passes it explicitly (drop this default).
+      renderer: renderer ?? createWeChatRenderer(),
+      driver,
+      persist,
+      pollIntervalMs,
+      dedupMax: 1000,
+    });
     // Restored from disk so a restart does not re-fetch already-seen messages.
     this.cursor = cursor;
-    this.timer = null;
-    this.lastError = null;
-    this.startedAt = null;
     this.needsRelogin = false;
-    // Concurrency guard + delivered-message dedup. The iLink getUpdates cursor
-    // does not advance past a message until it is consumed, so the same
-    // message is re-fetched on every poll — dedup by id makes routing idempotent.
-    this.polling = false;
-    // Track seen message ids: Set for O(1) membership checks + parallel array
-    // recording insertion order for bounded eviction when the cap is exceeded.
-    this.seenMessageIds = new Set();
-    this.seenMessageOrder = [];
   }
 
   configureDriver(driver) {
-    this.driver = driver;
+    super.configureDriver(driver);
     this.lastError = null;
     this.needsRelogin = false;
   }
 
   getStatus() {
+    const base = super.getStatus();
     return {
-      state: this.timer ? "running" : this.driver ? "configured" : "not_configured",
+      ...base,
       cursor: this.cursor,
       pollIntervalMs: this.pollIntervalMs,
-      lastError: this.lastError,
       needsRelogin: this.needsRelogin,
-      startedAt: this.startedAt,
-      driver: this.driver?.getStatus?.() ?? null,
     };
   }
 
-  start() {
-    if (!this.driver) {
-      throw new Error("WeChat driver is not configured");
+  // An expired bot token would otherwise fail silently forever — stop the poll
+  // loop and flag that the user must rebind WeChat. (Verbatim policy from the
+  // pre-base runtime.)
+  _handleFetchError(error) {
+    if (isWeChatAuthError(error)) {
+      this.needsRelogin = true;
+      this.lastError = "微信登录已失效，请在设置里重新绑定微信。";
+      this.stop();
     }
-    if (this.timer) {
-      return this.getStatus();
-    }
-    this.startedAt = new Date().toISOString();
-    this.timer = setInterval(() => {
-      this.pollOnce().catch((error) => {
-        this.lastError = error.message;
-      });
-    }, this.pollIntervalMs);
-    this.timer.unref?.();
-    return this.getStatus();
-  }
-
-  stop() {
-    if (this.timer) {
-      clearInterval(this.timer);
-      this.timer = null;
-    }
-    return this.getStatus();
-  }
-
-  async pollOnce() {
-    if (!this.driver) {
-      throw new Error("WeChat driver is not configured");
-    }
-    // Routing a message to Codex can take longer than the poll interval;
-    // without this guard overlapping polls re-process the same message.
-    if (this.polling) {
-      return { inbound: 0, outbound: 0, cursor: this.cursor, skipped: true };
-    }
-    this.polling = true;
-    try {
-      let updateResult;
-      try {
-        updateResult = await this.driver.getUpdates({ cursor: this.cursor });
-      } catch (error) {
-        // An expired bot token would otherwise fail silently forever — stop the
-        // poll loop and flag that the user must rebind WeChat.
-        if (isWeChatAuthError(error)) {
-          this.needsRelogin = true;
-          this.lastError = "微信登录已失效，请在设置里重新绑定微信。";
-          this.stop();
-        }
-        throw error;
-      }
-      this.cursor = updateResult.nextCursor ?? this.cursor;
-      let inbound = 0;
-      for (const update of updateResult.updates ?? []) {
-        const payload = this.driver.normalizeUpdate(update);
-        if (this.#alreadyHandled(payload)) {
-          continue;
-        }
-        await this.adapter.handleInbound(payload);
-        inbound += 1;
-      }
-
-      let outbound = 0;
-      for (const reply of this.outboundQueue.list({ channel: "wechat" })) {
-        try {
-          await this.driver.sendText(reply);
-          this.outboundQueue.markDelivered(reply.id);
-          outbound += 1;
-        } catch (error) {
-          this.outboundQueue.markFailed(reply.id, error);
-        }
-      }
-      await this.persist?.();
-      this.lastError = null;
-      return { inbound, outbound, cursor: this.cursor };
-    } finally {
-      this.polling = false;
-    }
-  }
-
-  // True when this message id was already routed — skips re-delivered copies.
-  #alreadyHandled(payload) {
-    const id = payload?.message?.id;
-    if (!id) {
-      return false;
-    }
-    if (this.seenMessageIds.has(id)) {
-      return true;
-    }
-    this.seenMessageIds.add(id);
-    this.seenMessageOrder.push(id);
-    // Evict the oldest id when the order tracking exceeds the cap.
-    if (this.seenMessageOrder.length > 1000) {
-      this.seenMessageIds.delete(this.seenMessageOrder.shift());
-    }
-    return false;
   }
 
   async startLogin() {
