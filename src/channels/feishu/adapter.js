@@ -79,7 +79,7 @@ export class FeishuChannelAdapter {
               channel: "feishu",
               conversationId: message.conversationId,
               inReplyTo: message.messageId,
-              text: "收到文件，但还没打开项目。先用 /open <编号或路径> 选一个项目，再把文件发我。",
+              text: t("feishu.attachment.noProject"),
             });
             return { kind: "ignored", reason: "no project for attachment" };
           }

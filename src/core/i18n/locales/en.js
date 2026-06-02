@@ -33,4 +33,5 @@ export default {
   "feishu.toast.noConversation": "Can't locate the conversation; reply with the number",
   "feishu.toast.processing": "Working…",
   "feishu.reply.actionFailed": "Action failed: {error}",
+  "feishu.attachment.noProject": "Got the file, but no project is open. Use /open <number or path> to pick one, then send it again.",
 };

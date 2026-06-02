@@ -6,6 +6,7 @@ import { CommandRouter } from "../src/core/commands.js";
 import { ProjectStore } from "../src/core/projects.js";
 import { SessionStore } from "../src/core/sessions.js";
 import { FeishuChannelAdapter } from "../src/channels/feishu/adapter.js";
+import { setLocale } from "../src/core/i18n/index.js";
 
 function createAdapter() {
   const sent = [];
@@ -345,6 +346,26 @@ test("handleInbound without an open project asks the user to /open", async () =>
 
   assert.ok(replies.some((r) => /\/open/.test(r.text)));
   assert.equal(routed, false);
+});
+
+test("no-project attachment reply localizes to en", async () => {
+  setLocale("en");
+  const replies = [];
+  const adapter = new FeishuChannelAdapter({
+    commandRouter: { handleMessageAsync: async () => ({ kind: "text", text: "ok" }) },
+    sendReply: async (r) => replies.push(r),
+    downloadAttachment: async () => {
+      throw new Error("NO_PROJECT");
+    },
+  });
+  await adapter.handleInbound({
+    event: {
+      sender: { sender_id: { open_id: "u1" }, name: "A" },
+      message: { message_id: "m1", chat_id: "c1", chat_type: "p2p", message_type: "file", content: JSON.stringify({ file_key: "k", file_name: "x.pdf" }) },
+    },
+  });
+  assert.ok(replies.some((r) => /no project is open/i.test(r.text)));
+  setLocale("zh");
 });
 
 test("handleInbound gracefully skips an attachment when download fails (non-NO_PROJECT)", async () => {

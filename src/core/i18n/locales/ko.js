@@ -33,4 +33,5 @@ export default {
   "feishu.toast.noConversation": "대화를 찾을 수 없습니다. 번호로 답장하세요",
   "feishu.toast.processing": "처리 중…",
   "feishu.reply.actionFailed": "작업 실패: {error}",
+  "feishu.attachment.noProject": "파일을 받았지만 열린 프로젝트가 없습니다. 먼저 /open <번호 또는 경로> 로 프로젝트를 선택한 뒤 파일을 다시 보내 주세요.",
 };

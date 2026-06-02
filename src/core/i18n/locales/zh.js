@@ -33,4 +33,5 @@ export default {
   "feishu.toast.noConversation": "无法定位会话，请直接回复编号",
   "feishu.toast.processing": "处理中…",
   "feishu.reply.actionFailed": "操作失败：{error}",
+  "feishu.attachment.noProject": "收到文件，但还没打开项目。先用 /open <编号或路径> 选一个项目，再把文件发我。",
 };

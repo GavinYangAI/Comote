@@ -33,4 +33,5 @@ export default {
   "feishu.toast.noConversation": "Conversation introuvable ; répondez avec le numéro",
   "feishu.toast.processing": "En cours…",
   "feishu.reply.actionFailed": "Échec de l'opération : {error}",
+  "feishu.attachment.noProject": "Fichier bien reçu, mais aucun projet n'est ouvert. Utilisez /open <numéro ou chemin> pour en choisir un, puis renvoyez le fichier.",
 };
