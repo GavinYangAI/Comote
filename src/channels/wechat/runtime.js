@@ -24,7 +24,7 @@ export class WeChatRuntimeService extends BaseChannelRuntime {
       // every test via createWeChatRenderer()) supply it; we default to a fresh
       // one so the not-yet-migrated state.js construction keeps working. The
       // runtime always has a working renderer either way.
-      // TODO(A12): require renderer once state.js passes it explicitly (drop this default).
+      // Intentional fallback: state.js injects a renderer explicitly; the default (createWeChatRenderer) covers constructions that omit one (e.g. tests).
       renderer: renderer ?? createWeChatRenderer(),
       driver,
       persist,

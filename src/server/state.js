@@ -436,7 +436,7 @@ export function createComoteState({
     }
 
     if (event.type === "agentMessage") {
-      // The full reply is kept in the transcript; the chat gets it chunked.
+      // The full reply is kept in the transcript; any chunking happens later in the wechat renderer.
       transcript.record(event.threadId, "assistant", event.text ?? "");
       eventLog.info("Codex 回复", {
         threadId: event.threadId,

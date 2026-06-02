@@ -32,7 +32,7 @@ export class FeishuRuntimeService extends BaseChannelRuntime {
       inboundMode: "push",
       adapter,
       outboundQueue,
-      // TODO(A12): require renderer once state.js passes it explicitly (drop this default).
+      // Intentional fallback: state.js injects a renderer explicitly; the default covers constructions that omit one (e.g. tests).
       renderer: renderer ?? createFeishuRenderer(),
       driver,
       persist,
