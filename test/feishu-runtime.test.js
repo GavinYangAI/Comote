@@ -447,22 +447,31 @@ test("configureDriver while running stops the old driver and starts the new one"
 //   - be logged via eventLog so the user can inspect it,
 //   - leave the synchronous toast intact (it was already returned).
 
-test("handleCardAction pick branch toasts immediately and logs the async error when sendReplyCard throws", async () => {
+test("handleCardAction pick branch toasts immediately and logs the async error when delivery throws", async () => {
   const errorCalls = [];
+  const outbound = new OutboundQueue();
+  // Real adapter (no sendReplyCard): the pick reply is enqueued via sendReply,
+  // then delivered by the renderer. A failure in delivery (driver.sendCard
+  // throws) must be logged and must not crash the runtime; the synchronous
+  // "处理中…" toast was already returned.
+  const adapter = new FeishuChannelAdapter({
+    commandRouter: {
+      conversationByIdentity: new Map([["feishu:ou_user", { conversationId: "oc_chat" }]]),
+      chooseProject: async () => ({ kind: "text", text: "ok" }),
+      useSessionAsync: async () => "ok",
+    },
+    sendReply: async (reply) => outbound.enqueue(reply),
+  });
   const runtime = makeRuntime({
-    adapter: {
-      handleInbound: async () => ({ kind: "text" }),
-      sendReplyCard: async () => {
+    adapter,
+    outboundQueue: outbound,
+    driver: {
+      getStatus: () => ({ state: "configured" }),
+      verifyEvent: () => true,
+      sendCard: async () => {
         throw new Error("card send failed");
       },
-      commandRouter: {
-        conversationByIdentity: new Map([["feishu:ou_user", { conversationId: "oc_chat" }]]),
-        chooseProject: async () => ({ kind: "text", text: "ok" }),
-        useSessionAsync: async () => "ok",
-      },
     },
-    outboundQueue: new OutboundQueue(),
-    driver: { getStatus: () => ({ state: "configured" }), verifyEvent: () => true },
     eventLog: {
       info: () => {},
       warn: () => {},
@@ -478,7 +487,7 @@ test("handleCardAction pick branch toasts immediately and logs the async error w
   assert.equal(result.toast.type, "info");
   assert.match(result.toast.content, /处理中/);
 
-  // Let the background dispatch run; sendReplyCard should throw and be logged.
+  // Let the background dispatch run; delivery throws and must be logged.
   await new Promise((resolve) => setImmediate(resolve));
   await new Promise((resolve) => setImmediate(resolve));
 
@@ -490,43 +499,109 @@ test("handleCardAction pick branch toasts immediately and logs the async error w
 
 test("handleCardAction dispatches a pick directly by pickKind", async () => {
   const chosen = [];
-  const sent = [];
-  const runtime = makeRuntime({
-    adapter: {
-      handleInbound: async () => ({ kind: "text" }),
-      sendReplyCard: async ({ conversationId, reply }) => sent.push({ conversationId, reply }),
-      commandRouter: {
-        conversationByIdentity: new Map([["feishu:ou_owner", { conversationId: "oc_chat" }]]),
-        chooseProject: async (identity, selector) => {
-          chosen.push(["project", identity.stableId, selector]);
-          return { kind: "text", text: "已进入项目" };
-        },
-        useSessionAsync: async (identity, selector) => {
-          chosen.push(["session", identity.stableId, selector]);
-          return "已进入对话";
-        },
+  const delivered = [];
+  const outbound = new OutboundQueue();
+  // Real adapter: dispatchPickAsync enqueues a semantic reply via sendReply and
+  // the renderer turns it into a card delivered through driver.sendCard.
+  const adapter = new FeishuChannelAdapter({
+    commandRouter: {
+      conversationByIdentity: new Map([["feishu:ou_owner", { conversationId: "oc_chat" }]]),
+      chooseProject: async (identity, selector) => {
+        chosen.push(["project", identity.stableId, selector]);
+        return { kind: "text", text: "已进入项目" };
+      },
+      useSessionAsync: async (identity, selector) => {
+        chosen.push(["session", identity.stableId, selector]);
+        return "已进入对话";
       },
     },
-    outboundQueue: new OutboundQueue(),
-    driver: { getStatus: () => ({ state: "configured" }), verifyEvent: () => true },
+    sendReply: async (reply) => outbound.enqueue(reply),
+  });
+  const runtime = makeRuntime({
+    adapter,
+    outboundQueue: outbound,
+    driver: {
+      getStatus: () => ({ state: "configured" }),
+      verifyEvent: () => true,
+      sendCard: async (message) => {
+        delivered.push(message);
+        return { messageId: "om_card" };
+      },
+    },
   });
 
   await runtime.handleCardAction({
     open_id: "ou_owner",
     action: { value: { kind: "pick", pickKind: "project", index: "2" } },
   });
+  await new Promise((resolve) => setImmediate(resolve));
+  await runtime.deliverQueued();
   assert.deepEqual(chosen[0], ["project", "ou_owner", "2"]);
-  assert.equal(sent.length, 1);
-  assert.equal(sent[0].conversationId, "oc_chat");
-  assert.equal(sent[0].reply.text, "已进入项目");
+  assert.equal(delivered.length, 1);
+  assert.equal(delivered[0].receiveId, "oc_chat");
+  assert.match(JSON.stringify(delivered[0].card), /已进入项目/);
 
   await runtime.handleCardAction({
     open_id: "ou_owner",
     action: { value: { kind: "pick", pickKind: "session", index: "1" } },
   });
+  await new Promise((resolve) => setImmediate(resolve));
+  await runtime.deliverQueued();
   assert.deepEqual(chosen[1], ["session", "ou_owner", "1"]);
   // a string reply from useSessionAsync is normalized into a reply object
-  assert.equal(sent[1].reply.text, "已进入对话");
+  assert.match(JSON.stringify(delivered[1].card), /已进入对话/);
+});
+
+// Regression (channel-abstraction Part A): the old FeishuChannelAdapter had a
+// sendReplyCard method that dispatchPickAsync called; it was REMOVED when the
+// adapter migrated to BaseChannelAdapter. The other pick tests above use STUB
+// adapters that re-add a fake sendReplyCard, so they miss the breakage. This
+// test wires a REAL FeishuChannelAdapter (no sendReplyCard) + real renderer +
+// real OutboundQueue and drives the pick path end-to-end: the reply must land
+// as a card carrying the reply text, with no TypeError thrown.
+test("handleCardAction pick delivers a card via the REAL adapter (no sendReplyCard)", async () => {
+  const outbound = new OutboundQueue();
+  const adapter = new FeishuChannelAdapter({
+    commandRouter: {
+      conversationByIdentity: new Map([["feishu:ou_owner", { conversationId: "oc_chat" }]]),
+      chooseProject: async () => ({ kind: "text", text: "已切换到项目 X" }),
+      useSessionAsync: async () => ({ kind: "text", text: "已切换到对话 Y" }),
+    },
+    sendReply: async (reply) => outbound.enqueue(reply),
+  });
+  const delivered = [];
+  const runtime = makeRuntime({
+    adapter,
+    outboundQueue: outbound,
+    driver: {
+      getStatus: () => ({ state: "configured" }),
+      verifyEvent: () => true,
+      async sendCard(message) {
+        delivered.push(message);
+        return { messageId: "om_card" };
+      },
+      async sendText(message) {
+        delivered.push(message);
+        return { ok: true };
+      },
+    },
+  });
+
+  // Exercise the real callback path (handleCardAction → dispatchPickAsync).
+  const result = await runtime.handleCardAction({
+    open_id: "ou_owner",
+    action: { value: { kind: "pick", pickKind: "project", index: "1" } },
+  });
+  assert.equal(result.toast.type, "info");
+
+  // Let the fire-and-forget background dispatch run, then flush the queue.
+  await new Promise((resolve) => setImmediate(resolve));
+  await new Promise((resolve) => setImmediate(resolve));
+  await runtime.deliverQueued();
+
+  const card = delivered.find((m) => m.receiveId === "oc_chat" && m.card);
+  assert.ok(card, "the pick reply must be delivered as a card");
+  assert.match(JSON.stringify(card.card), /已切换到项目 X/);
 });
 
 test("concurrent start() calls only invoke startEventStream once", async () => {

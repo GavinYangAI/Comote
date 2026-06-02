@@ -1,4 +1,5 @@
 import { BaseChannelRuntime } from "../base/runtime.js";
+import { routerReplyToSemantic } from "../base/messages.js";
 import { approvalResolvedCard } from "./cards.js";
 import { createFeishuRenderer } from "./renderer.js";
 import { classifyMedia, resolveWithinProject } from "../../core/paths.js";
@@ -350,13 +351,14 @@ export class FeishuRuntimeService extends BaseChannelRuntime {
           : await router.useSessionAsync(identity, selector);
     } catch (error) {
       this.eventLog?.error("飞书卡片点击：路由失败", { error: error.message });
-      await this.adapter
-        .sendReplyCard({
-          conversationId,
-          reply: { kind: "text", text: t("feishu.reply.actionFailed", { error: error.message }) },
-        })
-        .catch(() => {});
-      await this.deliverQueued().catch(() => {});
+      // Enqueue a semantic failure reply; the feishu renderer turns it into a
+      // text card at delivery (replaces the removed adapter card-send method).
+      const failReply = { kind: "text", text: t("feishu.reply.actionFailed", { error: error.message }) };
+      const semantic = routerReplyToSemantic(failReply, { channel: "feishu", conversationId });
+      if (semantic) {
+        await this.adapter.sendReply(semantic).catch(() => {});
+        await this.deliverQueued().catch(() => {});
+      }
       return;
     }
     const normalized = typeof reply === "string" ? { kind: "text", text: reply } : reply;
@@ -370,9 +372,16 @@ export class FeishuRuntimeService extends BaseChannelRuntime {
     // dedupeKey to bypass the outbound queue's content-based dedup.
     const dedupeKey = `feishu:pick:${identity.stableId}:${pickKind}:${selector}:${Date.now()}`;
     try {
-      await this.adapter.sendReplyCard({ conversationId, reply: normalized, dedupeKey });
-      await this.deliverQueued();
-      this.eventLog?.info("飞书卡片回复已派发");
+      // The renderer (A5) builds the card from the semantic reply at delivery,
+      // so enqueue a semantic picker/text reply rather than a prebuilt card.
+      // routerReplyToSemantic returns null for denied/ignored and for empty
+      // text — matching the old code's `!reply.text` bail.
+      const semantic = routerReplyToSemantic(normalized, { channel: "feishu", conversationId });
+      if (semantic) {
+        await this.adapter.sendReply({ ...semantic, dedupeKey });
+        await this.deliverQueued();
+        this.eventLog?.info("飞书卡片回复已派发");
+      }
     } catch (error) {
       this.eventLog?.error("飞书卡片回复派发失败", { error: error.message });
     }
