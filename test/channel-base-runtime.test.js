@@ -98,6 +98,23 @@ test("push start is a no-op without a driver", async () => {
   assert.equal(runtime.running, false);
 });
 
+test("push start that errors synchronously on connect is not left 'running'", async () => {
+  const queue = new OutboundQueue();
+  const runtime = new BaseChannelRuntime({
+    channelId: "test", inboundMode: "push",
+    adapter: { handleInbound: async () => {} }, outboundQueue: queue,
+    renderer: { render: async () => {} },
+    driver: {
+      getStatus: () => ({ state: "configured" }),
+      startEventStream: async ({ onError }) => { onError(new Error("auth failed")); return { ok: false }; },
+      stopEventStream: () => {},
+    },
+  });
+  await runtime.start();
+  assert.equal(runtime.running, false);
+  assert.match(runtime.lastError, /auth failed/);
+});
+
 test("poll mode pollOnce fetches, dedups, routes, delivers, advances cursor", async () => {
   const handled = [];
   const rendered = [];

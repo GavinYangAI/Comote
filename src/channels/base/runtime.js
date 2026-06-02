@@ -64,25 +64,33 @@ export class BaseChannelRuntime {
     if (!this.driver || this.running) {
       return this.getStatus();
     }
+    this.running = true;
+    this.startedAt = new Date().toISOString();
+    this.lastError = null;
     if (this.inboundMode === "push") {
-      await this.driver.startEventStream({
-        onEvent: async (payload) => {
-          await this.adapter.handleInbound(payload);
-          await this.deliverQueued().catch((error) => {
-            this.eventLog?.error?.(`${this.channelId} 投递失败`, { error: error.message });
-          });
-        },
-        onAction: this.onAction ?? (async () => ({})),
-        onError: (error) => {
-          this.lastError = error?.message ?? String(error);
-          this.running = false;
-        },
-      });
+      try {
+        await this.driver.startEventStream({
+          onEvent: async (payload) => {
+            try {
+              await this.adapter.handleInbound(payload);
+              await this.deliverQueued();
+            } catch (error) {
+              this.eventLog?.error?.(`${this.channelId} 入站处理失败`, { error: error.message });
+            }
+          },
+          onAction: this.onAction ?? (async () => ({})),
+          onError: (error) => {
+            this.lastError = error?.message ?? String(error);
+            this.running = false;
+          },
+        });
+      } catch (error) {
+        this.lastError = error?.message ?? String(error);
+        this.running = false;
+      }
     } else {
       this._startPollLoop();
     }
-    this.running = true;
-    this.startedAt = new Date().toISOString();
     return this.getStatus();
   }
 
@@ -135,7 +143,6 @@ export class BaseChannelRuntime {
         inbound += 1;
       }
       const { outbound } = await this.deliverQueued();
-      await this.persist?.();
       this.lastError = null;
       return { inbound, outbound, cursor: this.cursor };
     } finally {
