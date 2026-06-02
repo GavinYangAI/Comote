@@ -54,3 +54,46 @@ test("deliverQueued throws when no driver configured", async () => {
   const { runtime } = makeRuntime({ driver: null });
   await assert.rejects(() => runtime.deliverQueued(), /driver is not configured/);
 });
+
+test("push mode start wires the driver event stream; inbound routes + delivers", async () => {
+  let handlers = null;
+  const handled = [];
+  const rendered = [];
+  const queue = new OutboundQueue();
+  const runtime = new BaseChannelRuntime({
+    channelId: "test",
+    inboundMode: "push",
+    adapter: {
+      handleInbound: async (payload) => {
+        handled.push(payload);
+        queue.enqueue({ channel: "test", conversationId: "c1", kind: "text", text: "reply", dedupeKey: `t:${payload.id}` });
+      },
+    },
+    outboundQueue: queue,
+    renderer: { render: async (r) => rendered.push(r.text) },
+    driver: {
+      getStatus: () => ({ state: "configured" }),
+      startEventStream: async (h) => { handlers = h; return { ok: true }; },
+      stopEventStream: () => {},
+    },
+  });
+  await runtime.start();
+  assert.equal(runtime.getStatus().state, "running");
+  await handlers.onEvent({ id: "m1" });
+  await new Promise((r) => setTimeout(r, 0));
+  assert.equal(handled.length, 1);
+  assert.deepEqual(rendered, ["reply"]);
+  runtime.stop();
+  assert.equal(runtime.running, false);
+});
+
+test("push start is a no-op without a driver", async () => {
+  const queue = new OutboundQueue();
+  const runtime = new BaseChannelRuntime({
+    channelId: "test", inboundMode: "push",
+    adapter: { handleInbound: async () => ({}) },
+    outboundQueue: queue, renderer: { render: async () => {} }, driver: null,
+  });
+  await runtime.start();
+  assert.equal(runtime.running, false);
+});

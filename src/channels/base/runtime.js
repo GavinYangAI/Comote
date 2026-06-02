@@ -60,6 +60,52 @@ export class BaseChannelRuntime {
     }
   }
 
+  async start() {
+    if (!this.driver || this.running) {
+      return this.getStatus();
+    }
+    if (this.inboundMode === "push") {
+      await this.driver.startEventStream({
+        onEvent: async (payload) => {
+          await this.adapter.handleInbound(payload);
+          await this.deliverQueued().catch((error) => {
+            this.eventLog?.error?.(`${this.channelId} 投递失败`, { error: error.message });
+          });
+        },
+        onAction: this.onAction ?? (async () => ({})),
+        onError: (error) => {
+          this.lastError = error?.message ?? String(error);
+          this.running = false;
+        },
+      });
+    } else {
+      this._startPollLoop();
+    }
+    this.running = true;
+    this.startedAt = new Date().toISOString();
+    return this.getStatus();
+  }
+
+  stop() {
+    if (this.inboundMode === "push") {
+      this.driver?.stopEventStream?.();
+    } else if (this._timer) {
+      clearInterval(this._timer);
+      this._timer = null;
+    }
+    this.running = false;
+    return this.getStatus();
+  }
+
+  _startPollLoop() {
+    this._timer = setInterval(() => {
+      this.pollOnce().catch((error) => {
+        this.lastError = error?.message ?? String(error);
+      });
+    }, this.pollIntervalMs);
+    this._timer.unref?.();
+  }
+
   async deliverQueued() {
     if (!this.driver) {
       throw new Error(`${this.channelId} driver is not configured`);
