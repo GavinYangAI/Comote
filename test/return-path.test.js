@@ -3,6 +3,7 @@ import test from "node:test";
 
 import { createComoteState } from "../src/server/state.js";
 import { CodexDesktopConnector } from "../src/connectors/codex-desktop/index.js";
+import { setLocale } from "../src/core/i18n/index.js";
 
 class MemoryTransport {
   constructor() {
@@ -285,4 +286,57 @@ test("a Codex approval for a Feishu thread is delivered as a card", async () => 
   assert.equal(calls.sent.length, 1);
   const action = calls.sent[0].card.elements.find((el) => el.tag === "action");
   assert.deepEqual(action.actions.map((b) => b.value.decision), ["accept", "decline"]);
+});
+
+test("completed card fallback tail localizes to en", async () => {
+  try {
+    // buildState() constructs the server, which resets i18n to the persisted
+    // (default) locale — so switch to en AFTER it is built.
+    const { transport, desktop, state } = buildState();
+    setLocale("en");
+    await desktop.client.connect();
+
+    state.commandRouter.conversationByIdentity.set("feishu:ou_owner", {
+      channel: "feishu",
+      conversationId: "oc_chat",
+    });
+    state.commandRouter.bindThreadForIdentity(
+      { channel: "feishu", stableId: "ou_owner" },
+      "thread_f",
+    );
+
+    const calls = { sent: [], updated: [] };
+    state.runtime.feishu.__setTestDriver({
+      getStatus: () => ({ state: "configured" }),
+      verifyEvent: () => true,
+      async sendCard(message) {
+        calls.sent.push(message);
+        return { messageId: "om_live" };
+      },
+      async updateCard(message) {
+        calls.updated.push(message);
+        return { code: 0 };
+      },
+    });
+
+    // Open the active card, then complete the turn WITHOUT any stream text so
+    // the completed card falls back to the localized "task finished" tail.
+    transport.receive({ jsonrpc: "2.0", method: "turn/started", params: { threadId: "thread_f" } });
+    await tick();
+    transport.receive({
+      jsonrpc: "2.0",
+      method: "turn/completed",
+      params: { threadId: "thread_f" },
+    });
+    await tick();
+
+    const finalCard = calls.updated.at(-1)?.card;
+    assert.ok(finalCard, "the completion card was sent");
+    assert.ok(
+      JSON.stringify(finalCard).includes("This task is finished."),
+      "completed-card fallback tail uses the localized string",
+    );
+  } finally {
+    setLocale("zh");
+  }
 });
