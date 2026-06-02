@@ -1,16 +1,16 @@
+import { BaseChannelAdapter } from "../base/adapter.js";
+
 export const WECHAT_CHANNEL_ID = "comote-wechat";
 export const WECHAT_RUNTIME = "comote-native";
 export const WECHAT_DRIVER = "tencent-ilink-json-api";
 
-export class WeChatChannelAdapter {
+// WeChat inbound adapter. The shared BaseChannelAdapter owns the pipeline
+// (group gate, identity detection, route, enqueue semantic reply); this
+// subclass only normalizes a raw ilink payload and reports status. WeChat has
+// no attachment download and no display-name resolution.
+export class WeChatChannelAdapter extends BaseChannelAdapter {
   constructor({ commandRouter, sendReply, onDetectedIdentity = null, allowGroups = false }) {
-    if (!commandRouter) {
-      throw new Error("commandRouter is required");
-    }
-    this.commandRouter = commandRouter;
-    this.sendReply = sendReply ?? noopSendReply;
-    this.onDetectedIdentity = onDetectedIdentity;
-    this.allowGroups = allowGroups;
+    super({ channelId: "wechat", commandRouter, sendReply, onDetectedIdentity, allowGroups });
     this.startedAt = new Date().toISOString();
   }
 
@@ -59,44 +59,6 @@ export class WeChatChannelAdapter {
       attachments: normalizeAttachments(message.attachments ?? payload.attachments ?? []),
     };
   }
-
-  async handleInbound(payload) {
-    const message = this.normalizeInbound(payload);
-    if (message.conversationType !== "direct" && !this.allowGroups) {
-      return {
-        kind: "ignored",
-        reason: "group messages are disabled",
-      };
-    }
-
-    this.onDetectedIdentity?.(message.identity);
-
-    const reply = await this.commandRouter.handleMessageAsync({
-      identity: message.identity,
-      text: message.text,
-      attachments: message.attachments,
-      conversation: {
-        channel: "wechat",
-        conversationId: message.conversationId,
-        accountId: message.accountId,
-      },
-    });
-
-    if (reply.kind === "denied") {
-      return reply;
-    }
-
-    if (reply.text) {
-      await this.sendReply({
-        channel: "wechat",
-        conversationId: message.conversationId,
-        accountId: message.accountId,
-        inReplyTo: message.messageId,
-        text: reply.text,
-      });
-    }
-    return reply;
-  }
 }
 
 function normalizeAttachments(attachments) {
@@ -107,8 +69,4 @@ function normalizeAttachments(attachments) {
     name: attachment.name ?? attachment.filename ?? null,
     mimeType: attachment.mimeType ?? attachment.mimetype ?? null,
   }));
-}
-
-async function noopSendReply() {
-  return { ok: true };
 }
