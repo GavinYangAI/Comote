@@ -147,3 +147,13 @@ test("renderMarkdown does not sever a fenced code block across elements", () => 
     assert.ok(element.content.length <= 3000, "each element stays within the size limit");
   }
 });
+
+import { setLocale } from "../src/core/i18n/index.js";
+test("status card title and cancel button localize to en", () => {
+  setLocale("en");
+  const card = statusCard({ phase: "progress", threadId: "t1" });
+  assert.equal(card.header.title.content, "⏳ Codex working");
+  const action = card.elements.find((e) => e.tag === "action");
+  assert.equal(action.actions[0].text.content, "Cancel task");
+  setLocale("zh");
+});
