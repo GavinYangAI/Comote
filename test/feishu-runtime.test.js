@@ -11,10 +11,22 @@ import { ProjectStore } from "../src/core/projects.js";
 import { SessionStore } from "../src/core/sessions.js";
 import { FeishuChannelAdapter } from "../src/channels/feishu/adapter.js";
 import { FeishuRuntimeService } from "../src/channels/feishu/runtime.js";
+import { createFeishuRenderer } from "../src/channels/feishu/renderer.js";
 import { setLocale } from "../src/core/i18n/index.js";
 
+// Build a FeishuRuntimeService with a renderer wired by default (A8: the
+// runtime now extends BaseChannelRuntime and renders via the feishu renderer).
+// Tests pass their own adapter/driver/etc. via overrides; renderer can still be
+// overridden when a test wants a custom one.
+function makeRuntime(overrides = {}) {
+  return new FeishuRuntimeService({
+    renderer: createFeishuRenderer(),
+    ...overrides,
+  });
+}
+
 test("feishu runtime verifies URL challenge events", async () => {
-  const runtime = new FeishuRuntimeService({
+  const runtime = makeRuntime({
     adapter: { handleInbound: async () => ({ kind: "text", text: "unused" }) },
     outboundQueue: new OutboundQueue(),
     driver: {
@@ -46,7 +58,7 @@ test("feishu runtime routes inbound events and delivers queued replies", async (
     sendReply: async (reply) => outbound.enqueue(reply),
   });
   const delivered = [];
-  const runtime = new FeishuRuntimeService({
+  const runtime = makeRuntime({
     adapter,
     outboundQueue: outbound,
     driver: {
@@ -84,7 +96,7 @@ test("feishu runtime routes inbound events and delivers queued replies", async (
 
 test("feishu runtime ignores a redelivered duplicate event", async () => {
   let routed = 0;
-  const runtime = new FeishuRuntimeService({
+  const runtime = makeRuntime({
     adapter: {
       handleInbound: async () => {
         routed += 1;
@@ -121,7 +133,7 @@ test("feishu runtime ignores a redelivered duplicate event", async () => {
 
 test("feishu runtime dedups by message_id when no event header is present", async () => {
   let routed = 0;
-  const runtime = new FeishuRuntimeService({
+  const runtime = makeRuntime({
     adapter: {
       handleInbound: async () => {
         routed += 1;
@@ -155,7 +167,7 @@ test("feishu runtime dedups by message_id when no event header is present", asyn
 
 test("feishu runtime starts and stops a websocket event stream", async () => {
   const calls = [];
-  const runtime = new FeishuRuntimeService({
+  const runtime = makeRuntime({
     adapter: { handleInbound: async () => ({ kind: "text", text: "ok" }) },
     outboundQueue: new OutboundQueue(),
     driver: {
@@ -178,16 +190,40 @@ test("feishu runtime starts and stops a websocket event stream", async () => {
   assert.deepEqual(calls, [["startEventStream", "function"], ["stopEventStream"]]);
 });
 
-test("feishu runtime delivers a queued card via sendCard", async () => {
+test("feishu runtime wires a callable onAction into the driver event stream", async () => {
+  let captured = null;
+  const runtime = makeRuntime({
+    adapter: { handleInbound: async () => ({ kind: "text", text: "ok" }) },
+    outboundQueue: new OutboundQueue(),
+    driver: {
+      getStatus: () => ({ state: "configured" }),
+      startEventStream: async (opts) => {
+        captured = opts;
+        return { ok: true };
+      },
+      stopEventStream: () => {},
+    },
+  });
+
+  await runtime.start();
+
+  // The driver hook was renamed onCardAction -> onAction (A6); the runtime must
+  // now pass a callable onAction so card-button callbacks reach handleCardAction.
+  assert.equal(typeof captured.onAction, "function");
+});
+
+test("feishu runtime delivers a queued text reply as a card via sendCard", async () => {
   const outbound = new OutboundQueue();
+  // A semantic text reply: feishu always renders text as a textCard -> sendCard.
   outbound.enqueue({
     channel: "feishu",
     conversationId: "oc_chat",
-    card: { config: {}, elements: [] },
-    dedupeKey: "card:1",
+    kind: "text",
+    text: "hello-card",
+    dedupeKey: "t:card1",
   });
   const cardCalls = [];
-  const runtime = new FeishuRuntimeService({
+  const runtime = makeRuntime({
     adapter: { handleInbound: async () => ({ kind: "text" }) },
     outboundQueue: outbound,
     driver: {
@@ -205,14 +241,14 @@ test("feishu runtime delivers a queued card via sendCard", async () => {
 
   const result = await runtime.deliverQueued();
   assert.equal(result.outbound, 1);
-  assert.equal(cardCalls.length, 1);
+  assert.equal(cardCalls.length, 1); // text rendered as a textCard -> sendCard
   assert.equal(cardCalls[0].receiveId, "oc_chat");
   assert.deepEqual(outbound.list({ channel: "feishu" }), []);
 });
 
 test("deliverQueued does not double-send a queued reply under concurrent re-entry", async () => {
   const outbound = new OutboundQueue();
-  outbound.enqueue({ channel: "feishu", conversationId: "c1", text: "hello", dedupeKey: "t:1" });
+  outbound.enqueue({ channel: "feishu", conversationId: "c1", kind: "text", text: "hello", dedupeKey: "t:1" });
 
   const sent = [];
   let reentered = false;
@@ -220,11 +256,12 @@ test("deliverQueued does not double-send a queued reply under concurrent re-entr
   const driver = {
     getStatus: () => ({ state: "configured" }),
     verifyEvent: () => true,
-    async sendCard() {
-      throw new Error("unexpected card send");
+    async sendText() {
+      throw new Error("unexpected text send");
     },
-    async sendText(message) {
-      sent.push(message.text);
+    // feishu renders text as a card, so the drained reply lands on sendCard.
+    async sendCard(message) {
+      sent.push(message.card);
       if (!reentered) {
         reentered = true;
         // Mid-flight, trigger a concurrent drain (as pushfile's fire-and-forget
@@ -234,9 +271,10 @@ test("deliverQueued does not double-send a queued reply under concurrent re-entr
         // resend it before this first send is marked delivered.
         await runtime.deliverQueued().catch(() => {});
       }
+      return { messageId: "om_1" };
     },
   };
-  runtime = new FeishuRuntimeService({
+  runtime = makeRuntime({
     adapter: { handleInbound: async () => ({ kind: "text" }) },
     outboundQueue: outbound,
     driver,
@@ -244,7 +282,7 @@ test("deliverQueued does not double-send a queued reply under concurrent re-entr
 
   await runtime.deliverQueued();
 
-  assert.deepEqual(sent, ["hello"]);
+  assert.equal(sent.length, 1);
   assert.deepEqual(outbound.list({ channel: "feishu" }), []);
 });
 
@@ -267,7 +305,7 @@ function cardDriver() {
 
 test("runtime opens, updates, and finishes a thread card", async () => {
   const driver = cardDriver();
-  const runtime = new FeishuRuntimeService({
+  const runtime = makeRuntime({
     adapter: { handleInbound: async () => ({ kind: "text" }) },
     outboundQueue: new OutboundQueue(),
     driver,
@@ -294,7 +332,7 @@ test("runtime opens, updates, and finishes a thread card", async () => {
 });
 
 test("updateThreadCard and finishThreadCard no-op when no card session exists", async () => {
-  const runtime = new FeishuRuntimeService({
+  const runtime = makeRuntime({
     adapter: { handleInbound: async () => ({ kind: "text" }) },
     outboundQueue: new OutboundQueue(),
     driver: cardDriver(),
@@ -306,7 +344,7 @@ test("updateThreadCard and finishThreadCard no-op when no card session exists", 
 test("handleCardAction resolves an approval and refreshes the card", async () => {
   const resolved = [];
   const updated = [];
-  const runtime = new FeishuRuntimeService({
+  const runtime = makeRuntime({
     adapter: {
       handleInbound: async () => ({ kind: "text" }),
       commandRouter: {
@@ -336,7 +374,7 @@ test("handleCardAction resolves an approval and refreshes the card", async () =>
 
 test("handleCardAction cancels a thread", async () => {
   const cancelled = [];
-  const runtime = new FeishuRuntimeService({
+  const runtime = makeRuntime({
     adapter: {
       handleInbound: async () => ({ kind: "text" }),
       commandRouter: { cancelThread: async (threadId) => cancelled.push(threadId) },
@@ -379,7 +417,7 @@ test("configureDriver while running stops the old driver and starts the new one"
     },
   };
 
-  const runtime = new FeishuRuntimeService({
+  const runtime = makeRuntime({
     adapter: { handleInbound: async () => ({ kind: "text" }) },
     outboundQueue: new OutboundQueue(),
     driver: oldDriver,
@@ -411,7 +449,7 @@ test("configureDriver while running stops the old driver and starts the new one"
 
 test("handleCardAction pick branch toasts immediately and logs the async error when sendReplyCard throws", async () => {
   const errorCalls = [];
-  const runtime = new FeishuRuntimeService({
+  const runtime = makeRuntime({
     adapter: {
       handleInbound: async () => ({ kind: "text" }),
       sendReplyCard: async () => {
@@ -453,7 +491,7 @@ test("handleCardAction pick branch toasts immediately and logs the async error w
 test("handleCardAction dispatches a pick directly by pickKind", async () => {
   const chosen = [];
   const sent = [];
-  const runtime = new FeishuRuntimeService({
+  const runtime = makeRuntime({
     adapter: {
       handleInbound: async () => ({ kind: "text" }),
       sendReplyCard: async ({ conversationId, reply }) => sent.push({ conversationId, reply }),
@@ -493,7 +531,7 @@ test("handleCardAction dispatches a pick directly by pickKind", async () => {
 
 test("concurrent start() calls only invoke startEventStream once", async () => {
   let startCount = 0;
-  const runtime = new FeishuRuntimeService({
+  const runtime = makeRuntime({
     adapter: { handleInbound: async () => ({ kind: "text", text: "ok" }) },
     outboundQueue: new OutboundQueue(),
     driver: {
@@ -514,7 +552,7 @@ test("concurrent start() calls only invoke startEventStream once", async () => {
 });
 
 test("start() must not leave running true if the WebSocket setup throws", async () => {
-  const runtime = new FeishuRuntimeService({
+  const runtime = makeRuntime({
     adapter: { handleInbound: async () => ({ kind: "text", text: "unused" }) },
     outboundQueue: new OutboundQueue(),
     driver: {
@@ -559,10 +597,10 @@ test("deliverQueued uploads then sends media; oversize falls back to text", asyn
     sendCard: async () => {},
   };
   const outboundQueue = new OutboundQueue();
-  outboundQueue.enqueue({ channel: "feishu", conversationId: "c1", kind: "image", path: small });
-  outboundQueue.enqueue({ channel: "feishu", conversationId: "c1", kind: "file", path: big, fileName: "big.bin" });
+  outboundQueue.enqueue({ channel: "feishu", conversationId: "c1", kind: "media", mediaKind: "image", path: small });
+  outboundQueue.enqueue({ channel: "feishu", conversationId: "c1", kind: "media", mediaKind: "file", path: big, fileName: "big.bin" });
 
-  const runtime = new FeishuRuntimeService({ adapter: stubAdapter(), outboundQueue, driver });
+  const runtime = makeRuntime({ adapter: stubAdapter(), outboundQueue, driver });
   await runtime.deliverQueued();
 
   assert.deepEqual(calls[0], ["uploadImage", small]);
@@ -588,14 +626,14 @@ test("handleCardAction pushfile enqueues media within project, rejects escape", 
     sendText: async () => {},
     sendCard: async () => {},
   };
-  const runtime = new FeishuRuntimeService({ adapter, outboundQueue, driver });
+  const runtime = makeRuntime({ adapter, outboundQueue, driver });
 
   const ok = await runtime.handleCardAction({
     event: { action: { value: { kind: "pushfile", threadId: "t1", path: join(dir, "a.png") } }, open_id: "u1" },
   });
   assert.equal(ok.toast.type, "info");
   await new Promise((r) => setTimeout(r, 10));
-  assert.equal(outboundQueue.snapshot().some((e) => e.kind === "image"), true);
+  assert.equal(outboundQueue.snapshot().some((e) => e.kind === "media"), true);
 
   const bad = await runtime.handleCardAction({
     event: { action: { value: { kind: "pushfile", threadId: "t1", path: "/etc/passwd" } }, open_id: "u1" },
@@ -626,9 +664,9 @@ test("oversize media falls back to a localized (en) text", async () => {
       sendCard: async () => {},
     };
     const outboundQueue = new OutboundQueue();
-    outboundQueue.enqueue({ channel: "feishu", conversationId: "c1", kind: "file", path: big, fileName: "big.bin" });
+    outboundQueue.enqueue({ channel: "feishu", conversationId: "c1", kind: "media", mediaKind: "file", path: big, fileName: "big.bin" });
 
-    const runtime = new FeishuRuntimeService({ adapter: stubAdapter(), outboundQueue, driver });
+    const runtime = makeRuntime({ adapter: stubAdapter(), outboundQueue, driver });
     await runtime.deliverQueued();
 
     assert.equal(sentTexts.length, 1);
@@ -649,7 +687,7 @@ test("handleCardAction pushfile with no binding returns error and enqueues nothi
     sendText: async () => {},
     sendCard: async () => {},
   };
-  const runtime = new FeishuRuntimeService({ adapter, outboundQueue, driver });
+  const runtime = makeRuntime({ adapter, outboundQueue, driver });
 
   const res = await runtime.handleCardAction({
     event: { action: { value: { kind: "pushfile", threadId: "nope", path: "/etc/passwd" } }, open_id: "u1" },
