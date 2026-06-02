@@ -23,6 +23,7 @@ import { EventLog } from "../core/event-log.js";
 import { SleepGuard } from "../core/sleep-guard.js";
 import { Transcript } from "../core/transcript.js";
 import { VersionChecker } from "../core/version-check.js";
+import { setLocale as setI18nLocale, DEFAULT_LOCALE } from "../core/i18n/index.js";
 
 export function createComoteState({
   persisted = {},
@@ -33,6 +34,9 @@ export function createComoteState({
   currentVersion = null,
   versionChecker = null,
 } = {}) {
+  const settings = { locale: persisted?.settings?.locale ?? DEFAULT_LOCALE };
+  setI18nLocale(settings.locale);
+
   const authorization = new AuthorizationStore({ identities: persisted.identities ?? [] });
   for (const identity of persisted.detectedIdentities ?? []) {
     authorization.detectIdentity(identity);
@@ -242,11 +246,20 @@ export function createComoteState({
     outboundReplies,
     eventLog,
     transcript,
+    getSettings() {
+      return { ...settings };
+    },
+    setLocale(locale) {
+      const applied = setI18nLocale(locale);
+      settings.locale = applied;
+      return applied;
+    },
     async persist() {
       if (!stateStore) {
         return;
       }
       await stateStore.save({
+        settings,
         identities: authorization.listIdentities(),
         detectedIdentities: authorization.listDetectedIdentities(),
         sessions: sessions.snapshot(),
