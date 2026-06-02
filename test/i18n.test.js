@@ -39,3 +39,18 @@ test("all locales expose exactly the same key set as zh", () => {
     assert.deepEqual(Object.keys(dicts[loc]).sort(), base, `locale ${loc} key set differs from zh`);
   }
 });
+
+test("every translation keeps the same {placeholder} vars as zh", () => {
+  const dicts = { zh, en, ja, ko, fr, es };
+  const placeholders = (s) => [...new Set((String(s).match(/\{(\w+)\}/g) ?? []))].sort();
+  for (const key of Object.keys(zh)) {
+    const want = placeholders(zh[key]);
+    for (const loc of SUPPORTED_LOCALES) {
+      assert.deepEqual(
+        placeholders(dicts[loc][key]),
+        want,
+        `locale ${loc} key ${key} has different {vars} than zh`,
+      );
+    }
+  }
+});
