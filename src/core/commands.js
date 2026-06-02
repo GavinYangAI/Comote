@@ -683,7 +683,8 @@ export class CommandRouter {
       channel: conversation.channel,
       conversationId: conversation.conversationId,
       ...(conversation.accountId ? { accountId: conversation.accountId } : {}),
-      kind: classifyMedia(safePath),
+      kind: "media",
+      mediaKind: classifyMedia(safePath),
       path: safePath,
       fileName: basename(safePath),
     });

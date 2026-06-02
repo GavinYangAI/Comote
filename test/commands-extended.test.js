@@ -137,7 +137,7 @@ test("/file enqueues a media reply for an in-project file and rejects escape", a
   const ok = await router.handleMessageAsync({ identity, text: "/file report.pdf", conversation });
   assert.match(ok.text ?? "", /report\.pdf/);
   assert.equal(
-    outboundQueue.snapshot().some((entry) => entry.kind === "file" && /report\.pdf$/.test(entry.path)),
+    outboundQueue.snapshot().some((entry) => entry.kind === "media" && entry.mediaKind === "file" && /report\.pdf$/.test(entry.path)),
     true,
   );
 

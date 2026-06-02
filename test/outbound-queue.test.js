@@ -100,9 +100,9 @@ test("outbound queue prunes terminal entries above the cap while keeping active 
 
 test("media replies dedupe on path, not just channel+conversation", () => {
   const queue = new OutboundQueue();
-  const a = queue.enqueue({ channel: "feishu", conversationId: "c1", kind: "file", path: "/p/a.txt" });
-  const b = queue.enqueue({ channel: "feishu", conversationId: "c1", kind: "file", path: "/p/b.txt" });
+  const a = queue.enqueue({ channel: "feishu", conversationId: "c1", kind: "media", mediaKind: "file", path: "/p/a.txt" });
+  const b = queue.enqueue({ channel: "feishu", conversationId: "c1", kind: "media", mediaKind: "file", path: "/p/b.txt" });
   assert.notEqual(a.id, b.id);
-  const dup = queue.enqueue({ channel: "feishu", conversationId: "c1", kind: "file", path: "/p/a.txt" });
+  const dup = queue.enqueue({ channel: "feishu", conversationId: "c1", kind: "media", mediaKind: "file", path: "/p/a.txt" });
   assert.equal(dup.id, a.id);
 });
