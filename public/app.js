@@ -1,4 +1,12 @@
 import { qrDataUrl } from "./qr-code.js";
+import {
+  tWeb,
+  applyTranslations,
+  setWebLocale,
+  getWebLocale,
+  WEB_LOCALES,
+  WEB_LOCALE_NAMES,
+} from "./i18n.js";
 
 const REFRESH_MS = 5000;
 
@@ -33,17 +41,28 @@ let activeFeishuLogin = null;
 let feishuLoginPollTimer = null;
 let refreshTimer = null;
 let rendering = false;
+let renderQueued = false;
 let logsOffset = 0;
 let conversationThreads = [];
 let conversationShown = 0;
 
 async function render() {
+  // Coalesce instead of dropping: a call arriving mid-render queues one more
+  // pass so a language switch (onLangChange awaits render()) reliably repaints
+  // dynamic tWeb() text at the now-current locale even if it coincides with an
+  // in-flight auto-refresh render.
   if (rendering) {
+    renderQueued = true;
     return;
   }
   rendering = true;
   try {
-    await renderOnce();
+    do {
+      // Clear before awaiting; any call during this pass re-sets the flag and
+      // earns exactly one more iteration — bounded, no spin, no deadlock.
+      renderQueued = false;
+      await renderOnce();
+    } while (renderQueued);
   } finally {
     rendering = false;
   }
@@ -85,19 +104,19 @@ async function renderOnce() {
   // genuinely blocks everything — surface it explicitly instead of silently.
   if (!status.ok) {
     showLoadError(status.error);
-    setBridgeStatus(status.error?.status === 401 ? "需要授权" : "离线");
+    setBridgeStatus(status.error?.status === 401 ? tWeb("web.status.authRequired") : tWeb("web.status.offline"));
     return;
   }
   hideLoadError();
-  setBridgeStatus(status.value.bridge === "running" ? "就绪" : "启动中");
+  setBridgeStatus(status.value.bridge === "running" ? tWeb("web.status.ready") : tWeb("web.status.starting"));
 
   renderCodexNotice(status.value.connectors.desktop.state);
   // Hide the retry button when there is nothing to retry.
   document.querySelector("#connectDesktop").hidden = status.value.connectors.desktop.state === "connected";
   document.querySelector("#connections").innerHTML = [
     ["Codex Desktop", humanConnectorState(status.value.connectors.desktop.state)],
-    ["手机命令", status.value.connectors.desktop.state === "connected" ? "可用" : "等待 Codex Desktop"],
-    ["Codex CLI 备用", status.value.connectors.cli.state === "available" ? "可用" : "不可用"],
+    [tWeb("web.connectors.phoneCommands"), status.value.connectors.desktop.state === "connected" ? tWeb("web.connectors.available") : tWeb("web.connectors.waitingDesktop")],
+    [tWeb("web.connectors.cliFallback"), status.value.connectors.cli.state === "available" ? tWeb("web.connectors.available") : tWeb("web.connectors.unavailable")],
   ]
     .map(([label, value]) => `<dt>${label}</dt><dd>${value}</dd>`)
     .join("");
@@ -127,23 +146,19 @@ function renderReadiness(status, wechatConfigResult, feishuConfigResult, identit
   const items = [
     {
       done: desktopState === "connected" || desktopState === "available",
-      label: "连接 Codex Desktop",
-      hint: "打开 Codex Desktop 后会自动连接。",
+      label: tWeb("web.readiness.step1.label"),
     },
     {
       done: Boolean(wechatConfig.loggedIn || feishuConfig.configured),
-      label: "绑定一个手机通道",
-      hint: "在下方「连接手机」绑定微信或飞书。",
+      label: tWeb("web.readiness.step2.label"),
     },
     {
       done: identities.length > 0,
-      label: "确认一个授权用户",
-      hint: "手机首次发消息后，在「授权用户」里确认。",
+      label: tWeb("web.readiness.step3.label"),
     },
     {
       done: wechatRuntime.state === "running" || feishuRuntime.state === "running",
-      label: "通道开始监听",
-      hint: "绑定完成后通道会自动监听。",
+      label: tWeb("web.readiness.step4.label"),
     },
   ];
   // Hide the whole section once setup is complete — no clutter for return users.
@@ -167,10 +182,10 @@ function renderReadiness(status, wechatConfigResult, feishuConfigResult, identit
         `<li class="ready-item ${item.done ? "done" : "todo"}">
           <div class="ready-top">
             <div class="ready-mark" aria-hidden="true">${stepIcons[index]}</div>
-            <span class="ready-state ${item.done ? "done" : "todo"}">${item.done ? "已完成" : "待办"}</span>
+            <span class="ready-state ${item.done ? "done" : "todo"}">${item.done ? tWeb("web.readiness.state.done") : tWeb("web.readiness.state.todo")}</span>
           </div>
           <div>
-            <div class="ready-step-no">第 ${index + 1} 步</div>
+            <div class="ready-step-no">${tWeb("web.readiness.stepNo", { step: index + 1 })}</div>
             <strong>${escapeHtml(item.label)}</strong>
           </div>
         </li>`,
@@ -181,17 +196,17 @@ function renderReadiness(status, wechatConfigResult, feishuConfigResult, identit
 function renderIdentities(result) {
   const target = document.querySelector("#identities");
   if (!result.ok) {
-    target.innerHTML = sectionError("无法加载已授权用户");
+    target.innerHTML = sectionError(tWeb("web.connectors.error.identities"));
     return;
   }
   const identities = result.value;
   target.innerHTML =
     identities.length === 0
-      ? `<li><strong>暂无已授权用户</strong><div class="meta">绑定微信或飞书后，在这里确认可控制 Comote 的账号。</div></li>`
+      ? `<li><strong>${tWeb("web.identities.empty.title")}</strong><div class="meta">${tWeb("web.identities.empty.hint")}</div></li>`
       : identities
           .map(
             (identity) =>
-              `<li class="list-row"><span><strong>${escapeHtml(identity.displayName)}</strong><div class="meta">${channelName(identity.channel)} · ${escapeHtml(identity.stableId)} · ${roleName(identity.role)}</div></span><button class="secondary-button" data-remove-identity="${escapeAttr(identity.channel)}|${escapeAttr(identity.stableId)}">移除</button></li>`,
+              `<li class="list-row"><span><strong>${escapeHtml(identity.displayName)}</strong><div class="meta">${channelName(identity.channel)} · ${escapeHtml(identity.stableId)} · ${roleName(identity.role)}</div></span><button class="secondary-button" data-remove-identity="${escapeAttr(identity.channel)}|${escapeAttr(identity.stableId)}">${tWeb("web.identities.remove")}</button></li>`,
           )
           .join("");
 }
@@ -199,17 +214,17 @@ function renderIdentities(result) {
 function renderCandidates(result) {
   const target = document.querySelector("#identityCandidates");
   if (!result.ok) {
-    target.innerHTML = sectionError("无法加载待确认用户");
+    target.innerHTML = sectionError(tWeb("web.connectors.error.candidates"));
     return;
   }
   const candidates = result.value;
   target.innerHTML =
     candidates.length === 0
-      ? `<li><strong>暂无待确认用户</strong><div class="meta">手机端首次发消息后，会出现在这里等待本机确认。</div></li>`
+      ? `<li><strong>${tWeb("web.candidates.empty.title")}</strong><div class="meta">${tWeb("web.candidates.empty.hint")}</div></li>`
       : candidates
           .map(
             (identity) =>
-              `<li class="list-row"><span><strong>${escapeHtml(identity.displayName)}</strong><div class="meta">${channelName(identity.channel)} · ${escapeHtml(identity.stableId)}</div></span><button data-confirm-identity="${escapeAttr(identity.channel)}|${escapeAttr(identity.stableId)}|${escapeAttr(identity.displayName)}">确认</button></li>`,
+              `<li class="list-row"><span><strong>${escapeHtml(identity.displayName)}</strong><div class="meta">${channelName(identity.channel)} · ${escapeHtml(identity.stableId)}</div></span><button data-confirm-identity="${escapeAttr(identity.channel)}|${escapeAttr(identity.stableId)}|${escapeAttr(identity.displayName)}">${tWeb("web.candidates.confirm")}</button></li>`,
           )
           .join("");
 }
@@ -217,13 +232,13 @@ function renderCandidates(result) {
 function renderProjects(result) {
   const target = document.querySelector("#projects");
   if (!result.ok) {
-    target.innerHTML = sectionError("无法加载项目");
+    target.innerHTML = sectionError(tWeb("web.connectors.error.projects"));
     return;
   }
   const projects = result.value;
   target.innerHTML =
     projects.length === 0
-      ? `<li>暂无项目。</li>`
+      ? `<li>${tWeb("web.projects.empty")}</li>`
       : projects
           .map(
             (project) =>
@@ -238,13 +253,13 @@ function renderWechat(statusResult, configResult, runtimeResult) {
   const wechatStatus = statusResult.value ?? {};
   const needsRelogin = Boolean(wechatRuntime.needsRelogin);
   const badge = document.querySelector("#wechatBadge");
-  badge.textContent = needsRelogin ? "需重新绑定" : wechatConfig.loggedIn ? "已绑定" : "未绑定";
+  badge.textContent = needsRelogin ? tWeb("web.wechat.badge.needsRelogin") : wechatConfig.loggedIn ? tWeb("web.wechat.badge.bound") : tWeb("web.wechat.badge.unbound");
   badge.className = `badge${needsRelogin ? " warning" : wechatConfig.loggedIn ? " success" : ""}`;
   document.querySelector("#wechatStatus").innerHTML = [
-    ["状态", needsRelogin ? "登录已失效" : wechatConfig.loggedIn ? "已绑定" : "未绑定"],
-    ["监听", needsRelogin ? "已掉线，请重新绑定微信" : humanRuntimeState(wechatRuntime.state)],
-    ["允许账号", wechatConfig.linkedUserName ?? wechatConfig.linkedUserId ?? "等待扫码"],
-    ["宿主应用", wechatStatus.externalAgentHostRequired ? "需要" : "不需要"],
+    [tWeb("web.wechat.label.status"), needsRelogin ? tWeb("web.wechat.status.invalid") : wechatConfig.loggedIn ? tWeb("web.wechat.status.bound") : tWeb("web.wechat.status.unbound")],
+    [tWeb("web.wechat.label.listening"), needsRelogin ? tWeb("web.wechat.listening.offline") : humanRuntimeState(wechatRuntime.state)],
+    [tWeb("web.wechat.label.allowedAccount"), wechatConfig.linkedUserName ?? wechatConfig.linkedUserId ?? tWeb("web.wechat.account.waitingScan")],
+    [tWeb("web.wechat.label.hostApp"), wechatStatus.externalAgentHostRequired ? tWeb("web.wechat.host.required") : tWeb("web.wechat.host.notRequired")],
   ]
     .map(([label, value]) => `<dt>${label}</dt><dd>${escapeHtml(value)}</dd>`)
     .join("");
@@ -253,10 +268,10 @@ function renderWechat(statusResult, configResult, runtimeResult) {
   // While a rebind is in flight (activeWechatLoginId set), keep the QR visible
   // even though the daemon still reports the old loggedIn=true config.
   wechatBindButton.textContent = activeWechatLoginId
-    ? "刷新二维码"
+    ? tWeb("web.wechat.bind.refresh")
     : wechatConfig.loggedIn
-      ? "重新绑定微信"
-      : "绑定微信";
+      ? tWeb("web.wechat.bind.rebind")
+      : tWeb("web.wechat.bind.bind");
   if (!activeWechatLoginId) {
     setWechatLoginView(
       wechatConfig.loggedIn
@@ -278,17 +293,17 @@ function renderFeishu(statusResult, configResult, runtimeResult) {
   badge.textContent = humanFeishuBadge(feishuRuntime.state);
   badge.className = `badge${feishuReady ? " success" : " warning"}`;
   document.querySelector("#feishuStatus").innerHTML = [
-    ["状态", humanFeishuState(feishuRuntime.state)],
-    ["连接", feishuRuntime.state === "running" ? "WebSocket 监听中" : feishuConfig.configured ? "已配置" : "待扫码"],
-    ["允许账号", feishuConfig.linkedUserName ?? feishuConfig.linkedUserId ?? "等待确认"],
-    ["应用", feishuConfig.appId ?? "未设置"],
+    [tWeb("web.feishu.label.status"), humanFeishuState(feishuRuntime.state)],
+    [tWeb("web.feishu.label.connection"), feishuRuntime.state === "running" ? tWeb("web.feishu.connection.listening") : feishuConfig.configured ? tWeb("web.feishu.connection.configured") : tWeb("web.feishu.connection.waitingScan")],
+    [tWeb("web.feishu.label.allowedAccount"), feishuConfig.linkedUserName ?? feishuConfig.linkedUserId ?? tWeb("web.feishu.account.waitingConfirm")],
+    [tWeb("web.feishu.label.app"), feishuConfig.appId ?? tWeb("web.feishu.app.unset")],
   ]
     .map(([label, value]) => `<dt>${label}</dt><dd>${escapeHtml(value)}</dd>`)
     .join("");
   const feishuForm = document.querySelector("#feishuConfigForm");
   feishuForm.elements.domain.value = feishuConfig.domain ?? "feishu";
   const feishuBindButton = document.querySelector("#startFeishuLogin");
-  feishuBindButton.textContent = feishuConfig.configured ? "重新绑定飞书" : activeFeishuLogin ? "刷新二维码" : "绑定飞书";
+  feishuBindButton.textContent = feishuConfig.configured ? tWeb("web.feishu.bind.rebind") : activeFeishuLogin ? tWeb("web.feishu.bind.refresh") : tWeb("web.feishu.bind.bind");
   if (!activeFeishuLogin) {
     setFeishuLoginView(
       feishuConfig.configured
@@ -303,24 +318,24 @@ function renderApprovals(result) {
   const badge = document.querySelector("#approvalsBadge");
   const navCount = document.querySelector("#approvalsNavCount");
   if (!result.ok) {
-    target.innerHTML = sectionError("无法加载待审批操作");
-    badge.textContent = "—";
+    target.innerHTML = sectionError(tWeb("web.connectors.error.approvals"));
+    badge.textContent = tWeb("web.approvals.badge.empty");
     navCount.hidden = true;
     return;
   }
   const approvals = result.value;
-  badge.textContent = `${approvals.length} 项待处理`;
+  badge.textContent = tWeb("web.approvals.badge.count", { count: approvals.length });
   badge.className = `badge${approvals.length > 0 ? " warning" : " neutral"}`;
   navCount.hidden = approvals.length === 0;
   navCount.textContent = String(approvals.length);
   target.innerHTML =
     approvals.length === 0
-      ? `<li><strong>暂无待审批操作</strong><div class="meta">Codex 命令和文件修改审批会显示在这里。</div></li>`
+      ? `<li><strong>${tWeb("web.approvals.empty.title")}</strong><div class="meta">${tWeb("web.approvals.empty.hint")}</div></li>`
       : approvals
           .map((approval) => {
             const command = approval.params?.command ?? approval.params?.reason ?? approval.method;
             const cwd = approval.params?.cwd ?? "";
-            return `<li class="list-row"><span><strong>${escapeHtml(command)}</strong><div class="meta">${escapeHtml(approval.id)}</div><div class="meta">${escapeHtml(cwd)}</div></span><span class="button-row"><button data-approval="${escapeAttr(approval.id)}|accept">批准</button><button class="secondary-button" data-approval="${escapeAttr(approval.id)}|decline">拒绝</button></span></li>`;
+            return `<li class="list-row"><span><strong>${escapeHtml(command)}</strong><div class="meta">${escapeHtml(approval.id)}</div><div class="meta">${escapeHtml(cwd)}</div></span><span class="button-row"><button data-approval="${escapeAttr(approval.id)}|accept">${tWeb("web.approvals.accept")}</button><button class="secondary-button" data-approval="${escapeAttr(approval.id)}|decline">${tWeb("web.approvals.decline")}</button></span></li>`;
           })
           .join("");
 }
@@ -337,7 +352,7 @@ function renderLogEntries(entries) {
 function renderLogs(result) {
   const target = document.querySelector("#logList");
   if (!result.ok) {
-    target.innerHTML = sectionError("无法加载运行日志");
+    target.innerHTML = sectionError(tWeb("web.connectors.error.logs"));
     return;
   }
   const data = result.value;
@@ -345,14 +360,14 @@ function renderLogs(result) {
   const hasMore = data.hasMore ?? false;
   logsOffset = entries.length;
   if (entries.length === 0) {
-    target.innerHTML = `<li><strong>暂无日志</strong><div class="meta">确认用户、处理命令、审批等事件会记录在这里。</div></li>`;
+    target.innerHTML = `<li><strong>${tWeb("web.logs.empty.title")}</strong><div class="meta">${tWeb("web.logs.empty.hint")}</div></li>`;
     return;
   }
   target.innerHTML = renderLogEntries(entries);
   if (hasMore) {
     const btn = document.createElement("li");
     btn.className = "load-more-item";
-    btn.innerHTML = `<button class="secondary-button load-more-btn" id="logsLoadMore">加载更多</button>`;
+    btn.innerHTML = `<button class="secondary-button load-more-btn" id="logsLoadMore">${tWeb("web.logs.loadMore")}</button>`;
     target.appendChild(btn);
   }
 }
@@ -360,7 +375,7 @@ function renderLogs(result) {
 function renderConversation(result) {
   const target = document.querySelector("#conversationList");
   if (!result.ok) {
-    target.innerHTML = `<p class="meta">无法加载对话记录。</p>`;
+    target.innerHTML = `<p class="meta">${tWeb("web.conversation.loadError")}</p>`;
     return;
   }
   conversationThreads = result.value ?? [];
@@ -371,7 +386,7 @@ function renderConversation(result) {
 function paintConversation() {
   const target = document.querySelector("#conversationList");
   if (conversationThreads.length === 0) {
-    target.innerHTML = `<p class="meta">还没有对话。手机上向 Codex 发消息后会显示在这里。</p>`;
+    target.innerHTML = `<p class="meta">${tWeb("web.conversation.empty")}</p>`;
     return;
   }
   const html = conversationThreads
@@ -381,7 +396,7 @@ function paintConversation() {
         .slice(-12)
         .map(
           (message) =>
-            `<div class="chat-msg chat-${message.role === "user" ? "user" : "assistant"}"><span class="chat-role">${message.role === "user" ? "手机" : "Codex"}</span><span class="chat-text">${escapeHtml(message.text)}</span></div>`,
+            `<div class="chat-msg chat-${message.role === "user" ? "user" : "assistant"}"><span class="chat-role">${message.role === "user" ? tWeb("web.chat.rolePhone") : "Codex"}</span><span class="chat-text">${escapeHtml(message.text)}</span></div>`,
         )
         .join("");
       return `<article class="chat-thread"><div class="meta">${escapeHtml(thread.threadId)}</div>${messages}</article>`;
@@ -389,7 +404,7 @@ function paintConversation() {
     .join("");
   const moreBtn =
     conversationShown < conversationThreads.length
-      ? `<button class="secondary-button load-more-btn" id="conversationLoadMore">加载更多</button>`
+      ? `<button class="secondary-button load-more-btn" id="conversationLoadMore">${tWeb("web.conversation.loadMore")}</button>`
       : "";
   target.innerHTML = html + moreBtn;
 }
@@ -400,18 +415,18 @@ async function renderThreads(status, projectsValue) {
   const projects = Array.isArray(projectsValue) ? projectsValue : [];
   const primaryProject = projects[0];
   if (status.connectors.desktop.state !== "connected" || !primaryProject) {
-    target.innerHTML = `<li><strong>未连接</strong><div class="meta">打开 Codex Desktop 后，这里会显示已有对话。</div></li>`;
+    target.innerHTML = `<li><strong>${tWeb("web.threads.disconnected.title")}</strong><div class="meta">${tWeb("web.threads.disconnected.hint")}</div></li>`;
     return;
   }
   const result = await safeGet(`/api/codex/threads?cwd=${encodeURIComponent(primaryProject.path)}`, null);
   if (!result.ok) {
-    target.innerHTML = sectionError("无法加载 Codex 对话");
+    target.innerHTML = sectionError(tWeb("web.connectors.error.threads"));
     return;
   }
   const threadList = result.value?.data ?? result.value?.threads ?? [];
   target.innerHTML =
     threadList.length === 0
-      ? `<li>未找到 ${escapeHtml(primaryProject.name)} 的 Codex Desktop 对话。</li>`
+      ? `<li>${tWeb("web.threads.empty", { name: escapeHtml(primaryProject.name) })}</li>`
       : threadList
           .map((thread, index) => {
             const title = thread.title ?? thread.name ?? thread.preview ?? thread.id;
@@ -425,7 +440,13 @@ function setBridgeStatus(label) {
   const pill = document.querySelector("#bridgeStatus");
   pill.textContent = label;
   pill.className = `status-pill status-${
-    label === "就绪" ? "ok" : label === "需要授权" ? "warn" : label === "离线" ? "error" : "pending"
+    label === tWeb("web.status.ready")
+      ? "ok"
+      : label === tWeb("web.status.authRequired")
+        ? "warn"
+        : label === tWeb("web.status.offline")
+          ? "error"
+          : "pending"
   }`;
 }
 
@@ -434,11 +455,11 @@ function showLoadError(error) {
   const title = document.querySelector("#loadErrorTitle");
   const detail = document.querySelector("#loadErrorDetail");
   if (error?.status === 401) {
-    title.textContent = "需要本地 API token";
-    detail.textContent = "daemon 设置了 COMOTE_LOCAL_API_TOKEN，当前浏览器未授权。";
+    title.textContent = tWeb("web.loadError.tokenTitle");
+    detail.textContent = tWeb("web.loadError.tokenDetail");
   } else {
-    title.textContent = "无法连接本地 daemon";
-    detail.textContent = `请确认 Comote daemon 正在运行。${error?.message ?? ""}`;
+    title.textContent = tWeb("web.loadError.connTitle");
+    detail.textContent = tWeb("web.loadError.connDetail", { message: error?.message ?? "" });
   }
   panel.hidden = false;
 }
@@ -448,7 +469,7 @@ function hideLoadError() {
 }
 
 function sectionError(message) {
-  return `<li class="list-error"><strong>${escapeHtml(message)}</strong><div class="meta">稍后会自动重试。</div></li>`;
+  return `<li class="list-error"><strong>${escapeHtml(message)}</strong><div class="meta">${tWeb("web.sectionError.retryHint")}</div></li>`;
 }
 
 
@@ -508,7 +529,7 @@ document.querySelector("#identities").addEventListener("click", async (event) =>
 async function connectCodexDesktop({ button = null } = {}) {
   if (button) {
     button.disabled = true;
-    button.textContent = "连接中...";
+    button.textContent = tWeb("web.codex.connecting");
   }
   try {
     await getJson("/api/connectors/codex-desktop/auto-connect", { method: "POST" });
@@ -518,7 +539,7 @@ async function connectCodexDesktop({ button = null } = {}) {
   } finally {
     if (button) {
       button.disabled = false;
-      button.textContent = button.dataset.defaultLabel ?? "重试";
+      button.textContent = button.dataset.defaultLabel ?? tWeb("web.codex.retry");
     }
   }
   await render();
@@ -527,14 +548,14 @@ async function connectCodexDesktop({ button = null } = {}) {
 document.querySelector("#connectDesktop").addEventListener("click", async (event) => {
   const button = event.currentTarget;
   button.disabled = true;
-  button.textContent = "连接中...";
+  button.textContent = tWeb("web.codex.connecting");
   try {
     await getJson("/api/connectors/codex-desktop/initialize", { method: "POST" });
   } catch (error) {
-    window.alert(`连接 Codex Desktop 失败：${error.message}`);
+    window.alert(tWeb("web.codex.connectFailed", { message: error.message }));
   } finally {
     button.disabled = false;
-    button.textContent = "重试连接 Codex Desktop";
+    button.textContent = tWeb("web.codex.retryConnect");
   }
   await render();
 });
@@ -546,13 +567,13 @@ document.querySelector("#retryCodexConnection").addEventListener("click", async 
 document.querySelector("#discoverProjects").addEventListener("click", async () => {
   const button = document.querySelector("#discoverProjects");
   button.disabled = true;
-  button.textContent = "刷新中...";
+  button.textContent = tWeb("web.projects.refreshing");
   try {
     await guardedAction(() => getJson("/api/projects/discover", { method: "POST" }));
     await render();
   } finally {
     button.disabled = false;
-    button.textContent = "刷新";
+    button.textContent = tWeb("web.projects.refresh");
   }
 });
 
@@ -601,9 +622,9 @@ async function guardedAction(action) {
     return await action();
   } catch (error) {
     if (error.status === 401) {
-      window.alert("操作未授权：daemon 设置了本地 API token。");
+      window.alert(tWeb("web.action.unauthorized"));
     } else {
-      window.alert(`操作失败：${error.message}`);
+      window.alert(tWeb("web.action.failed", { message: error.message }));
     }
     return null;
   }
@@ -617,7 +638,7 @@ function renderCodexNotice(state) {
 async function startWechatBinding(button) {
   clearWechatLoginPolling();
   button.disabled = true;
-  button.textContent = "生成二维码...";
+  button.textContent = tWeb("web.qr.generating");
   setWechatLoginView({ state: "loading" });
   try {
     const result = await getJson("/api/channels/wechat/login/start", { method: "POST" });
@@ -627,7 +648,7 @@ async function startWechatBinding(button) {
       state: "qr",
       loginId: activeWechatLoginId,
       qrUrl: activeWechatQrUrl,
-      message: "请用手机微信扫码，Comote 会自动保持监听。",
+      message: tWeb("web.wechat.qr.scanHint"),
     });
     await getJson("/api/channels/wechat/runtime/start", { method: "POST" });
     if (activeWechatLoginId) {
@@ -637,10 +658,10 @@ async function startWechatBinding(button) {
   } catch (error) {
     activeWechatLoginId = null;
     activeWechatQrUrl = null;
-    setWechatLoginView({ state: "error", message: `微信绑定启动失败：${error.message}` });
+    setWechatLoginView({ state: "error", message: tWeb("web.wechat.bind.startFailed", { message: error.message }) });
   } finally {
     button.disabled = false;
-    button.textContent = activeWechatLoginId ? "刷新二维码" : "绑定微信";
+    button.textContent = activeWechatLoginId ? tWeb("web.wechat.bind.refresh") : tWeb("web.wechat.bind.bind");
   }
 }
 
@@ -666,7 +687,7 @@ function startWechatLoginPolling(loginId) {
         activeWechatQrUrl = null;
         setWechatLoginView({
           state: "error",
-          message: `二维码已失效，请重新绑定微信。状态：${result.state ?? "unknown"}`,
+          message: tWeb("web.wechat.qr.expired", { state: result.state ?? "unknown" }),
         });
         await render();
         return;
@@ -675,14 +696,14 @@ function startWechatLoginPolling(loginId) {
         state: "qr",
         loginId,
         qrUrl: activeWechatQrUrl,
-        message: `等待扫码确认：${humanWechatLoginState(result.state)}`,
+        message: tWeb("web.wechat.qr.waiting", { state: humanWechatLoginState(result.state) }),
       });
     } catch (error) {
       setWechatLoginView({
         state: "qr",
         loginId,
         qrUrl: activeWechatQrUrl,
-        message: `正在等待扫码，状态检查暂时失败：${error.message}`,
+        message: tWeb("web.wechat.qr.checkFailed", { message: error.message }),
       });
     }
   }, 2500);
@@ -702,50 +723,50 @@ function setWechatLoginView({ state, qrUrl = null, loginId = null, accountId = n
 
   if (state === "loading") {
     target.append(createQrGlyph());
-    target.append(createTextLine("正在生成微信二维码..."));
+    target.append(createTextLine(tWeb("web.wechat.view.generating")));
     return;
   }
   if (state === "empty") {
     target.append(createQrGlyph());
-    target.append(createTextLine("点击「绑定微信」后，二维码会显示在这里"));
+    target.append(createTextLine(tWeb("web.wechat.view.emptyHint")));
     return;
   }
   if (state === "bound") {
-    target.append(createStrongLine("微信已绑定"));
+    target.append(createStrongLine(tWeb("web.wechat.view.boundTitle")));
     target.append(
       createTextLine(
         userName
-          ? `允许账号：${userName}`
+          ? tWeb("web.wechat.view.allowedAccount", { name: userName })
           : userId
-            ? `允许账号：${userId}`
-            : `账号：${accountId ?? "已确认"}`,
+            ? tWeb("web.wechat.view.allowedAccount", { name: userId })
+            : tWeb("web.wechat.view.account", { account: accountId ?? tWeb("web.wechat.view.confirmed") }),
       ),
     );
-    target.append(createTextLine("收到手机消息后，会在本机确认用户身份。"));
+    target.append(createTextLine(tWeb("web.wechat.view.boundHint")));
     return;
   }
   if (state === "error") {
-    target.append(createStrongLine("需要重新绑定"));
-    target.append(createTextLine(message ?? "微信绑定失败。"));
+    target.append(createStrongLine(tWeb("web.qr.needRebind")));
+    target.append(createTextLine(message ?? tWeb("web.wechat.view.bindFailed")));
     return;
   }
 
   target.classList.add("has-qr");
   const imageSource = normalizeQrImageSource(qrUrl);
   if (!imageSource) {
-    target.append(createStrongLine("二维码已失效"));
-    target.append(createTextLine("请点击“刷新二维码”重新绑定微信。"));
+    target.append(createStrongLine(tWeb("web.qr.invalidTitle")));
+    target.append(createTextLine(tWeb("web.wechat.view.invalidHint")));
     return;
   }
   const image = document.createElement("img");
   image.src = imageSource;
-  image.alt = "微信绑定二维码";
+  image.alt = tWeb("web.wechat.view.imageAlt");
   target.append(image);
-  target.append(createStrongLine("用手机微信扫码绑定"));
-  target.append(createTextLine(message ?? "扫码后 Comote 会自动完成绑定并保持监听。"));
+  target.append(createStrongLine(tWeb("web.wechat.view.scanStrong")));
+  target.append(createTextLine(message ?? tWeb("web.wechat.view.scanHint")));
   if (loginId) {
     const code = document.createElement("code");
-    code.textContent = `登录会话：${loginId}`;
+    code.textContent = tWeb("web.qr.loginSession", { loginId });
     target.append(code);
   }
 }
@@ -753,7 +774,7 @@ function setWechatLoginView({ state, qrUrl = null, loginId = null, accountId = n
 async function startFeishuBinding(button) {
   clearFeishuLoginPolling();
   button.disabled = true;
-  button.textContent = "生成二维码...";
+  button.textContent = tWeb("web.qr.generating");
   setFeishuLoginView({ state: "loading" });
   try {
     const domain = new FormData(document.querySelector("#feishuConfigForm")).get("domain")?.toString() ?? "feishu";
@@ -767,15 +788,15 @@ async function startFeishuBinding(button) {
       state: "qr",
       qrUrl: result.qrUrl,
       loginId: result.loginId,
-      message: "请用手机飞书扫码，Comote 会自动创建机器人并开启 WebSocket。",
+      message: tWeb("web.feishu.qr.scanHint"),
     });
     startFeishuLoginPolling(result);
   } catch (error) {
     activeFeishuLogin = null;
-    setFeishuLoginView({ state: "error", message: `飞书绑定启动失败：${error.message}` });
+    setFeishuLoginView({ state: "error", message: tWeb("web.feishu.bind.startFailed", { message: error.message }) });
   } finally {
     button.disabled = false;
-    button.textContent = activeFeishuLogin ? "刷新二维码" : "绑定飞书";
+    button.textContent = activeFeishuLogin ? tWeb("web.feishu.bind.refresh") : tWeb("web.feishu.bind.bind");
   }
 }
 
@@ -796,7 +817,7 @@ function startFeishuLoginPolling(login) {
       if (["expired", "access_denied", "timeout", "error"].includes(result.state)) {
         clearFeishuLoginPolling();
         activeFeishuLogin = null;
-        setFeishuLoginView({ state: "error", message: `飞书绑定未完成：${humanFeishuLoginState(result.state)}` });
+        setFeishuLoginView({ state: "error", message: tWeb("web.feishu.bind.incomplete", { state: humanFeishuLoginState(result.state) }) });
         await render();
         return;
       }
@@ -804,14 +825,14 @@ function startFeishuLoginPolling(login) {
         state: "qr",
         qrUrl: login.qrUrl,
         loginId: login.loginId,
-        message: `等待扫码确认：${humanFeishuLoginState(result.state)}`,
+        message: tWeb("web.feishu.qr.waiting", { state: humanFeishuLoginState(result.state) }),
       });
     } catch (error) {
       setFeishuLoginView({
         state: "qr",
         qrUrl: login.qrUrl,
         loginId: login.loginId,
-        message: `正在等待扫码，状态检查暂时失败：${error.message}`,
+        message: tWeb("web.feishu.qr.checkFailed", { message: error.message }),
       });
     }
   }, 2500);
@@ -830,49 +851,49 @@ function setFeishuLoginView({ state, qrUrl = null, loginId = null, appId = null,
   target.className = "qr-result";
   if (state === "loading") {
     target.append(createQrGlyph());
-    target.append(createTextLine("正在生成飞书二维码..."));
+    target.append(createTextLine(tWeb("web.feishu.view.generating")));
     return;
   }
   if (state === "empty") {
     target.append(createQrGlyph());
-    target.append(createTextLine("完成应用授权后，二维码会显示在这里"));
+    target.append(createTextLine(tWeb("web.feishu.view.emptyHint")));
     return;
   }
   if (state === "bound") {
-    target.append(createStrongLine("飞书已绑定"));
+    target.append(createStrongLine(tWeb("web.feishu.view.boundTitle")));
     target.append(
       createTextLine(
         userName
-          ? `允许账号：${userName}`
+          ? tWeb("web.feishu.view.allowedAccount", { name: userName })
           : userId
-            ? `允许账号：${userId}`
-            : `应用：${appId ?? "已配置"}`,
+            ? tWeb("web.feishu.view.allowedAccount", { name: userId })
+            : tWeb("web.feishu.view.app", { app: appId ?? tWeb("web.feishu.connection.configured") }),
       ),
     );
-    target.append(createTextLine("收到飞书消息后，会在本机确认用户身份。"));
+    target.append(createTextLine(tWeb("web.feishu.view.boundHint")));
     return;
   }
   if (state === "error") {
-    target.append(createStrongLine("需要重新绑定"));
-    target.append(createTextLine(message ?? "飞书绑定失败。"));
+    target.append(createStrongLine(tWeb("web.qr.needRebind")));
+    target.append(createTextLine(message ?? tWeb("web.feishu.view.bindFailed")));
     return;
   }
   target.classList.add("has-qr");
   const imageSource = normalizeQrImageSource(qrUrl);
   if (!imageSource) {
-    target.append(createStrongLine("二维码已失效"));
-    target.append(createTextLine("请点击“刷新二维码”重新绑定飞书。"));
+    target.append(createStrongLine(tWeb("web.qr.invalidTitle")));
+    target.append(createTextLine(tWeb("web.feishu.view.invalidHint")));
     return;
   }
   const image = document.createElement("img");
   image.src = imageSource;
-  image.alt = "飞书绑定二维码";
+  image.alt = tWeb("web.feishu.view.imageAlt");
   target.append(image);
-  target.append(createStrongLine("用手机飞书扫码绑定"));
-  target.append(createTextLine(message ?? "扫码后 Comote 会自动完成绑定并开启 WebSocket。"));
+  target.append(createStrongLine(tWeb("web.feishu.view.scanStrong")));
+  target.append(createTextLine(message ?? tWeb("web.feishu.view.scanHint")));
   if (loginId) {
     const code = document.createElement("code");
-    code.textContent = `登录会话：${loginId}`;
+    code.textContent = tWeb("web.qr.loginSession", { loginId });
     target.append(code);
   }
 }
@@ -925,57 +946,57 @@ function isWechatLoginFailed(result) {
 }
 
 function humanWechatLoginState(state) {
-  if (state === "scanned") return "已扫码，等待确认";
-  if (state === "confirmed") return "已确认";
-  if (state === "pending" || state === "waiting" || state === "wait") return "等待扫码";
-  return state ?? "等待扫码";
+  if (state === "scanned") return tWeb("web.wechatLogin.scanned");
+  if (state === "confirmed") return tWeb("web.wechatLogin.confirmed");
+  if (state === "pending" || state === "waiting" || state === "wait") return tWeb("web.wechatLogin.waiting");
+  return state ?? tWeb("web.wechatLogin.waiting");
 }
 
 function channelName(channel) {
-  if (channel === "wechat") return "微信";
-  if (channel === "feishu") return "飞书";
+  if (channel === "wechat") return tWeb("web.channelName.wechat");
+  if (channel === "feishu") return tWeb("web.channelName.feishu");
   return channel;
 }
 
 function roleName(role) {
-  if (role === "owner") return "所有者";
-  if (role === "member") return "成员";
+  if (role === "owner") return tWeb("web.role.owner");
+  if (role === "member") return tWeb("web.role.member");
   return role;
 }
 
 function humanFeishuBadge(state) {
-  if (state === "running") return "监听中";
-  if (state === "configured") return "已启用";
-  return "需要设置";
+  if (state === "running") return tWeb("web.feishuBadge.listening");
+  if (state === "configured") return tWeb("web.feishuBadge.enabled");
+  return tWeb("web.feishuBadge.needsSetup");
 }
 
 function humanFeishuState(state) {
-  if (state === "running") return "监听中";
-  if (state === "configured") return "已配置";
-  if (state === "reserved") return "需要设置";
-  if (state === "not_configured") return "未配置";
-  return "未绑定";
+  if (state === "running") return tWeb("web.feishuState.listening");
+  if (state === "configured") return tWeb("web.feishuState.configured");
+  if (state === "reserved") return tWeb("web.feishuState.needsSetup");
+  if (state === "not_configured") return tWeb("web.feishuState.notConfigured");
+  return tWeb("web.feishuState.unbound");
 }
 
 function humanFeishuLoginState(state) {
-  if (state === "pending") return "等待扫码";
-  if (state === "confirmed") return "已确认";
-  if (state === "access_denied") return "已取消";
-  if (state === "expired") return "已过期";
-  if (state === "timeout") return "超时";
-  return state ?? "等待扫码";
+  if (state === "pending") return tWeb("web.feishuLogin.waiting");
+  if (state === "confirmed") return tWeb("web.feishuLogin.confirmed");
+  if (state === "access_denied") return tWeb("web.feishuLogin.cancelled");
+  if (state === "expired") return tWeb("web.feishuLogin.expired");
+  if (state === "timeout") return tWeb("web.feishuLogin.timeout");
+  return state ?? tWeb("web.feishuLogin.waiting");
 }
 
 function humanConnectorState(state) {
-  if (state === "connected") return "已连接";
-  if (state === "available") return "可用";
-  return "未连接";
+  if (state === "connected") return tWeb("web.connector.connected");
+  if (state === "available") return tWeb("web.connector.available");
+  return tWeb("web.connector.disconnected");
 }
 
 function humanRuntimeState(state) {
-  if (state === "running") return "监听中";
-  if (state === "configured") return "就绪";
-  return "需要设置";
+  if (state === "running") return tWeb("web.runtime.listening");
+  if (state === "configured") return tWeb("web.runtime.ready");
+  return tWeb("web.runtime.needsSetup");
 }
 
 function formatTime(iso) {
@@ -997,15 +1018,15 @@ function escapeAttr(value) {
 }
 
 // --- Navigation: keep the side-nav highlight and eyebrow in sync with scroll ---
-const NAV_LABELS = {
-  connectPhone: "连接手机",
-  phoneCommands: "从手机使用",
-  approvals: "待审批操作",
-  users: "授权用户",
-  conversation: "对话记录",
-  logs: "运行日志",
-  advanced: "高级设置",
-  about: "关于 Comote",
+const NAV_LABEL_KEYS = {
+  connectPhone: "web.nav.connectPhone",
+  phoneCommands: "web.nav.phoneCommands",
+  approvals: "web.approvals.title",
+  users: "web.nav.users",
+  conversation: "web.nav.conversation",
+  logs: "web.nav.logs",
+  advanced: "web.nav.advanced",
+  about: "web.about.title",
 };
 
 function setupNavigation() {
@@ -1016,8 +1037,8 @@ function setupNavigation() {
     for (const item of navItems) {
       item.classList.toggle("active", item.getAttribute("href") === `#${sectionId}`);
     }
-    if (NAV_LABELS[sectionId]) {
-      eyebrow.textContent = NAV_LABELS[sectionId];
+    if (NAV_LABEL_KEYS[sectionId]) {
+      eyebrow.textContent = tWeb(NAV_LABEL_KEYS[sectionId]);
     }
   }
 
@@ -1031,7 +1052,7 @@ function setupNavigation() {
     });
   }
 
-  const sections = Object.keys(NAV_LABELS)
+  const sections = Object.keys(NAV_LABEL_KEYS)
     .map((id) => document.getElementById(id))
     .filter(Boolean);
   const observer = new IntersectionObserver(
@@ -1054,7 +1075,7 @@ function renderThreadMessages(messages) {
   return messages
     .map(
       (message) =>
-        `<div class="chat-msg chat-${message.role === "user" ? "user" : "assistant"}"><span class="chat-role">${message.role === "user" ? "手机" : "Codex"}</span><span class="chat-text">${escapeHtml(message.text)}</span></div>`,
+        `<div class="chat-msg chat-${message.role === "user" ? "user" : "assistant"}"><span class="chat-role">${message.role === "user" ? tWeb("web.chat.rolePhone") : "Codex"}</span><span class="chat-text">${escapeHtml(message.text)}</span></div>`,
     )
     .join("");
 }
@@ -1092,7 +1113,7 @@ document.querySelector("#threads").addEventListener("click", async (event) => {
     }
     if (newHasMore) {
       const moreLi = document.createElement("div");
-      moreLi.innerHTML = `<button class="secondary-button thread-load-more-btn">加载更多</button>`;
+      moreLi.innerHTML = `<button class="secondary-button thread-load-more-btn">${tWeb("web.threads.loadMore")}</button>`;
       frag.appendChild(moreLi.firstChild);
     }
     panel.appendChild(frag);
@@ -1113,26 +1134,26 @@ document.querySelector("#threads").addEventListener("click", async (event) => {
     return;
   }
   panel.dataset.loaded = "1";
-  panel.innerHTML = `<div class="meta">加载中…</div>`;
+  panel.innerHTML = `<div class="meta">${tWeb("web.threads.loading")}</div>`;
   const threadId = row.dataset.threadId;
   const firstResult = await safeGet(
     `/api/codex/transcript?threadId=${encodeURIComponent(threadId)}&limit=5&offset=0`,
     null,
   );
   if (!firstResult.ok || !firstResult.value) {
-    panel.innerHTML = `<div class="meta">无法加载记录。</div>`;
+    panel.innerHTML = `<div class="meta">${tWeb("web.threads.loadError")}</div>`;
     return;
   }
   const messages = (firstResult.value.messages ?? []).slice().reverse();
   const hasMore = firstResult.value.hasMore ?? false;
   panel.dataset.offset = String(messages.length);
   if (messages.length === 0) {
-    panel.innerHTML = `<div class="meta">暂无本地记录</div>`;
+    panel.innerHTML = `<div class="meta">${tWeb("web.threads.noLocal")}</div>`;
     return;
   }
   let html = renderThreadMessages(messages);
   if (hasMore) {
-    html += `<button class="secondary-button thread-load-more-btn">加载更多</button>`;
+    html += `<button class="secondary-button thread-load-more-btn">${tWeb("web.threads.loadMore")}</button>`;
   }
   panel.innerHTML = html;
 });
@@ -1143,11 +1164,11 @@ document.querySelector("#logList").addEventListener("click", async (event) => {
     return;
   }
   btn.disabled = true;
-  btn.textContent = "加载中…";
+  btn.textContent = tWeb("web.threads.loading");
   const result = await safeGet(`/api/logs?limit=5&offset=${logsOffset}`, { entries: [], total: 0, hasMore: false });
   if (!result.ok) {
     btn.disabled = false;
-    btn.textContent = "加载更多";
+    btn.textContent = tWeb("web.logs.loadMore");
     return;
   }
   const newEntries = result.value.entries ?? [];
@@ -1168,7 +1189,7 @@ document.querySelector("#logList").addEventListener("click", async (event) => {
   if (newHasMore) {
     const li = document.createElement("li");
     li.className = "load-more-item";
-    li.innerHTML = `<button class="secondary-button load-more-btn" id="logsLoadMore">加载更多</button>`;
+    li.innerHTML = `<button class="secondary-button load-more-btn" id="logsLoadMore">${tWeb("web.logs.loadMore")}</button>`;
     target.appendChild(li);
   }
 });
@@ -1193,9 +1214,45 @@ function startAutoRefresh() {
   }, REFRESH_MS);
 }
 
+function populateLangSelect() {
+  const sel = document.querySelector("#langSelect");
+  if (!sel) {
+    return;
+  }
+  sel.innerHTML = "";
+  for (const loc of WEB_LOCALES) {
+    const opt = document.createElement("option");
+    opt.value = loc;
+    opt.textContent = WEB_LOCALE_NAMES[loc];
+    sel.appendChild(opt);
+  }
+  sel.value = getWebLocale();
+  sel.addEventListener("change", onLangChange);
+}
+
+async function onLangChange(event) {
+  const locale = event.target.value;
+  try {
+    await getJson("/api/settings", {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ locale }),
+    });
+  } catch {
+    // Keep going; still switch the UI even if persisting the preference failed.
+  }
+  setWebLocale(locale);
+  applyTranslations(document);
+  await render(); // re-run the main render so dynamic tWeb() strings update
+}
+
 async function init() {
   setupNavigation();
-  setBridgeStatus("启动中");
+  setBridgeStatus(tWeb("web.status.starting"));
+  const settings = await safeGet("/api/settings", { locale: "zh", supported: ["zh"] });
+  setWebLocale(settings.value?.locale ?? "zh");
+  applyTranslations(document);
+  populateLangSelect();
   await refreshVersionStatus();
   await render(); // paint immediately with whatever the daemon returns
   startAutoRefresh();
@@ -1216,11 +1273,11 @@ async function refreshVersionStatus() {
   const current = data?.version ?? null;
   if (versionEl) {
     if (current && data?.hasUpdate && data.latest) {
-      versionEl.textContent = `版本 ${current} · 新版 ${data.latest} 可用`;
+      versionEl.textContent = tWeb("web.version.withUpdate", { current, latest: data.latest });
     } else if (current) {
-      versionEl.textContent = `版本 ${current} · 已是最新`;
+      versionEl.textContent = tWeb("web.version.latest", { current });
     } else {
-      versionEl.textContent = "版本 · 已是最新";
+      versionEl.textContent = tWeb("web.version.noCurrent");
     }
   }
   if (banner) {
@@ -1230,7 +1287,7 @@ async function refreshVersionStatus() {
       const currentEl = document.querySelector("#updateCurrentVersion");
       const linkEl = document.querySelector("#updateDownloadLink");
       if (latestEl) latestEl.textContent = data.latest;
-      if (currentEl) currentEl.textContent = current ?? "未知";
+      if (currentEl) currentEl.textContent = current ?? tWeb("web.version.unknown");
       if (linkEl) {
         linkEl.href = data.releaseUrl ?? "https://github.com/GavinYangAI/comote/releases";
       }
@@ -1241,14 +1298,16 @@ async function refreshVersionStatus() {
   const aboutCurrent = document.querySelector("#aboutCurrentVersion");
   const aboutLatest = document.querySelector("#aboutLatestVersion");
   const aboutLink = document.querySelector("#aboutReleasesLink");
-  if (aboutCurrent) aboutCurrent.textContent = current ?? "未知";
+  if (aboutCurrent) aboutCurrent.textContent = current ?? tWeb("web.version.unknown");
   if (aboutLatest) {
     if (data?.latest) {
-      aboutLatest.textContent = data.hasUpdate ? `${data.latest}（有新版可下载）` : `${data.latest}（已是最新）`;
+      aboutLatest.textContent = data.hasUpdate
+        ? tWeb("web.about.latestHasUpdate", { latest: data.latest })
+        : tWeb("web.about.latestUpToDate", { latest: data.latest });
     } else if (data?.error) {
-      aboutLatest.textContent = `检查失败：${data.error}`;
+      aboutLatest.textContent = tWeb("web.about.checkFailed", { error: data.error });
     } else {
-      aboutLatest.textContent = "暂无发布";
+      aboutLatest.textContent = tWeb("web.about.noRelease");
     }
   }
   if (aboutLink && data?.releaseUrl) {
@@ -1260,7 +1319,7 @@ document.querySelector("#refreshConnect")?.addEventListener("click", async (even
   const button = event.currentTarget;
   button.disabled = true;
   const original = button.textContent;
-  button.textContent = "刷新中…";
+  button.textContent = tWeb("web.button.refreshing");
   try {
     await render();
   } finally {
@@ -1273,7 +1332,7 @@ document.querySelector("#refreshUsers")?.addEventListener("click", async (event)
   const button = event.currentTarget;
   button.disabled = true;
   const original = button.textContent;
-  button.textContent = "刷新中…";
+  button.textContent = tWeb("web.button.refreshing");
   try {
     await render();
   } finally {
@@ -1286,12 +1345,12 @@ document.querySelector("#aboutCheckUpdate")?.addEventListener("click", async (ev
   const button = event.currentTarget;
   button.disabled = true;
   const original = button.textContent;
-  button.textContent = "检查中…";
+  button.textContent = tWeb("web.about.checking");
   try {
     await getJson("/api/version/check", { method: "POST" });
     await refreshVersionStatus();
   } catch (error) {
-    window.alert(`检查更新失败：${error.message}`);
+    window.alert(tWeb("web.about.checkUpdateFailed", { message: error.message }));
   } finally {
     button.disabled = false;
     button.textContent = original;
@@ -1299,7 +1358,7 @@ document.querySelector("#aboutCheckUpdate")?.addEventListener("click", async (ev
 });
 
 init().catch((error) => {
-  setBridgeStatus("出错");
+  setBridgeStatus(tWeb("web.status.error"));
   showLoadError(error);
   console.error(error);
 });

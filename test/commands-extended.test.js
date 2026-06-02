@@ -9,6 +9,7 @@ import { CommandRouter } from "../src/core/commands.js";
 import { OutboundQueue } from "../src/core/outbound-queue.js";
 import { ProjectStore } from "../src/core/projects.js";
 import { SessionStore } from "../src/core/sessions.js";
+import { setLocale } from "../src/core/i18n/index.js";
 
 function createRouter({ desktop = null } = {}) {
   const authorization = new AuthorizationStore();
@@ -181,6 +182,42 @@ test("/file with a missing in-project file returns a not-found message without e
   });
   assert.match(reply.text ?? "", /找不到/);
   assert.equal(outboundQueue.snapshot().length, 0);
+});
+
+test("/file usage localizes to en", async () => {
+  setLocale("en");
+  const { router, identity } = createRouter();
+  router.currentProjectByIdentity.set(router.identityKey(identity), "/tmp");
+  const r = await router.handleMessageAsync({
+    identity,
+    text: "/file",
+    conversation: { channel: "feishu", conversationId: "c1" },
+  });
+  assert.match(r.text ?? "", /Usage: \/file/);
+  setLocale("zh");
+});
+
+test("/help and /status localize to en", async () => {
+  setLocale("en");
+  const { router, identity } = createRouter();
+  const help = await router.handleMessageAsync({ identity, text: "/help" });
+  assert.match(help.text ?? "", /Comote commands/);
+  assert.match(help.text ?? "", /\/projects/);
+  const status = await router.handleMessageAsync({ identity, text: "/status" });
+  assert.match(status.text ?? "", /Comote status/);
+  setLocale("zh");
+});
+
+test("/file needOpen and feishuOnly localize to en", async () => {
+  setLocale("en");
+  const { router, identity } = createRouter();
+  const noProject = await router.handleMessageAsync({
+    identity,
+    text: "/file report.pdf",
+    conversation: { channel: "feishu", conversationId: "c1" },
+  });
+  assert.match(noProject.text ?? "", /No project open yet/);
+  setLocale("zh");
 });
 
 test("thread binding records the project path", () => {

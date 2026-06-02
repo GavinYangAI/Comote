@@ -23,6 +23,7 @@ import { EventLog } from "../core/event-log.js";
 import { SleepGuard } from "../core/sleep-guard.js";
 import { Transcript } from "../core/transcript.js";
 import { VersionChecker } from "../core/version-check.js";
+import { setLocale as setI18nLocale, DEFAULT_LOCALE, t } from "../core/i18n/index.js";
 
 export function createComoteState({
   persisted = {},
@@ -33,6 +34,10 @@ export function createComoteState({
   currentVersion = null,
   versionChecker = null,
 } = {}) {
+  // Route the persisted value through i18n's validation so a hand-edited or
+  // stale state.json can't desync settings.locale from the locale actually served.
+  const settings = { locale: setI18nLocale(persisted?.settings?.locale ?? DEFAULT_LOCALE) };
+
   const authorization = new AuthorizationStore({ identities: persisted.identities ?? [] });
   for (const identity of persisted.detectedIdentities ?? []) {
     authorization.detectIdentity(identity);
@@ -242,11 +247,20 @@ export function createComoteState({
     outboundReplies,
     eventLog,
     transcript,
+    getSettings() {
+      return { ...settings };
+    },
+    setLocale(locale) {
+      const applied = setI18nLocale(locale);
+      settings.locale = applied;
+      return applied;
+    },
     async persist() {
       if (!stateStore) {
         return;
       }
       await stateStore.save({
+        settings,
         identities: authorization.listIdentities(),
         detectedIdentities: authorization.listDetectedIdentities(),
         sessions: sessions.snapshot(),
@@ -322,7 +336,7 @@ export function createComoteState({
     if (event.type === "turnCompleted") {
       progressByThread.delete(event.threadId);
       if (feishuRuntime.hasThreadCard(event.threadId)) {
-        const tail = streamTextByThread.get(event.threadId) ?? "本次任务已结束。";
+        const tail = streamTextByThread.get(event.threadId) ?? t("state.completed.fallback");
         feishuRuntime
           .finishThreadCard(
             event.threadId,
@@ -388,7 +402,7 @@ export function createComoteState({
             channel: binding.channel,
             conversationId: binding.conversationId,
             ...(binding.accountId ? { accountId: binding.accountId } : {}),
-            text: `⏳ Codex 还在处理…（已执行 ${entry.count} 步）`,
+            text: t("state.progress.reply", { steps: entry.count }),
             dedupeKey: `progress:${event.threadId}:${now}`,
           });
           deliverIfFeishu(binding.channel);
@@ -504,7 +518,11 @@ export function createComoteState({
         feishuRuntime
           .finishThreadCard(
             event.threadId,
-            statusCard({ phase: "error", text: `Codex 出错：${event.message}`, done: true }),
+            statusCard({
+              phase: "error",
+              text: t("state.error.card", { message: event.message }),
+              done: true,
+            }),
           )
           .catch(() => {});
         streamTextByThread.delete(event.threadId);
@@ -513,7 +531,7 @@ export function createComoteState({
         return;
       }
       binding = commandRouter.getThreadBinding(event.threadId);
-      text = `❌ Codex 出错：${event.message}`;
+      text = t("state.error.reply", { message: event.message });
       dedupeKey = `error:${event.threadId ?? ""}:${Date.now()}`;
       eventLog.error("Codex 错误", { threadId: event.threadId, message: event.message });
     }
@@ -621,7 +639,7 @@ function chunkForChannel(text, size = 1500, maxChunks = 6) {
   }
   if (chunks.length > maxChunks) {
     const kept = chunks.slice(0, maxChunks);
-    kept[maxChunks - 1] += "\n…（输出过长，完整内容见本机 Comote 的对话记录）";
+    kept[maxChunks - 1] += "\n" + t("state.chunk.truncated");
     return kept;
   }
   return chunks;
@@ -629,15 +647,15 @@ function chunkForChannel(text, size = 1500, maxChunks = 6) {
 
 function describeApprovalForChat(approval) {
   const params = approval.params ?? {};
-  const lines = [`⚠️ Codex 请求审批 [${approval.shortCode}]`];
+  const lines = [t("state.approval.title", { code: approval.shortCode })];
   if (Array.isArray(approval.changes) && approval.changes.length > 0) {
     lines.push(summarizeChanges(approval.changes));
   } else {
     const detail = params.command ?? params.reason ?? approval.method;
-    const cwd = params.cwd ? `\n目录：${params.cwd}` : "";
+    const cwd = params.cwd ? "\n" + t("state.approval.cwd", { cwd: params.cwd }) : "";
     lines.push(`${detail}${cwd}`);
   }
-  lines.push(`回复 /approve ${approval.shortCode} 批准，或 /deny ${approval.shortCode} 拒绝。`);
+  lines.push(t("state.approval.instructions", { code: approval.shortCode }));
   return lines.join("\n\n");
 }
 
@@ -648,22 +666,26 @@ function approvalDetail(approval) {
     return summarizeChanges(approval.changes);
   }
   const detail = params.command ?? params.reason ?? approval.method;
-  const cwd = params.cwd ? `\n\n目录：\`${params.cwd}\`` : "";
+  const cwd = params.cwd ? "\n\n" + t("state.approval.cwdMarkdown", { cwd: params.cwd }) : "";
   return `\`${detail}\`${cwd}`;
 }
 
 function summarizeChanges(changes) {
   const rows = changes.slice(0, 10).map((change) => {
     const kind =
-      change.kind?.type === "add" ? "新增" : change.kind?.type === "delete" ? "删除" : "修改";
+      change.kind?.type === "add"
+        ? t("state.changes.kind.add")
+        : change.kind?.type === "delete"
+          ? t("state.changes.kind.delete")
+          : t("state.changes.kind.modify");
     const { added, removed } = countDiffLines(change.diff);
     const stat = added || removed ? ` (+${added} -${removed})` : "";
     return `  ${kind} ${change.path}${stat}`;
   });
   if (changes.length > 10) {
-    rows.push(`  …还有 ${changes.length - 10} 个文件`);
+    rows.push("  " + t("state.changes.more", { count: changes.length - 10 }));
   }
-  return [`将修改 ${changes.length} 个文件：`, ...rows].join("\n");
+  return [t("state.changes.summary", { count: changes.length }), ...rows].join("\n");
 }
 
 function countDiffLines(diff) {

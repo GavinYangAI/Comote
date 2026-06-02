@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 
 import { createServer } from "../src/server/app.js";
 import { createComoteState } from "../src/server/state.js";
+import { setLocale as setI18nLocale } from "../src/core/i18n/index.js";
 
 function createFakeState() {
   const identities = [];
@@ -347,6 +348,62 @@ test("serveStatic returns 404 for a missing static file", async () => {
   assert.equal(response.status, 404);
   const body = await response.json();
   assert.equal(body.error, "not found");
+});
+
+test("GET /api/settings returns locale and supported list", async () => {
+  const state = createComoteState({
+    persisted: { settings: { locale: "en" } },
+    autoStartWeChatRuntime: false,
+    autoStartFeishuRuntime: false,
+  });
+  const app = createServer(state);
+  const server = app.listen(0);
+  await new Promise((resolve) => server.once("listening", resolve));
+
+  const { port } = server.address();
+  const response = await fetch(`http://127.0.0.1:${port}/api/settings`);
+  const body = await response.json();
+  server.close();
+
+  assert.equal(response.status, 200);
+  assert.equal(body.locale, "en");
+  assert.ok(body.supported.includes("ja"));
+
+  // i18n locale is a module-level global; reset so other test files aren't polluted.
+  setI18nLocale("zh");
+});
+
+test("PUT /api/settings sets a valid locale and rejects an invalid one", async () => {
+  const state = createComoteState({
+    autoStartWeChatRuntime: false,
+    autoStartFeishuRuntime: false,
+  });
+  const app = createServer(state);
+  const server = app.listen(0);
+  await new Promise((resolve) => server.once("listening", resolve));
+
+  const { port } = server.address();
+  const validResponse = await fetch(`http://127.0.0.1:${port}/api/settings`, {
+    method: "PUT",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ locale: "fr" }),
+  });
+  const valid = await validResponse.json();
+
+  const invalidResponse = await fetch(`http://127.0.0.1:${port}/api/settings`, {
+    method: "PUT",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ locale: "xx" }),
+  });
+  server.close();
+
+  assert.equal(validResponse.status, 200);
+  assert.equal(valid.locale, "fr");
+  assert.equal(state.getSettings().locale, "fr");
+  assert.equal(invalidResponse.status, 400);
+
+  // i18n locale is a module-level global; reset so other test files aren't polluted.
+  setI18nLocale("zh");
 });
 
 test("wechat outbound queue lists replies and supports ack", async () => {

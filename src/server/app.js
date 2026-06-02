@@ -3,6 +3,7 @@ import { createServer as createHttpServer } from "node:http";
 import { extname, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { SUPPORTED_LOCALES } from "../core/i18n/index.js";
 import { createComoteState } from "./state.js";
 
 const ROOT = fileURLToPath(new URL("../../", import.meta.url));
@@ -54,6 +55,24 @@ async function handleApi(request, response, state) {
         projects: state.projects.listProjects().length,
       },
     });
+    return;
+  }
+
+  if (request.method === "GET" && url.pathname === "/api/settings") {
+    sendJson(response, 200, { locale: state.getSettings().locale, supported: SUPPORTED_LOCALES });
+    return;
+  }
+
+  if (request.method === "PUT" && url.pathname === "/api/settings") {
+    const body = await readJsonBody(request);
+    const locale = body?.locale;
+    if (!SUPPORTED_LOCALES.includes(locale)) {
+      sendJson(response, 400, { error: "unsupported locale" });
+      return;
+    }
+    state.setLocale(locale);
+    await state.persist?.();
+    sendJson(response, 200, { locale });
     return;
   }
 

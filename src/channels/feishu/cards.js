@@ -1,13 +1,15 @@
 // Pure Feishu interactive-card builders. No network calls, no mutable state.
 // Cards use the "config + elements" format already used by this channel.
 
+import { t } from "../../core/i18n/index.js";
+
 const PHASES = {
-  started: { title: "🚀 Codex 开始处理", template: "blue" },
-  progress: { title: "⏳ Codex 处理中", template: "blue" },
-  streaming: { title: "✍️ Codex 正在回复", template: "blue" },
-  completed: { title: "✅ Codex 已完成", template: "green" },
-  error: { title: "❌ Codex 出错", template: "red" },
-  cancelled: { title: "⛔ 任务已取消", template: "grey" },
+  started: { titleKey: "card.phase.started", template: "blue" },
+  progress: { titleKey: "card.phase.progress", template: "blue" },
+  streaming: { titleKey: "card.phase.streaming", template: "blue" },
+  completed: { titleKey: "card.phase.completed", template: "green" },
+  error: { titleKey: "card.phase.error", template: "red" },
+  cancelled: { titleKey: "card.phase.cancelled", template: "grey" },
 };
 
 // Feishu caps a markdown element at ~4096 chars; stay well below that limit
@@ -17,7 +19,7 @@ const MARKDOWN_ELEMENT_LIMIT = 3000;
 export function renderMarkdown(text) {
   const value = String(text ?? "").trim();
   if (!value) {
-    return [{ tag: "markdown", content: "_（无内容）_" }];
+    return [{ tag: "markdown", content: t("card.empty") }];
   }
   if (value.length <= MARKDOWN_ELEMENT_LIMIT) {
     return [{ tag: "markdown", content: value }];
@@ -79,7 +81,7 @@ export function statusCard({ phase, threadId = null, steps = 0, text = "", done 
       actions: [
         {
           tag: "button",
-          text: { tag: "plain_text", content: "取消任务" },
+          text: { tag: "plain_text", content: t("card.cancelButton") },
           type: "danger",
           value: { kind: "cancel", threadId },
         },
@@ -87,7 +89,7 @@ export function statusCard({ phase, threadId = null, steps = 0, text = "", done 
     });
   }
   if (files.length > 0 && threadId) {
-    elements.push({ tag: "markdown", content: "**Codex 改动的文件**（点按钮发到这里）：" });
+    elements.push({ tag: "markdown", content: t("card.changedFiles.intro") });
     elements.push({
       tag: "action",
       actions: files.slice(0, 8).map((file) => ({
@@ -102,13 +104,13 @@ export function statusCard({ phase, threadId = null, steps = 0, text = "", done 
     if (files.length > 8) {
       elements.push({
         tag: "markdown",
-        content: `…还有 ${files.length - 8} 个，用 \`/file <路径>\` 单独获取。`,
+        content: t("card.changedFiles.more", { count: files.length - 8 }),
       });
     }
   }
   return {
     config: { wide_screen_mode: true },
-    header: { title: { tag: "plain_text", content: meta.title }, template: meta.template },
+    header: { title: { tag: "plain_text", content: t(meta.titleKey) }, template: meta.template },
     elements: elements.length > 0 ? elements : [{ tag: "markdown", content: "…" }],
   };
 }
@@ -117,23 +119,23 @@ export function approvalCard({ shortCode, detail }) {
   return {
     config: { wide_screen_mode: true },
     header: {
-      title: { tag: "plain_text", content: `⚠️ Codex 请求审批 [${shortCode}]` },
+      title: { tag: "plain_text", content: t("card.approval.title", { code: shortCode }) },
       template: "orange",
     },
     elements: [
-      { tag: "markdown", content: String(detail ?? "Codex 请求执行一个操作。") },
+      { tag: "markdown", content: String(detail ?? t("card.approval.detailFallback")) },
       {
         tag: "action",
         actions: [
           {
             tag: "button",
-            text: { tag: "plain_text", content: "批准" },
+            text: { tag: "plain_text", content: t("card.approval.approve") },
             type: "primary",
             value: { kind: "approval", code: shortCode, decision: "accept" },
           },
           {
             tag: "button",
-            text: { tag: "plain_text", content: "拒绝" },
+            text: { tag: "plain_text", content: t("card.approval.reject") },
             type: "danger",
             value: { kind: "approval", code: shortCode, decision: "decline" },
           },
@@ -150,11 +152,18 @@ export function approvalResolvedCard({ code, decision }) {
     header: {
       title: {
         tag: "plain_text",
-        content: accepted ? `✅ 已批准 [${code}]` : `⛔ 已拒绝 [${code}]`,
+        content: accepted
+          ? t("card.approval.accepted", { code })
+          : t("card.approval.rejected", { code }),
       },
       template: accepted ? "green" : "grey",
     },
-    elements: [{ tag: "markdown", content: accepted ? "已批准该请求。" : "已拒绝该请求。" }],
+    elements: [
+      {
+        tag: "markdown",
+        content: accepted ? t("card.approval.acceptedBody") : t("card.approval.rejectedBody"),
+      },
+    ],
   };
 }
 
@@ -171,15 +180,17 @@ export function pickerCard({ kind, title, items = [], text = "" }) {
       value: { kind: "pick", pickKind: kind, index: String(item.index) },
     })),
   });
+  const headerTitle =
+    title ?? t(kind === "project" ? "card.picker.project" : "card.picker.conversation");
   return {
     config: { wide_screen_mode: true },
-    header: { title: { tag: "plain_text", content: title }, template: "blue" },
+    header: { title: { tag: "plain_text", content: headerTitle }, template: "blue" },
     elements,
   };
 }
 
 function stepsLine(steps) {
-  return steps > 0 ? `已执行 **${steps}** 步…` : "正在启动…";
+  return steps > 0 ? t("card.steps.running", { steps }) : t("card.steps.starting");
 }
 
 function truncate(value, max) {

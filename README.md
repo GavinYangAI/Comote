@@ -49,6 +49,14 @@
 - **多频道并行** —— 飞书和微信同时绑，互不打架
 - **可扩展** —— 加新 IM 就实现一个 channel adapter；加新 agent 后端就实现一个 connector
 
+## 多语言
+
+Comote 支持全局界面语言切换：中文（默认）、English、日本語、한국어、Français、Español。
+
+- 在 Web 设置页的「语言」下拉切换，**即时生效并持久化**（写入 state.json 的 `settings.locale`）。
+- 覆盖所有用户可见文案：飞书 / 微信的聊天回复与卡片、Web 设置页。服务端运行日志（eventLog）保持原文，不随语言切换。
+- 也可经 API 读写：`GET /api/settings` 返回 `{ locale, supported }`，`PUT /api/settings { locale }` 切换。
+
 ## 快速开始
 
 ### 1. 下载安装

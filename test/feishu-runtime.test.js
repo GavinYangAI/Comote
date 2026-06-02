@@ -11,6 +11,7 @@ import { ProjectStore } from "../src/core/projects.js";
 import { SessionStore } from "../src/core/sessions.js";
 import { FeishuChannelAdapter } from "../src/channels/feishu/adapter.js";
 import { FeishuRuntimeService } from "../src/channels/feishu/runtime.js";
+import { setLocale } from "../src/core/i18n/index.js";
 
 test("feishu runtime verifies URL challenge events", async () => {
   const runtime = new FeishuRuntimeService({
@@ -605,6 +606,36 @@ test("handleCardAction pushfile enqueues media within project, rejects escape", 
     outboundQueue.snapshot().some((e) => e.path === "/etc/passwd"),
     false,
   );
+});
+
+test("oversize media falls back to a localized (en) text", async () => {
+  setLocale("en");
+  try {
+    const dir = mkdtempSync(join(tmpdir(), "comote-rt-i18n-"));
+    const big = join(dir, "big.bin");
+    writeFileSync(big, Buffer.alloc(21 * 1024 * 1024));
+
+    const sentTexts = [];
+    const driver = {
+      getStatus: () => ({}),
+      uploadImage: async () => "img_1",
+      uploadFile: async () => "file_1",
+      sendImage: async () => {},
+      sendFile: async () => {},
+      sendText: async (a) => { sentTexts.push(a.text); },
+      sendCard: async () => {},
+    };
+    const outboundQueue = new OutboundQueue();
+    outboundQueue.enqueue({ channel: "feishu", conversationId: "c1", kind: "file", path: big, fileName: "big.bin" });
+
+    const runtime = new FeishuRuntimeService({ adapter: stubAdapter(), outboundQueue, driver });
+    await runtime.deliverQueued();
+
+    assert.equal(sentTexts.length, 1);
+    assert.match(sentTexts[0], /exceeds 20MB/);
+  } finally {
+    setLocale("zh");
+  }
 });
 
 test("handleCardAction pushfile with no binding returns error and enqueues nothing", async () => {

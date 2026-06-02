@@ -1,4 +1,5 @@
 import { textCard, pickerCard } from "./cards.js";
+import { t } from "../../core/i18n/index.js";
 
 export class FeishuChannelAdapter {
   constructor({ commandRouter, sendReply, onDetectedIdentity = null, allowGroups = false, resolveDisplayName = null, downloadAttachment = null }) {
@@ -78,7 +79,7 @@ export class FeishuChannelAdapter {
               channel: "feishu",
               conversationId: message.conversationId,
               inReplyTo: message.messageId,
-              text: "收到文件，但还没打开项目。先用 /open <编号或路径> 选一个项目，再把文件发我。",
+              text: t("feishu.attachment.noProject"),
             });
             return { kind: "ignored", reason: "no project for attachment" };
           }
@@ -152,7 +153,7 @@ export class FeishuChannelAdapter {
 }
 
 function pickerTitle(pickKind) {
-  return pickKind === "project" ? "请选择项目" : "请选择对话";
+  return pickKind === "project" ? t("card.picker.project") : t("card.picker.conversation");
 }
 
 function readFeishuText(content) {
