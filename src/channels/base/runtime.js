@@ -121,6 +121,11 @@ export class BaseChannelRuntime {
     return payload?.message?.id ?? null;
   }
 
+  // Override point: react to a poll fetch error (e.g. auth failure) before it
+  // propagates. Default does nothing; the error is rethrown by pollOnce.
+  // A channel subclass overrides this to e.g. set needsRelogin and stop().
+  _handleFetchError(error) {}
+
   async pollOnce() {
     if (!this.driver) {
       throw new Error(`${this.channelId} driver is not configured`);
@@ -130,7 +135,13 @@ export class BaseChannelRuntime {
     }
     this._polling = true;
     try {
-      const result = await this.driver.fetchUpdates({ cursor: this.cursor });
+      let result;
+      try {
+        result = await this.driver.fetchUpdates({ cursor: this.cursor });
+      } catch (error) {
+        this._handleFetchError(error);
+        throw error;
+      }
       this.cursor = result.nextCursor ?? this.cursor;
       let inbound = 0;
       for (const update of result.updates ?? []) {

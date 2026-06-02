@@ -166,3 +166,19 @@ test("pollOnce throws when no driver configured", async () => {
   });
   await assert.rejects(() => runtime.pollOnce(), /driver is not configured/);
 });
+
+test("pollOnce calls _handleFetchError on a fetch failure (override point)", async () => {
+  const queue = new OutboundQueue();
+  const seen = [];
+  class Sub extends BaseChannelRuntime {
+    _handleFetchError(error) { seen.push(error.message); this.stop(); }
+  }
+  const runtime = new Sub({
+    channelId: "test", inboundMode: "poll",
+    adapter: { handleInbound: async () => {} }, outboundQueue: queue,
+    renderer: { render: async () => {} },
+    driver: { getStatus: () => ({}), fetchUpdates: async () => { throw new Error("auth failed"); }, normalizeUpdate: (u) => u },
+  });
+  await assert.rejects(() => runtime.pollOnce(), /auth failed/);
+  assert.deepEqual(seen, ["auth failed"]);
+});
