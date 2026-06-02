@@ -1,0 +1,84 @@
+import { routerReplyToSemantic } from "./messages.js";
+
+// Shared inbound pipeline for every channel: normalize → group-gate → detect
+// identity → optional attachment download → route to commandRouter → enqueue a
+// semantic reply. Subclasses implement only normalizeInbound(payload).
+export class BaseChannelAdapter {
+  constructor({
+    channelId,
+    commandRouter,
+    sendReply,
+    onDetectedIdentity = null,
+    resolveIdentityName = null,
+    downloadAttachment = null,
+    allowGroups = false,
+  }) {
+    this.channelId = channelId;
+    this.commandRouter = commandRouter;
+    this.sendReply = sendReply;
+    this.onDetectedIdentity = onDetectedIdentity;
+    this.resolveIdentityName = resolveIdentityName;
+    this.downloadAttachment = downloadAttachment;
+    this.allowGroups = allowGroups;
+  }
+
+  // Subclasses MUST override.
+  normalizeInbound(payload) {
+    throw new Error("normalizeInbound not implemented");
+  }
+
+  async handleInbound(payload) {
+    const message = this.normalizeInbound(payload);
+    if (message.conversationType !== "direct" && !this.allowGroups) {
+      return { kind: "ignored", reason: "group messages are disabled" };
+    }
+    await this.resolveIdentityName?.(message.identity);
+    this.onDetectedIdentity?.(message.identity);
+
+    let promptText = message.text;
+    if (message.attachments?.length > 0 && this.downloadAttachment) {
+      const prefixes = [];
+      for (const attachment of message.attachments) {
+        try {
+          const { relativePath } = await this.downloadAttachment({ attachment, identity: message.identity });
+          prefixes.push(`[attachment: ${relativePath}]`);
+        } catch (error) {
+          if (error.message === "NO_PROJECT") {
+            await this.sendReply({
+              channel: this.channelId,
+              conversationId: message.conversationId,
+              kind: "text",
+              inReplyTo: message.messageId,
+              text: "收到文件，但还没打开项目。先用 /open 选一个项目，再把文件发我。",
+            });
+            return { kind: "ignored", reason: "no project for attachment" };
+          }
+          // other download errors: skip this attachment, keep routing
+        }
+      }
+      promptText = `${prefixes.join("\n")}\n${message.text}`.trim();
+    }
+
+    const reply = await this.commandRouter.handleMessageAsync({
+      identity: message.identity,
+      text: promptText,
+      attachments: message.attachments,
+      conversation: {
+        channel: this.channelId,
+        conversationId: message.conversationId,
+        ...(message.accountId ? { accountId: message.accountId } : {}),
+      },
+    });
+
+    const semantic = routerReplyToSemantic(reply, {
+      channel: this.channelId,
+      conversationId: message.conversationId,
+      accountId: message.accountId,
+      inReplyTo: message.messageId,
+    });
+    if (semantic) {
+      await this.sendReply(semantic);
+    }
+    return reply ?? { kind: "ignored" };
+  }
+}
