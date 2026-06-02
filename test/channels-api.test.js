@@ -120,6 +120,72 @@ test("capability gating: deliver only on push-mode channels", async () => {
   assert.equal(wechat.status, 404);
 });
 
+test("GET /api/channels lists channel meta + status", async () => {
+  const { server, port } = await startServer();
+  const res = await fetch(`http://127.0.0.1:${port}/api/channels`);
+  const list = await res.json();
+  server.close();
+
+  assert.equal(res.status, 200);
+  const byId = Object.fromEntries(list.map((c) => [c.id, c]));
+  assert.ok(byId.feishu, "feishu present");
+  assert.ok(byId.wechat, "wechat present");
+  // meta fields surfaced:
+  assert.equal(byId.feishu.inboundMode, "push");
+  assert.equal(byId.wechat.inboundMode, "poll");
+  assert.equal(byId.feishu.binding, "qr");
+  // status + runtime + config attached:
+  assert.equal(typeof byId.feishu.status, "string"); // adapter state
+  assert.ok(byId.feishu.runtime); // runtime status object
+  assert.ok(byId.wechat.config !== undefined); // public config (or {})
+  // config must be the REDACTED public config — never a raw secret.
+  assert.equal(byId.feishu.config.appSecret, undefined, "raw secret must never leak");
+});
+
+test("GET /api/status channels still reports per-channel state (registry-driven)", async () => {
+  const { server, port } = await startServer();
+  const res = await fetch(`http://127.0.0.1:${port}/api/status`);
+  const body = await res.json();
+  server.close();
+
+  assert.ok("wechat" in body.channels);
+  assert.ok("feishu" in body.channels);
+  assert.equal(typeof body.channels.wechat, "string");
+});
+
+test("GET /api/status falls back to hardcoded wechat/feishu when state has no registry", async () => {
+  // A hand-built, registry-LESS state (mirrors server.test.js's createFakeState
+  // minimal shape) so /api/status takes the `state.registry ? ... : <fallback>`
+  // ELSE branch. Stub only the fields the handler dereferences.
+  const state = {
+    channels: {
+      wechat: { getStatus: () => ({ state: "adapter_ready" }) },
+      feishu: { getStatus: () => ({ state: "reserved" }) },
+    },
+    connectors: {
+      desktop: { getStatus: () => ({ name: "Codex Desktop", role: "primary", state: "not_connected" }) },
+      cli: { getStatus: () => ({ name: "Codex CLI", role: "fallback", state: "available" }) },
+    },
+    authorization: { listIdentities: () => [] },
+    projects: { listProjects: () => [] },
+  };
+  // Sanity: this state hits the FALLBACK branch, not the registry branch.
+  assert.equal("registry" in state, false);
+
+  const app = createServer(state);
+  const server = app.listen(0, "127.0.0.1");
+  await new Promise((resolve) => server.once("listening", resolve));
+  const { port } = server.address();
+  const res = await fetch(`http://127.0.0.1:${port}/api/status`);
+  const body = await res.json();
+  server.close();
+
+  assert.equal(res.status, 200);
+  // Fallback resolved each channel's adapter state via getStatus().state.
+  assert.equal(body.channels.wechat, "adapter_ready");
+  assert.equal(body.channels.feishu, "reserved");
+});
+
 test("outbound-replies (no id) lists across channels", async () => {
   const { server, port } = await startServer();
   const response = await fetch(`http://127.0.0.1:${port}/api/channels/outbound-replies`);

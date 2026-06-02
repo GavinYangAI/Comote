@@ -42,10 +42,19 @@ async function handleApi(request, response, state) {
     sendJson(response, 200, {
       appName: "Comote",
       bridge: "running",
-      channels: {
-        wechat: state.channels?.wechat?.getStatus?.().state ?? "reserved",
-        feishu: state.channels?.feishu?.getStatus?.().state ?? "reserved",
-      },
+      channels: state.registry
+        ? Object.fromEntries(
+            state.registry.listChannels().map((p) => [
+              p.meta.id,
+              state.channels?.[p.meta.id]?.getStatus?.().state ?? "reserved",
+            ]),
+          )
+        : {
+            // Fallback for registry-less mock states (e.g. hand-built test
+            // fixtures). Preserves the original hardcoded shape/keys/values.
+            wechat: state.channels?.wechat?.getStatus?.().state ?? "reserved",
+            feishu: state.channels?.feishu?.getStatus?.().state ?? "reserved",
+          },
       connectors: {
         desktop: state.connectors.desktop.getStatus(),
         cli: state.connectors.cli.getStatus(),
@@ -222,6 +231,20 @@ async function handleApi(request, response, state) {
     state.eventLog?.info("已处理通道命令", { channel: body?.identity?.channel ?? "unknown" });
     await state.persist?.();
     sendJson(response, 200, reply);
+    return;
+  }
+
+  // The channel list (meta + live status) for a generic frontend binding page.
+  // Registry-driven, so a newly registered channel auto-appears here. config is
+  // the wrapper's PUBLIC config (redacted) — never raw secrets.
+  if (request.method === "GET" && url.pathname === "/api/channels") {
+    const list = (state.registry?.listChannels?.() ?? []).map((p) => ({
+      ...p.meta,
+      status: state.channels?.[p.meta.id]?.getStatus?.().state ?? "reserved",
+      runtime: state.runtime?.[p.meta.id]?.getStatus?.() ?? { state: "not_configured" },
+      config: state.runtime?.[p.meta.id]?.getConfig?.() ?? {},
+    }));
+    sendJson(response, 200, list);
     return;
   }
 
