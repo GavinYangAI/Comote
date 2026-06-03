@@ -462,7 +462,7 @@ function formatVersionResponse(state) {
   // be stopped on quit (B3b PID adoption). Always expose the daemon's own pid.
   const pid = process.pid;
   if (!state.versionChecker) {
-    return { version, pid, latest: null, hasUpdate: false, releaseUrl: null, checkedAt: null };
+    return { version, pid, latest: null, hasUpdate: false, releaseUrl: null, downloadUrl: null, checkedAt: null };
   }
   const result = state.versionChecker.getLastResult();
   return {
@@ -471,6 +471,7 @@ function formatVersionResponse(state) {
     latest: result.latest,
     hasUpdate: Boolean(result.hasUpdate),
     releaseUrl: result.releaseUrl,
+    downloadUrl: result.downloadUrl ?? null,
     releaseNotes: result.releaseNotes,
     checkedAt: result.checkedAt,
     error: result.error,

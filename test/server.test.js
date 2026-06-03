@@ -109,6 +109,41 @@ test("version API reports the running process id and version", async () => {
   assert.equal(body.pid, process.pid);
   // version is present (may be null when unknown, but the key must exist).
   assert.ok("version" in body);
+  // downloadUrl key must always be present (null when no checker is wired).
+  assert.ok("downloadUrl" in body);
+  assert.equal(body.downloadUrl, null);
+});
+
+test("version API surfaces the checker's downloadUrl", async () => {
+  const state = {
+    ...createFakeState(),
+    currentVersion: "0.2.1",
+    versionChecker: {
+      getLastResult: () => ({
+        latest: "0.3.0",
+        hasUpdate: true,
+        releaseUrl: "https://github.com/owner/repo/releases/tag/v0.3.0",
+        downloadUrl: "https://github.com/owner/repo/releases/download/v0.3.0/comote.dmg",
+        releaseNotes: "notes",
+        checkedAt: "2026-06-04T00:00:00.000Z",
+        error: null,
+      }),
+    },
+  };
+  const app = createServer(state);
+  const server = app.listen(0);
+  await new Promise((resolve) => server.once("listening", resolve));
+
+  const { port } = server.address();
+  const response = await fetch(`http://127.0.0.1:${port}/api/version`);
+  const body = await response.json();
+  server.close();
+
+  assert.equal(response.status, 200);
+  assert.equal(
+    body.downloadUrl,
+    "https://github.com/owner/repo/releases/download/v0.3.0/comote.dmg",
+  );
 });
 
 test("serves svg assets with an image content type", async () => {
