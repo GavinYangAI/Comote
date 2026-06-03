@@ -272,6 +272,59 @@ test("desktop connector starts turns and records approval requests", async () =>
   ]);
 });
 
+test("desktop connector forwards images as localImage input items", async () => {
+  const transport = new MemoryTransport();
+  const connector = new CodexDesktopConnector({ transport });
+
+  connector.startTurn({
+    threadId: "thread_1",
+    text: "what is in this picture?",
+    cwd: "/repo",
+    images: ["/repo/.comote/uploads/a.png"],
+  });
+  await flushAsyncWork();
+
+  assert.deepEqual(transport.sent[0].params.input, [
+    { type: "text", text: "what is in this picture?", text_elements: [] },
+    { type: "localImage", path: "/repo/.comote/uploads/a.png" },
+  ]);
+});
+
+test("cli connector passes images via a comma-separated --image flag", async () => {
+  const calls = [];
+  const connector = new CodexCliConnector({
+    execFileAsync: async (file, args) => {
+      calls.push({ file, args });
+      return { stdout: "ok", stderr: "" };
+    },
+  });
+
+  await connector.runPrompt({
+    cwd: "/repo",
+    text: "describe these",
+    images: ["/repo/.comote/uploads/a.png", "/repo/.comote/uploads/b.png"],
+  });
+
+  assert.equal(calls[0].file, "codex");
+  const imageIdx = calls[0].args.indexOf("--image");
+  assert.ok(imageIdx >= 0, "expected --image flag");
+  assert.equal(calls[0].args[imageIdx + 1], "/repo/.comote/uploads/a.png,/repo/.comote/uploads/b.png");
+});
+
+test("cli connector omits --image when there are no images", async () => {
+  const calls = [];
+  const connector = new CodexCliConnector({
+    execFileAsync: async (file, args) => {
+      calls.push({ file, args });
+      return { stdout: "ok", stderr: "" };
+    },
+  });
+
+  await connector.runPrompt({ cwd: "/repo", text: "hi" });
+
+  assert.ok(!calls[0].args.includes("--image"));
+});
+
 test("desktop connector emits thread events and routes approvals by short code", async () => {
   const transport = new MemoryTransport();
   const connector = new CodexDesktopConnector({ transport });

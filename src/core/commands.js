@@ -183,7 +183,7 @@ export class CommandRouter {
         return this.text(await this.resolveApproval(rest, "decline"));
       }
       if (!command.startsWith("/")) {
-        return await this.handlePlainText(message.identity, message.text);
+        return await this.handlePlainText(message.identity, message.text, message.attachments);
       }
       // handleMessage re-normalizes; normalizeChannelMessage is idempotent.
       return this.handleMessage(message);
@@ -508,7 +508,7 @@ export class CommandRouter {
     return t("cmd.new.created", { title: session.title, id: session.id });
   }
 
-  async newSessionAsync(identity, message) {
+  async newSessionAsync(identity, message, attachments = []) {
     const projectPath = this.requireCurrentProject(identity);
     const key = this.identityKey(identity);
     if (!message) {
@@ -516,12 +516,13 @@ export class CommandRouter {
       return t("cmd.session.promptFirstMessage");
     }
     this.enforceTurnRate(identity);
+    const images = this.collectImagePaths(attachments, projectPath);
     if (this.codexDesktop?.getStatus?.().state === "connected") {
       const started = await this.codexDesktop.startThread({ cwd: projectPath });
       const threadId = started.thread.id;
       this.bindThreadForIdentity(identity, threadId, projectPath);
       this.transcript?.record(threadId, "user", message);
-      await this.codexDesktop.startTurn({ threadId, text: message, cwd: projectPath });
+      await this.codexDesktop.startTurn({ threadId, text: message, cwd: projectPath, images });
       this.sessions.upsertExternalSession({
         projectPath,
         id: threadId,
@@ -532,7 +533,7 @@ export class CommandRouter {
       return t("cmd.new.sentDesktop", { id: threadId });
     }
     if (this.codexCli?.runPrompt) {
-      const result = await this.codexCli.runPrompt({ cwd: projectPath, text: message });
+      const result = await this.codexCli.runPrompt({ cwd: projectPath, text: message, images });
       this.sessions.upsertExternalSession({
         projectPath,
         id: result.id,
@@ -546,7 +547,7 @@ export class CommandRouter {
     return this.newSession(identity, message);
   }
 
-  async handlePlainText(identity, text) {
+  async handlePlainText(identity, text, attachments = []) {
     const key = this.identityKey(identity);
     const trimmed = text.trim();
     const pending = this.pendingByIdentity.get(key);
@@ -564,7 +565,7 @@ export class CommandRouter {
       if (!trimmed) {
         return this.text(t("cmd.session.promptFirstMessage"));
       }
-      return this.text(await this.newSessionAsync(identity, trimmed));
+      return this.text(await this.newSessionAsync(identity, trimmed, attachments));
     }
 
     const projectPath = this.currentProjectByIdentity.get(key);
@@ -574,7 +575,35 @@ export class CommandRouter {
     if (!this.sessions.getActiveSession(projectPath)) {
       return this.sessionsTextAsync(identity, { choose: true });
     }
-    return this.text(await this.sendToActiveSession(identity, text));
+    return this.text(await this.sendToActiveSession(identity, text, attachments));
+  }
+
+  // Collects the local image attachments for the current turn and resolves each
+  // to an absolute path inside the project root. The base adapter has already
+  // downloaded inbound attachments into `.comote/uploads/` and stamped a
+  // `localPath` (relative) + `kind` onto each; here we keep only the images and
+  // re-run them through resolveWithinProject so a path escape is rejected before
+  // the file is ever handed to Codex as an image.
+  collectImagePaths(attachments, projectPath) {
+    if (!Array.isArray(attachments) || attachments.length === 0) {
+      return [];
+    }
+    const images = [];
+    for (const attachment of attachments) {
+      const localPath = attachment?.localPath;
+      if (!localPath) {
+        continue;
+      }
+      const kind = attachment?.kind ?? classifyMedia(localPath);
+      if (kind !== "image") {
+        continue;
+      }
+      const safePath = resolveWithinProject(projectPath, localPath);
+      if (safePath) {
+        images.push(safePath);
+      }
+    }
+    return images;
   }
 
   async chooseProject(identity, selector) {
@@ -590,7 +619,7 @@ export class CommandRouter {
     return { kind: "text", text: `${opened}\n\n${sessionsReply.text}`, picker: sessionsReply.picker };
   }
 
-  async sendToActiveSession(identity, text) {
+  async sendToActiveSession(identity, text, attachments = []) {
     const projectPath = this.requireCurrentProject(identity);
     const activeSession = this.sessions.getActiveSession(projectPath);
     if (!activeSession) {
@@ -603,14 +632,15 @@ export class CommandRouter {
     this.bindThreadForIdentity(identity, activeSession.id, projectPath);
     await this.resumeDesktopThread(activeSession.id, projectPath);
     this.transcript?.record(activeSession.id, "user", text);
+    const images = this.collectImagePaths(attachments, projectPath);
     try {
-      await this.codexDesktop.startTurn({ threadId: activeSession.id, text, cwd: projectPath });
+      await this.codexDesktop.startTurn({ threadId: activeSession.id, text, cwd: projectPath, images });
     } catch (error) {
       if (!isThreadNotFoundError(error)) {
         throw error;
       }
       await this.resumeDesktopThread(activeSession.id, projectPath);
-      await this.codexDesktop.startTurn({ threadId: activeSession.id, text, cwd: projectPath });
+      await this.codexDesktop.startTurn({ threadId: activeSession.id, text, cwd: projectPath, images });
     }
     return t("cmd.send.processing", { id: activeSession.id });
   }
