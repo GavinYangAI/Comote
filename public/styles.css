@@ -653,6 +653,16 @@ button,
   box-shadow: 0 5px 14px rgba(47, 110, 240, 0.30);
 }
 
+.dingtalk-icon {
+  background: linear-gradient(140deg, #3aa0ff, #1577e6);
+  box-shadow: 0 5px 14px rgba(21, 119, 230, 0.30);
+}
+
+.telegram-icon {
+  background: linear-gradient(140deg, #37b3e8, #1d93d2);
+  box-shadow: 0 5px 14px rgba(29, 147, 210, 0.30);
+}
+
 /* ── KV table (channel status rows) ──
    Each dt+dd pair forms one visual row. We use subgrid to align columns
    while only showing horizontal separators (no vertical divider).
