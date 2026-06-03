@@ -389,9 +389,22 @@ function channelConfigFormHtml(ch) {
 // (bound account summary, or the empty scan hint) from current config. Bind/save
 // clicks are handled by the delegated listener in setupChannelCards.
 function paintChannelCardResting(ch) {
-  if (ch.binding === "qr" && !activeLogin[ch.id]) {
-    renderQrInto(`${ch.id}LoginResult`, restingLoginView(ch, tWeb));
+  if (ch.binding !== "qr") {
+    return;
   }
+  const active = activeLogin[ch.id];
+  if (active) {
+    // A login is in flight for this card. A full re-render just rebuilt the card's
+    // QR element back to the static scan-hint placeholder; immediately repaint the
+    // last live login view so the QR doesn't blink out until the next poll tick.
+    // (The poller is keyed by id in module state and re-finds the element by id on
+    // its next tick, so it keeps working across the innerHTML rebuild.)
+    if (active.lastView) {
+      renderQrInto(`${ch.id}LoginResult`, active.lastView);
+    }
+    return;
+  }
+  renderQrInto(`${ch.id}LoginResult`, restingLoginView(ch, tWeb));
 }
 
 // Reads the current values of a channel's visible config inputs. Returns {} when
@@ -725,6 +738,10 @@ function renderCodexNotice(state) {
 // vocabulary.
 
 async function startQrLogin(ch) {
+  // Rebind-while-polling: kill any running poll timer for this channel BEFORE we
+  // overwrite activeLogin[ch.id] with a new object below — otherwise the prior
+  // setInterval is orphaned and keeps firing /login/status forever.
+  clearInterval(activeLogin[ch.id]?.pollTimer);
   const card = document.querySelector(`#channelCards article[data-channel="${cssEscapeId(ch.id)}"]`);
   const button = card?.querySelector("[data-bind]") ?? null;
   if (button) {
@@ -740,8 +757,9 @@ async function startQrLogin(ch) {
       headers: { "content-type": "application/json" },
       body: JSON.stringify(configValues),
     });
-    activeLogin[ch.id] = { loginId: start.loginId ?? null, startCtx: start, pollTimer: null };
-    renderQrInto(`${ch.id}LoginResult`, normalizedLoginView(start, tWeb));
+    const startView = normalizedLoginView(start, tWeb);
+    activeLogin[ch.id] = { loginId: start.loginId ?? null, startCtx: start, pollTimer: null, lastView: startView };
+    renderQrInto(`${ch.id}LoginResult`, startView);
     pollQrLogin(ch, start);
   } catch (error) {
     delete activeLogin[ch.id];
@@ -774,6 +792,11 @@ function pollQrLogin(ch, startCtx) {
       // states omit qrUrl, so fall back to the one from /login/start.
       if (!view.qrUrl) {
         view.qrUrl = startCtx.qrUrl ?? null;
+      }
+      // Remember the live view so a full #channelCards re-render (5s auto-refresh)
+      // can immediately repaint this in-flight QR instead of the static placeholder.
+      if (activeLogin[ch.id]) {
+        activeLogin[ch.id].lastView = view;
       }
       renderQrInto(`${ch.id}LoginResult`, view);
       if (["confirmed", "expired", "failed"].includes(view.phase)) {
