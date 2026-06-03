@@ -83,3 +83,15 @@ test("buildStatusCard returns a cardParamMap", () => {
   assert.equal(typeof map.title, "string");
   assert.equal(map.body, "done");
 });
+
+test("buildStatusCard maps each phase to a title + steps", () => {
+  const r = createDingTalkRenderer({ templates: { status: "st.schema" } });
+  const started = r.buildStatusCard({ phase: "started", threadId: "t", steps: 0 });
+  assert.equal(typeof started.title, "string");
+  assert.equal(typeof started.steps, "string"); // "starting…" localized
+  const progress = r.buildStatusCard({ phase: "progress", threadId: "t", steps: 3 });
+  assert.match(progress.steps, /3/);
+  const err = r.buildStatusCard({ phase: "error", text: "boom", done: true });
+  assert.equal(err.body, "boom");
+  assert.equal(err.done, "true"); // toParamMap stringifies the boolean
+});
