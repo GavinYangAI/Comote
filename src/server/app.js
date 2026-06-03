@@ -457,12 +457,17 @@ async function serveStatic(request, response) {
 
 function formatVersionResponse(state) {
   const version = state.currentVersion ?? null;
+  // The Tauri shell probes this endpoint before reusing a running daemon: it
+  // matches `version` to decide reuse, and adopts the daemon by `pid` so it can
+  // be stopped on quit (B3b PID adoption). Always expose the daemon's own pid.
+  const pid = process.pid;
   if (!state.versionChecker) {
-    return { version, latest: null, hasUpdate: false, releaseUrl: null, checkedAt: null };
+    return { version, pid, latest: null, hasUpdate: false, releaseUrl: null, checkedAt: null };
   }
   const result = state.versionChecker.getLastResult();
   return {
     version,
+    pid,
     latest: result.latest,
     hasUpdate: Boolean(result.hasUpdate),
     releaseUrl: result.releaseUrl,

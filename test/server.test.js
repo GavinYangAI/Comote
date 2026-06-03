@@ -91,6 +91,26 @@ test("status API exposes Comote state", async () => {
   assert.equal(body.connectors.desktop.role, "primary");
 });
 
+test("version API reports the running process id and version", async () => {
+  const app = createServer();
+  const server = app.listen(0);
+  await new Promise((resolve) => server.once("listening", resolve));
+
+  const { port } = server.address();
+  const response = await fetch(`http://127.0.0.1:${port}/api/version`);
+  const body = await response.json();
+  server.close();
+
+  assert.equal(response.status, 200);
+  // The Tauri shell parses pid from this response to adopt an already-running
+  // daemon (B3b PID adoption), so it must be a positive integer.
+  assert.equal(typeof body.pid, "number");
+  assert.ok(Number.isInteger(body.pid) && body.pid > 0);
+  assert.equal(body.pid, process.pid);
+  // version is present (may be null when unknown, but the key must exist).
+  assert.ok("version" in body);
+});
+
 test("serves svg assets with an image content type", async () => {
   const app = createServer();
   const server = app.listen(0);
