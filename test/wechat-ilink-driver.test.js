@@ -188,6 +188,36 @@ test("sends text through Tencent iLink-style sendmessage endpoint", async () => 
   });
 });
 
+test("sendText normalizes newlines to CRLF for WeChat desktop", async () => {
+  const calls = [];
+  const driver = new WeChatIlinkDriver({
+    baseUrl: "http://x",
+    token: "t",
+    accountId: "a",
+    fetchImpl: async (u, o) => {
+      calls.push(JSON.parse(o.body));
+      return { ok: true, json: async () => ({ ok: true }) };
+    },
+  });
+  await driver.sendText({ conversationId: "c", text: "line1\nline2" });
+  const sent = JSON.stringify(calls[0]);
+  assert.ok(sent.includes("line1\\r\\nline2"), "lone \\n should become \\r\\n");
+});
+
+test("sendText already-CRLF text is left as a single CRLF (no doubling)", async () => {
+  const calls = [];
+  const driver = new WeChatIlinkDriver({
+    baseUrl: "http://x",
+    token: "t",
+    fetchImpl: async (u, o) => {
+      calls.push(JSON.parse(o.body));
+      return { ok: true, json: async () => ({ ok: true }) };
+    },
+  });
+  await driver.sendText({ conversationId: "c", text: "line1\r\nline2" });
+  assert.equal(calls[0].msg.item_list[0].text_item.text, "line1\r\nline2");
+});
+
 test("starts and checks a WeChat QR login session without user-supplied URL or token", async () => {
   const requests = [];
   const driver = new WeChatIlinkDriver({
