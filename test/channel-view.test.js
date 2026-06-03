@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   channelBadge, channelRows, channelFormSpec,
   channelBoundButton, normalizedLoginView, restingLoginView, readinessFromChannels,
+  isConnected, partitionChannels, channelSummaryLine, bindingAffordance, channelSetup,
 } from "../public/channel-view.js";
 
 const t = (k) => k; // echo key
@@ -97,4 +98,58 @@ test("works for an arbitrary credentials plugin (generalization)", () => {
   assert.equal(channelBadge(dingtalk, t).tone, "warning");
   const spec = channelFormSpec(dingtalk, t);
   assert.equal(spec.find((f) => f.name === "appSecret").type, "password");
+});
+
+function ch(over = {}) {
+  return { id: "x", binding: "token", boundWhen: { source: "config", field: "linkedChatId" },
+    config: {}, runtime: { state: "not_configured" }, status: {}, states: {}, statusFlags: [], statusRows: [], ...over };
+}
+
+test("isConnected: bound OR config.configured; unconfigured is false", () => {
+  assert.equal(isConnected(ch({ config: {} })), false);
+  assert.equal(isConnected(ch({ config: { configured: true } })), true);
+  assert.equal(isConnected(ch({ config: { linkedChatId: "9" } })), true); // bound
+});
+
+test("partitionChannels splits connected vs available, stable order", () => {
+  const a = ch({ id: "a", config: {} });                       // available
+  const b = ch({ id: "b", config: { configured: true } });      // connected
+  const c = ch({ id: "c", config: { linkedChatId: "9" } });     // connected (bound)
+  const { connected, available } = partitionChannels([a, b, c]);
+  assert.deepEqual(connected.map((x) => x.id), ["b", "c"]);
+  assert.deepEqual(available.map((x) => x.id), ["a"]);
+});
+
+test("channelBadge shows pending-pair for token configured-but-not-bound", () => {
+  const tg = ch({ binding: "token", config: { configured: true } }); // configured, not bound
+  assert.deepEqual(channelBadge(tg, t), { text: "web.channel.state.pendingPair", tone: "warning" });
+  const qr = ch({ binding: "qr", config: { configured: true }, boundWhen: { source: "config", field: "loggedIn" } });
+  assert.deepEqual(channelBadge(qr, t), { text: "web.channel.state.pendingScan", tone: "warning" });
+});
+
+test("channelBadge unchanged for bound/running and statusFlags still win", () => {
+  const bound = ch({ config: { linkedChatId: "9" }, runtime: { state: "running" }, states: { running: { labelKey: "web.channel.state.running", tone: "success" } } });
+  assert.deepEqual(channelBadge(bound, t), { text: "web.channel.state.running", tone: "success" });
+  const flagged = ch({ statusFlags: [{ source: "runtime", field: "needsRelogin", tone: "warning", badgeKey: "FLAG" }], runtime: { needsRelogin: true, state: "running" } });
+  assert.deepEqual(channelBadge(flagged, t), { text: "FLAG", tone: "warning" });
+});
+
+test("channelSummaryLine: account when bound, pending hint otherwise, empty when unconfigured", () => {
+  assert.equal(channelSummaryLine(ch({ config: { linkedChatId: "9", linkedUserName: "Ann" } }), t), "Ann");
+  assert.equal(channelSummaryLine(ch({ binding: "token", config: { configured: true } }), t), "web.channel.summary.pendingPair");
+  assert.equal(channelSummaryLine(ch({ config: {} }), t), "");
+});
+
+test("bindingAffordance: pairing code for token-pending, qr for qr-pending, null otherwise", () => {
+  assert.deepEqual(bindingAffordance(ch({ binding: "token", config: { configured: true, pairingCode: "7K2M9Q" } })), { kind: "pairingCode", code: "7K2M9Q" });
+  assert.deepEqual(bindingAffordance(ch({ binding: "qr", config: { configured: true }, boundWhen: { source: "config", field: "loggedIn" } })), { kind: "qr" });
+  assert.equal(bindingAffordance(ch({ config: { linkedChatId: "9" } })), null); // bound
+  assert.equal(bindingAffordance(ch({ config: {} })), null); // unconfigured
+});
+
+test("channelSetup: splits steps by newline + maps link, null when no meta.setup", () => {
+  const c = ch({ setup: { stepsKey: "S", link: { url: "https://x", labelKey: "L" } } });
+  const tt = (k) => (k === "S" ? "step one\nstep two\n" : k === "L" ? "open" : k);
+  assert.deepEqual(channelSetup(c, tt), { steps: ["step one", "step two"], link: { url: "https://x", label: "open" } });
+  assert.equal(channelSetup(ch({}), t), null);
 });
