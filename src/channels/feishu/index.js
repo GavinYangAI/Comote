@@ -108,6 +108,7 @@ const feishuPlugin = {
       { labelKey: "web.channel.feishu.row.app", source: "config", field: "appId", fallbackKey: "web.channel.feishu.row.app.unset" },
     ],
     boundWhen: { source: "config", field: "configured" },
+    setup: { stepsKey: "web.channel.feishu.setup.steps", link: { url: "https://open.feishu.cn/app", labelKey: "web.channel.feishu.setup.link" } },
   },
   normalizeConfig: (raw) => normalizeFeishuConfig(raw),
   normalizeSecretPatch: (raw) => normalizeFeishuSecretPatch(raw),

@@ -75,6 +75,7 @@ const wechatPlugin = {
       { labelKey: "web.channel.wechat.row.hostApp", source: "status", field: "externalAgentHostRequired", map: { true: "web.channel.wechat.row.hostApp.required", false: "web.channel.wechat.row.hostApp.notRequired" } },
     ],
     boundWhen: { source: "config", field: "loggedIn" },
+    setup: { stepsKey: "web.channel.wechat.setup.steps" },
   },
   normalizeConfig: (raw) => normalizeWeChatConfig(raw),
   publicConfig: (config) => publicWeChatConfig(config),

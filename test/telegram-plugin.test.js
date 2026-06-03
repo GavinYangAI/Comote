@@ -15,10 +15,13 @@ test("meta declares a token channel with the right shape", () => {
   assert.deepEqual(m.boundWhen, { source: "config", field: "linkedChatId" });
 });
 
-test("statusRows expose account + pairing code from config", () => {
+test("statusRows is account-only (no pairing row) and meta.setup exists", () => {
   const rows = telegramPlugin.meta.statusRows;
-  const pairing = rows.find((r) => r.field === "pairingCode");
-  assert.equal(pairing.source, "config");
+  assert.equal(rows.some((r) => r.field === "pairingCode"), false);
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].field, "linkedUserName");
+  assert.equal(telegramPlugin.meta.setup.stepsKey, "web.channel.telegram.setup.steps");
+  assert.ok(telegramPlugin.meta.setup.link.url);
 });
 
 test("normalizeConfig keeps token + binding/pairing fields", () => {

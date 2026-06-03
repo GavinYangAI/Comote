@@ -65,9 +65,9 @@ const telegramPlugin = {
     statusFlags: [],
     statusRows: [
       { labelKey: "web.channel.row.account", source: "config", field: "linkedUserName", fallback: ["linkedChatId"], fallbackKey: "web.channel.telegram.row.account.unpaired" },
-      { labelKey: "web.channel.telegram.row.pairing", source: "config", field: "pairingCode", fallbackKey: "web.channel.telegram.row.pairing.done" },
     ],
     boundWhen: { source: "config", field: "linkedChatId" },
+    setup: { stepsKey: "web.channel.telegram.setup.steps", link: { url: "https://t.me/BotFather", labelKey: "web.channel.telegram.setup.link" } },
   },
   normalizeConfig: (raw) => normalizeTelegramConfig(raw),
   normalizeSecretPatch: (raw) => normalizeTelegramSecretPatch(raw),
