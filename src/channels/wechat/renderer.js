@@ -17,6 +17,11 @@ export function createWeChatRenderer() {
           conversationId: reply.conversationId,
           ...(reply.accountId ? { accountId: reply.accountId } : {}),
           ...(reply.inReplyTo ? { inReplyTo: reply.inReplyTo } : {}),
+          // Per-chunk dedupeKey so the driver's deterministic idempotency key
+          // engages while keeping each chunk distinct (chunks 2..N must not be
+          // dropped as dupes of chunk 1). Omitted when the reply has none —
+          // the driver then falls back to a random key.
+          ...(reply.dedupeKey ? { dedupeKey: `${reply.dedupeKey}:${i}` } : {}),
           text: body,
         });
       }

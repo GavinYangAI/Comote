@@ -87,6 +87,28 @@ test("media reply degrades to a paperclip filename line", async () => {
   assert.match(driver.sent[0].text, /report\.pdf/);
 });
 
+test("render forwards a chunk-indexed dedupeKey when reply.dedupeKey is present", async () => {
+  const r = createWeChatRenderer();
+  const driver = stubDriver();
+  await r.render(
+    { kind: "text", conversationId: "dm_x", dedupeKey: "reply-7", text: "a".repeat(3200) },
+    { driver },
+  );
+  assert.equal(driver.sent.length, 3);
+  // Each chunk carries a distinct, deterministic dedupeKey so chunks 2..N are
+  // not dropped as duplicates of chunk 1.
+  assert.equal(driver.sent[0].dedupeKey, "reply-7:0");
+  assert.equal(driver.sent[1].dedupeKey, "reply-7:1");
+  assert.equal(driver.sent[2].dedupeKey, "reply-7:2");
+});
+
+test("render omits dedupeKey when reply.dedupeKey is absent", async () => {
+  const r = createWeChatRenderer();
+  const driver = stubDriver();
+  await r.render({ kind: "text", conversationId: "dm_x", text: "hi" }, { driver });
+  assert.ok(!("dedupeKey" in driver.sent[0]));
+});
+
 test("media reply with no name/path sends nothing", async () => {
   const r = createWeChatRenderer();
   const driver = stubDriver();
