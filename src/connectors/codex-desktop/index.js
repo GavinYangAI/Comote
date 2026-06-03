@@ -69,6 +69,9 @@ export class CodexDesktopConnector {
     // next turn on the same thread after reconnect. Drop all accumulation —
     // the app-server re-drives state once the connection is re-established.
     this.changedPathsByThread.clear();
+    // A mid-stream drop never delivers item/completed, so the per-item delta
+    // text would otherwise accumulate forever. Drop it alongside the paths.
+    this.agentMessageTextByItem.clear();
     this._activeThreadId = null;
     this.#emit({ type: "connectionLost" });
     this.scheduleReconnect(1);
@@ -600,7 +603,15 @@ function agentMessageKey(threadId, itemId) {
 }
 
 function isMethodMissingError(error) {
-  return /method not found|unknown method|not found.*method/i.test(error?.message ?? String(error));
+  // The JSON-RPC standard "Method not found" code is the reliable signal; the
+  // message regex is the fallback for servers that drop it. Kept narrow so a
+  // "thread not found", timeout, or auth error still rethrows.
+  if (error?.code === -32601) {
+    return true;
+  }
+  return /method not found|unknown method|no such method|unsupported method|not found.*method/i.test(
+    error?.message ?? String(error),
+  );
 }
 
 function basename(path) {

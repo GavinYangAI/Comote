@@ -332,8 +332,8 @@ test("plain messages resume the active Codex Desktop thread before starting a tu
   const calls = [];
   const codexDesktop = {
     getStatus: () => ({ state: "connected" }),
-    resumeThread: async ({ threadId }) => {
-      calls.push(["resumeThread", threadId]);
+    resumeThread: async ({ threadId, cwd }) => {
+      calls.push(["resumeThread", threadId, cwd]);
       return { thread: { id: threadId, preview: "Existing thread" } };
     },
     startTurn: async ({ threadId, text, cwd }) => {
@@ -352,7 +352,7 @@ test("plain messages resume the active Codex Desktop thread before starting a tu
 
   assert.match(reply.text, /已发送给 Codex Desktop/);
   assert.deepEqual(calls, [
-    ["resumeThread", "thread_1"],
+    ["resumeThread", "thread_1", "/repo"],
     ["startTurn", "thread_1", "continue implementing", "/repo"],
   ]);
 });

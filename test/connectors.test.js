@@ -716,6 +716,122 @@ test("desktop connector accumulates Codex 0.136 agentMessage deltas", async () =
   ]);
 });
 
+test("item/completed clears the accumulated delta text so it does not leak across turns", async () => {
+  const transport = new MemoryTransport();
+  const connector = new CodexDesktopConnector({ transport });
+  await connector.client.connect();
+  const events = [];
+  connector.onEvent = (event) => events.push(event);
+
+  // First message streams in via deltas, then completes.
+  transport.receive({
+    jsonrpc: "2.0",
+    method: "item/agentMessage/delta",
+    params: { threadId: "thread_7", itemId: "item_9", delta: "first message" },
+  });
+  connector.handleNotification({
+    method: "item/completed",
+    params: { threadId: "thread_7", item: { type: "agentMessage", id: "item_9", text: "first message" } },
+  });
+
+  // A later delta reusing the same itemId must NOT include the pre-completed
+  // text — completion reset the accumulation.
+  transport.receive({
+    jsonrpc: "2.0",
+    method: "item/agentMessage/delta",
+    params: { threadId: "thread_7", itemId: "item_9", delta: "second" },
+  });
+
+  const lastDelta = events.filter((e) => e.type === "agentMessageDelta").at(-1);
+  assert.equal(lastDelta.text, "second");
+});
+
+test("listThreadTurns falls back to thread/turns/list when thread/read is missing", async () => {
+  const turns = [{ id: "turn_1", status: "completed" }];
+  let firstCall = true;
+  const fakeClient = {
+    request(method) {
+      if (method === "thread/read") {
+        assert.ok(firstCall, "thread/read is attempted first");
+        firstCall = false;
+        const error = new Error("method not found: thread/read");
+        error.code = -32601;
+        return Promise.reject(error);
+      }
+      if (method === "thread/turns/list") {
+        return Promise.resolve({ turns });
+      }
+      throw new Error(`unexpected method: ${method}`);
+    },
+  };
+  const connector = new CodexDesktopConnector({ transport: new MemoryTransport() });
+  connector.client = fakeClient;
+
+  const result = await connector.listThreadTurns({ threadId: "thread_1" });
+  assert.deepEqual(result, turns);
+});
+
+test("listThreadTurns rethrows a non-method-missing thread/read error (no fallback)", async () => {
+  let turnsListCalled = false;
+  const fakeClient = {
+    request(method) {
+      if (method === "thread/read") {
+        return Promise.reject(new Error("thread not found"));
+      }
+      if (method === "thread/turns/list") {
+        turnsListCalled = true;
+        return Promise.resolve({ turns: [] });
+      }
+      throw new Error(`unexpected method: ${method}`);
+    },
+  };
+  const connector = new CodexDesktopConnector({ transport: new MemoryTransport() });
+  connector.client = fakeClient;
+
+  await assert.rejects(
+    () => connector.listThreadTurns({ threadId: "thread_1" }),
+    /thread not found/,
+  );
+  assert.equal(turnsListCalled, false, "must not fall back on a non-method-missing error");
+});
+
+test("listThreadTurns falls back on a message-only method-missing error (code dropped)", async () => {
+  const turns = [{ id: "turn_1", status: "inProgress" }];
+  const fakeClient = {
+    request(method) {
+      if (method === "thread/read") {
+        // No .code preserved — only the message signals the missing method.
+        return Promise.reject(new Error("Method not found"));
+      }
+      if (method === "thread/turns/list") {
+        return Promise.resolve({ data: turns });
+      }
+      throw new Error(`unexpected method: ${method}`);
+    },
+  };
+  const connector = new CodexDesktopConnector({ transport: new MemoryTransport() });
+  connector.client = fakeClient;
+
+  const result = await connector.listThreadTurns({ threadId: "thread_1" });
+  assert.deepEqual(result, turns);
+});
+
+test("handleDisconnect clears the agentMessage delta map", async () => {
+  const transport = new MemoryTransport();
+  const connector = new CodexDesktopConnector({ transport });
+  await connector.client.connect();
+
+  transport.receive({
+    jsonrpc: "2.0",
+    method: "item/agentMessage/delta",
+    params: { threadId: "thread_7", itemId: "item_9", delta: "leaked" },
+  });
+  assert.ok(connector.agentMessageTextByItem.size > 0, "delta accumulated before disconnect");
+
+  connector.handleDisconnect();
+  assert.equal(connector.agentMessageTextByItem.size, 0, "delta map cleared on disconnect");
+});
+
 test("cli connector is explicitly fallback", () => {
   const connector = new CodexCliConnector();
 
