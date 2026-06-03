@@ -11,15 +11,17 @@ use std::{
     time::{Duration, Instant},
 };
 
+#[cfg(target_os = "windows")]
+use std::os::windows::process::CommandExt;
+
 use tauri::{
     menu::{Menu, MenuItem},
     tray::TrayIconBuilder,
     AppHandle, Manager, RunEvent, WebviewUrl, WebviewWindow, WebviewWindowBuilder, WindowEvent,
 };
-use tauri_plugin_shell::{
-    process::{CommandChild, CommandEvent},
-    ShellExt,
-};
+use tauri_plugin_shell::process::CommandChild;
+#[cfg(not(target_os = "windows"))]
+use tauri_plugin_shell::{process::CommandEvent, ShellExt};
 
 struct ComoteSidecar(Mutex<Option<ComoteChild>>);
 
@@ -31,8 +33,8 @@ struct ComoteSidecar(Mutex<Option<ComoteChild>>);
 //             pid only — no Child handle, but still stoppable.
 enum ComoteChild {
     Shell(CommandChild),
-    // Constructed by the B3c Windows manual sidecar / cross-OS fallback.
-    #[allow(dead_code)]
+    // The Windows manual sidecar, or the cross-OS fallback when the shell
+    // sidecar fails to spawn.
     System(SystemChild),
     Pid(u32),
 }
@@ -145,6 +147,9 @@ const PORT: u16 = 16208;
 // behavior. Persisted in desktop-settings.json under the app data dir.
 const DEFAULT_KEEP_DAEMON_ALIVE: bool = false;
 const DESKTOP_SETTINGS_FILE: &str = "desktop-settings.json";
+// Windows: spawn comote-node.exe without flashing a console window.
+#[cfg(target_os = "windows")]
+const CREATE_NO_WINDOW: u32 = 0x08000000;
 
 // Result of probing 127.0.0.1:PORT for an already-running Comote daemon.
 enum ExistingService {
@@ -363,42 +368,171 @@ fn start_comote_sidecar(
         ),
     );
 
-    let (mut receiver, child) = app
-        .shell()
-        .sidecar("comote-node")
-        .map_err(|error| tauri::Error::Anyhow(anyhow::anyhow!(error)))?
-        .args([path_to_string(server_entry)])
-        .env("PORT", port.to_string())
-        .env("COMOTE_STATE_PATH", path_to_string(state_path))
-        .spawn()
-        .map_err(|error| tauri::Error::Anyhow(anyhow::anyhow!(error)))?;
+    // Windows: the Tauri shell sidecar has been unreliable (no console, output
+    // discarded, occasional spawn failures), so start comote-node.exe directly.
+    #[cfg(target_os = "windows")]
+    {
+        return start_manual_comote_node(&resource_dir, server_entry, port, state_path, log_path)
+            .map(ComoteChild::System)
+            .map_err(|error| {
+                tauri::Error::Anyhow(anyhow::anyhow!("failed to start comote-node.exe: {error}"))
+            });
+    }
 
-    // Pump the sidecar's stdout/stderr (and exit status) into the launch log.
-    // Previously this stream was discarded, so a Node crash — a missing module,
-    // a bad path, an unhandled error — left no trace at all. Now the reason is
-    // recorded where a user (or we) can read it.
-    let log_for_pump = log_path.to_path_buf();
-    tauri::async_runtime::spawn(async move {
-        while let Some(event) = receiver.recv().await {
-            match event {
-                CommandEvent::Stdout(bytes) => log_bytes(&log_for_pump, "out", &bytes),
-                CommandEvent::Stderr(bytes) => log_bytes(&log_for_pump, "err", &bytes),
-                CommandEvent::Error(message) => {
-                    log_line(&log_for_pump, &format!("sidecar error: {message}"))
-                }
-                CommandEvent::Terminated(payload) => log_line(
-                    &log_for_pump,
-                    &format!(
-                        "sidecar exited: code={:?} signal={:?}",
-                        payload.code, payload.signal
-                    ),
-                ),
-                _ => {}
+    // Non-Windows: use the bundled shell sidecar; if even spawning it fails,
+    // fall back to launching comote-node directly (no-op on macOS/Linux today,
+    // but the fallback path is shared so the behavior is uniform).
+    #[cfg(not(target_os = "windows"))]
+    {
+        let sidecar_result = app
+            .shell()
+            .sidecar("comote-node")
+            .map_err(|error| tauri::Error::Anyhow(anyhow::anyhow!(error)))?
+            .args([path_to_string(server_entry.clone())])
+            .env("PORT", port.to_string())
+            .env("COMOTE_STATE_PATH", path_to_string(state_path.clone()))
+            .spawn();
+
+        let (mut receiver, child) = match sidecar_result {
+            Ok(pair) => pair,
+            Err(error) => {
+                log_line(
+                    log_path,
+                    &format!("shell sidecar spawn failed ({error}); trying manual comote-node"),
+                );
+                let fallback =
+                    start_manual_comote_node(&resource_dir, server_entry, port, state_path, log_path)
+                        .map_err(|fallback_error| {
+                            tauri::Error::Anyhow(anyhow::anyhow!(
+                                "failed to start bundled comote-node sidecar: {error}; manual comote-node fallback failed: {fallback_error}"
+                            ))
+                        })?;
+                return Ok(ComoteChild::System(fallback));
             }
-        }
-    });
+        };
 
-    Ok(ComoteChild::Shell(child))
+        // Pump the sidecar's stdout/stderr (and exit status) into the launch
+        // log. Previously this stream was discarded, so a Node crash — a missing
+        // module, a bad path, an unhandled error — left no trace at all. Now the
+        // reason is recorded where a user (or we) can read it.
+        let log_for_pump = log_path.to_path_buf();
+        tauri::async_runtime::spawn(async move {
+            while let Some(event) = receiver.recv().await {
+                match event {
+                    CommandEvent::Stdout(bytes) => log_bytes(&log_for_pump, "out", &bytes),
+                    CommandEvent::Stderr(bytes) => log_bytes(&log_for_pump, "err", &bytes),
+                    CommandEvent::Error(message) => {
+                        log_line(&log_for_pump, &format!("sidecar error: {message}"))
+                    }
+                    CommandEvent::Terminated(payload) => log_line(
+                        &log_for_pump,
+                        &format!(
+                            "sidecar exited: code={:?} signal={:?}",
+                            payload.code, payload.signal
+                        ),
+                    ),
+                    _ => {}
+                }
+            }
+        });
+
+        Ok(ComoteChild::Shell(child))
+    }
+}
+
+// Launches comote-node directly (no Tauri shell). On Windows this is the primary
+// path: it searches known candidate locations for comote-node.exe, redirects
+// stdout/stderr to log files, and uses CREATE_NO_WINDOW so no console flashes.
+// On non-Windows it is only the fallback when the shell sidecar can't spawn.
+#[allow(unused_variables)]
+fn start_manual_comote_node(
+    resource_dir: &Path,
+    server_entry: PathBuf,
+    port: u16,
+    state_path: PathBuf,
+    log_path: &Path,
+) -> std::io::Result<SystemChild> {
+    #[cfg(target_os = "windows")]
+    {
+        let log_dir = state_path
+            .parent()
+            .map(PathBuf::from)
+            .unwrap_or_else(|| resource_dir.to_path_buf());
+        let _ = fs::create_dir_all(&log_dir);
+        let stdout = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(log_dir.join("comote-node.stdout.log"))?;
+        let stderr = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(log_dir.join("comote-node.stderr.log"))?;
+        let executable = windows_manual_sidecar_candidates(resource_dir)
+            .into_iter()
+            .find(|candidate| candidate.exists())
+            .ok_or_else(|| {
+                std::io::Error::new(
+                    std::io::ErrorKind::NotFound,
+                    "comote-node.exe was not found",
+                )
+            })?;
+        log_line(
+            log_path,
+            &format!(
+                "Starting manual comote-node: {}",
+                executable.to_string_lossy()
+            ),
+        );
+        return std::process::Command::new(normalize_windows_path(executable))
+            .arg(normalize_windows_path(server_entry))
+            .current_dir(normalize_windows_path(resource_dir.to_path_buf()))
+            .env("PORT", port.to_string())
+            .env("COMOTE_STATE_PATH", normalize_windows_path(state_path))
+            .stdout(stdout)
+            .stderr(stderr)
+            .creation_flags(CREATE_NO_WINDOW)
+            .spawn();
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        Err(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "manual comote-node fallback is only used on Windows",
+        ))
+    }
+}
+
+// Candidate locations for the manual Windows sidecar. Plain comote-node.exe
+// first (NSIS layout), then the target-triple names Tauri may produce, under the
+// resource root and a binaries/ subdir. Available to tests on every OS.
+#[cfg(any(target_os = "windows", test))]
+fn windows_manual_sidecar_candidates(resource_dir: &Path) -> Vec<PathBuf> {
+    vec![
+        resource_dir.join("comote-node.exe"),
+        resource_dir.join("comote-node-x86_64-pc-windows-msvc.exe"),
+        resource_dir.join("comote-node-aarch64-pc-windows-msvc.exe"),
+        resource_dir.join("binaries").join("comote-node.exe"),
+        resource_dir
+            .join("binaries")
+            .join("comote-node-x86_64-pc-windows-msvc.exe"),
+        resource_dir
+            .join("binaries")
+            .join("comote-node-aarch64-pc-windows-msvc.exe"),
+    ]
+}
+
+// Strips the Windows verbatim/extended-length prefix (\\?\) that Tauri's
+// resolved paths sometimes carry, which std::process::Command and the daemon
+// handle poorly. Identity on paths without the prefix. Available to tests
+// everywhere (operates purely on the string form).
+#[cfg(any(target_os = "windows", test))]
+fn normalize_windows_path(path: PathBuf) -> PathBuf {
+    let body = path.to_string_lossy();
+    if let Some(stripped) = body.strip_prefix(r"\\?\") {
+        PathBuf::from(stripped)
+    } else {
+        path
+    }
 }
 
 fn navigate_to_service(window: &WebviewWindow, port: u16) {
@@ -495,6 +629,7 @@ fn service_pid_from_body(body: &str) -> Option<u32> {
     digits.parse().ok()
 }
 
+#[cfg(not(target_os = "windows"))]
 fn path_to_string(path: PathBuf) -> String {
     path.to_string_lossy().into_owned()
 }
@@ -620,6 +755,29 @@ mod tests {
         );
         assert!(sent.get(), "SIGTERM must be sent first");
         assert_eq!(outcome, GracefulStop::Exited);
+    }
+
+    #[test]
+    fn windows_manual_sidecar_candidates_prefer_plain_exe() {
+        let resource_dir = PathBuf::from(r"C:\Program Files\Comote");
+        let candidates = windows_manual_sidecar_candidates(&resource_dir);
+        assert_eq!(candidates[0], resource_dir.join("comote-node.exe"));
+        assert!(candidates.contains(&resource_dir.join("comote-node-x86_64-pc-windows-msvc.exe")));
+        assert!(candidates.contains(&resource_dir.join("comote-node-aarch64-pc-windows-msvc.exe")));
+        assert!(candidates.contains(&resource_dir.join("binaries").join("comote-node.exe")));
+    }
+
+    #[test]
+    fn normalize_windows_path_strips_verbatim_prefix() {
+        assert_eq!(
+            normalize_windows_path(PathBuf::from(r"\\?\C:\Program Files\Comote\comote-node.exe")),
+            PathBuf::from(r"C:\Program Files\Comote\comote-node.exe")
+        );
+        // No prefix → identity.
+        assert_eq!(
+            normalize_windows_path(PathBuf::from(r"C:\Comote\node.exe")),
+            PathBuf::from(r"C:\Comote\node.exe")
+        );
     }
 
     #[cfg(unix)]
