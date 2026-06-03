@@ -22,8 +22,11 @@ test("approve/reject callback round-trips and stays within 64 bytes", () => {
 test("pick callback carries kind + index; cancel carries threadId", () => {
   assert.deepEqual(decodeCallback(encodeCallback({ action: "pick", pickKind: "project", index: "3" })),
     { action: "pick", pickKind: "project", index: "3" });
-  assert.deepEqual(decodeCallback(encodeCallback({ action: "pick", pickKind: "conversation", index: "1" })),
-    { action: "pick", pickKind: "conversation", index: "1" });
+  assert.deepEqual(decodeCallback(encodeCallback({ action: "pick", pickKind: "session", index: "1" })),
+    { action: "pick", pickKind: "session", index: "1" });
+  // unknown/missing kind must default to the non-project side, never misroute to project
+  assert.deepEqual(decodeCallback(encodeCallback({ action: "pick", pickKind: "whatever", index: "2" })),
+    { action: "pick", pickKind: "session", index: "2" });
   assert.deepEqual(decodeCallback(encodeCallback({ action: "cancel", threadId: "t-9" })),
     { action: "cancel", threadId: "t-9" });
 });

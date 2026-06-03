@@ -5,8 +5,8 @@
 // card text, and pairing-code generation. Config-free, no I/O.
 import { t } from "../../core/i18n/index.js";
 
-const PICK_KIND_CODE = { project: "p", conversation: "c" };
-const PICK_KIND_NAME = { p: "project", c: "conversation" };
+const PICK_KIND_CODE = { project: "p", session: "s" };
+const PICK_KIND_NAME = { p: "project", s: "session" };
 
 const PHASE_TITLE = {
   started: "card.phase.started",
@@ -22,7 +22,7 @@ export function encodeCallback({ action, code, pickKind, index, threadId }) {
   switch (action) {
     case "approve": return `ap:${code}`;
     case "reject": return `rj:${code}`;
-    case "pick": return `pk:${PICK_KIND_CODE[pickKind] ?? "p"}:${index}`;
+    case "pick": return `pk:${PICK_KIND_CODE[pickKind] ?? "s"}:${index}`;
     case "cancel": return `ck:${threadId}`;
     default: throw new Error(`unknown callback action: ${action}`);
   }
@@ -41,7 +41,7 @@ export function decodeCallback(data) {
   if (op === "pk") {
     const sep = rest.indexOf(":");
     if (sep === -1) return null;
-    return { action: "pick", pickKind: PICK_KIND_NAME[rest.slice(0, sep)] ?? "project", index: rest.slice(sep + 1) };
+    return { action: "pick", pickKind: PICK_KIND_NAME[rest.slice(0, sep)] ?? "session", index: rest.slice(sep + 1) };
   }
   return null;
 }
