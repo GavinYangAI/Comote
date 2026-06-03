@@ -1,5 +1,13 @@
 import { qrDataUrl } from "./qr-code.js";
 import {
+  channelBadge,
+  channelRows,
+  channelFormSpec,
+  channelBoundButton,
+  normalizedLoginView,
+  readinessFromChannels,
+} from "./channel-view.js";
+import {
   tWeb,
   applyTranslations,
   setWebLocale,
@@ -34,11 +42,11 @@ async function safeGet(path, fallback) {
   }
 }
 
-let activeWechatLoginId = null;
-let activeWechatQrUrl = null;
-let wechatLoginPollTimer = null;
-let activeFeishuLogin = null;
-let feishuLoginPollTimer = null;
+// Generic per-channel login state: id -> { loginId, pollTimer, startCtx }.
+const activeLogin = {};
+// Latest channel list from GET /api/channels, kept so event handlers
+// (bind/save) can look a channel's meta up by id without re-fetching.
+let channelsById = {};
 let refreshTimer = null;
 let rendering = false;
 let renderQueued = false;
@@ -74,12 +82,7 @@ async function renderOnce() {
     identities,
     candidates,
     projects,
-    wechatStatus,
-    wechatConfig,
-    wechatRuntime,
-    feishuStatus,
-    feishuConfig,
-    feishuRuntime,
+    channelsResult,
     approvals,
     logs,
   ] = await Promise.all([
@@ -87,15 +90,14 @@ async function renderOnce() {
     safeGet("/api/identities", []),
     safeGet("/api/identities/candidates", []),
     safeGet("/api/projects", []),
-    safeGet("/api/channels/wechat/status", {}),
-    safeGet("/api/channels/wechat/config", {}),
-    safeGet("/api/channels/wechat/runtime", { state: "not_configured" }),
-    safeGet("/api/channels/feishu/status", {}),
-    safeGet("/api/channels/feishu/config", {}),
-    safeGet("/api/channels/feishu/runtime", { state: "not_configured" }),
+    safeGet("/api/channels", []),
     safeGet("/api/approvals", []),
     safeGet("/api/logs?limit=5&offset=0", { entries: [], total: 0, hasMore: false }),
   ]);
+  // [{...meta, status, runtime, config}] — one registry-driven list drives the
+  // cards, the readiness wizard, and the advanced channel dropdown.
+  const channels = channelsResult.value ?? [];
+  channelsById = Object.fromEntries(channels.map((ch) => [ch.id, ch]));
   const [transcript] = await Promise.all([
     safeGet("/api/codex/transcript", []),
   ]);
@@ -121,27 +123,24 @@ async function renderOnce() {
     .map(([label, value]) => `<dt>${label}</dt><dd>${value}</dd>`)
     .join("");
 
-  renderReadiness(status.value, wechatConfig, feishuConfig, identities, wechatRuntime, feishuRuntime);
+  renderReadiness(status.value, identities, channels);
   renderIdentities(identities);
   renderCandidates(candidates);
   renderProjects(projects);
-  renderWechat(wechatStatus, wechatConfig, wechatRuntime);
-  renderFeishu(feishuStatus, feishuConfig, feishuRuntime);
+  renderChannels(channels);
+  renderChannelDropdown(channels);
   renderApprovals(approvals);
   renderLogs(logs);
   renderConversation(transcript);
   await renderThreads(status.value, projects.value);
 }
 
-function renderReadiness(status, wechatConfigResult, feishuConfigResult, identitiesResult, wechatRuntimeResult, feishuRuntimeResult) {
+function renderReadiness(status, identitiesResult, channels) {
   const section = document.querySelector("#readiness");
   const list = document.querySelector("#readinessList");
-  const wechatConfig = wechatConfigResult.value ?? {};
-  const feishuConfig = feishuConfigResult.value ?? {};
   const identities = identitiesResult.ok ? identitiesResult.value : [];
-  const wechatRuntime = wechatRuntimeResult.value ?? {};
-  const feishuRuntime = feishuRuntimeResult.value ?? {};
   const desktopState = status?.connectors?.desktop?.state;
+  const { bound, running } = readinessFromChannels(channels);
 
   const items = [
     {
@@ -149,7 +148,7 @@ function renderReadiness(status, wechatConfigResult, feishuConfigResult, identit
       label: tWeb("web.readiness.step1.label"),
     },
     {
-      done: Boolean(wechatConfig.loggedIn || feishuConfig.configured),
+      done: bound,
       label: tWeb("web.readiness.step2.label"),
     },
     {
@@ -157,7 +156,7 @@ function renderReadiness(status, wechatConfigResult, feishuConfigResult, identit
       label: tWeb("web.readiness.step3.label"),
     },
     {
-      done: wechatRuntime.state === "running" || feishuRuntime.state === "running",
+      done: running,
       label: tWeb("web.readiness.step4.label"),
     },
   ];
@@ -247,70 +246,156 @@ function renderProjects(result) {
           .join("");
 }
 
-function renderWechat(statusResult, configResult, runtimeResult) {
-  const wechatConfig = configResult.value ?? {};
-  const wechatRuntime = runtimeResult.value ?? { state: "not_configured" };
-  const wechatStatus = statusResult.value ?? {};
-  const needsRelogin = Boolean(wechatRuntime.needsRelogin);
-  const badge = document.querySelector("#wechatBadge");
-  badge.textContent = needsRelogin ? tWeb("web.wechat.badge.needsRelogin") : wechatConfig.loggedIn ? tWeb("web.wechat.badge.bound") : tWeb("web.wechat.badge.unbound");
-  badge.className = `badge${needsRelogin ? " warning" : wechatConfig.loggedIn ? " success" : ""}`;
-  document.querySelector("#wechatStatus").innerHTML = [
-    [tWeb("web.wechat.label.status"), needsRelogin ? tWeb("web.wechat.status.invalid") : wechatConfig.loggedIn ? tWeb("web.wechat.status.bound") : tWeb("web.wechat.status.unbound")],
-    [tWeb("web.wechat.label.listening"), needsRelogin ? tWeb("web.wechat.listening.offline") : humanRuntimeState(wechatRuntime.state)],
-    [tWeb("web.wechat.label.allowedAccount"), wechatConfig.linkedUserName ?? wechatConfig.linkedUserId ?? tWeb("web.wechat.account.waitingScan")],
-    [tWeb("web.wechat.label.hostApp"), wechatStatus.externalAgentHostRequired ? tWeb("web.wechat.host.required") : tWeb("web.wechat.host.notRequired")],
-  ]
-    .map(([label, value]) => `<dt>${label}</dt><dd>${escapeHtml(value)}</dd>`)
-    .join("");
+// --- Generic registry-meta-driven channel cards (replaces renderWechat/renderFeishu) ---
 
-  const wechatBindButton = document.querySelector("#startWechatLogin");
-  // While a rebind is in flight (activeWechatLoginId set), keep the QR visible
-  // even though the daemon still reports the old loggedIn=true config.
-  wechatBindButton.textContent = activeWechatLoginId
-    ? tWeb("web.wechat.bind.refresh")
-    : wechatConfig.loggedIn
-      ? tWeb("web.wechat.bind.rebind")
-      : tWeb("web.wechat.bind.bind");
-  if (!activeWechatLoginId) {
-    setWechatLoginView(
-      wechatConfig.loggedIn
-        ? { state: "bound", accountId: wechatConfig.accountId, userId: wechatConfig.linkedUserId, userName: wechatConfig.linkedUserName }
-        : { state: "empty" },
-    );
+function renderChannels(channels) {
+  const container = document.querySelector("#channelCards");
+  if (!container) {
+    return;
   }
-
-  const wechatForm = document.querySelector("#wechatConfigForm");
-  wechatForm.elements.enabled.checked = Boolean(wechatConfig.enabled);
-  wechatForm.elements.accountId.value = wechatConfig.accountId ?? "default";
+  container.innerHTML = channels.map(channelCardHtml).join("");
+  channels.forEach(wireChannelCard);
 }
 
-function renderFeishu(statusResult, configResult, runtimeResult) {
-  const feishuConfig = configResult.value ?? {};
-  const feishuRuntime = runtimeResult.value ?? { state: "not_configured" };
-  const feishuReady = feishuRuntime.state === "running" || feishuRuntime.state === "configured";
-  const badge = document.querySelector("#feishuBadge");
-  badge.textContent = humanFeishuBadge(feishuRuntime.state);
-  badge.className = `badge${feishuReady ? " success" : " warning"}`;
-  document.querySelector("#feishuStatus").innerHTML = [
-    [tWeb("web.feishu.label.status"), humanFeishuState(feishuRuntime.state)],
-    [tWeb("web.feishu.label.connection"), feishuRuntime.state === "running" ? tWeb("web.feishu.connection.listening") : feishuConfig.configured ? tWeb("web.feishu.connection.configured") : tWeb("web.feishu.connection.waitingScan")],
-    [tWeb("web.feishu.label.allowedAccount"), feishuConfig.linkedUserName ?? feishuConfig.linkedUserId ?? tWeb("web.feishu.account.waitingConfirm")],
-    [tWeb("web.feishu.label.app"), feishuConfig.appId ?? tWeb("web.feishu.app.unset")],
-  ]
-    .map(([label, value]) => `<dt>${label}</dt><dd>${escapeHtml(value)}</dd>`)
-    .join("");
-  const feishuForm = document.querySelector("#feishuConfigForm");
-  feishuForm.elements.domain.value = feishuConfig.domain ?? "feishu";
-  const feishuBindButton = document.querySelector("#startFeishuLogin");
-  feishuBindButton.textContent = feishuConfig.configured ? tWeb("web.feishu.bind.rebind") : activeFeishuLogin ? tWeb("web.feishu.bind.refresh") : tWeb("web.feishu.bind.bind");
-  if (!activeFeishuLogin) {
-    setFeishuLoginView(
-      feishuConfig.configured
-        ? { state: "bound", appId: feishuConfig.appId, userId: feishuConfig.linkedUserId, userName: feishuConfig.linkedUserName }
-        : { state: "empty" },
-    );
+// Advanced "manual add user" channel dropdown, populated from the registry list
+// so a newly registered channel appears here automatically. Preserves the
+// current selection across re-renders.
+function renderChannelDropdown(channels) {
+  const select = document.querySelector("#identityForm select[name='channel']");
+  if (!select) {
+    return;
   }
+  const previous = select.value;
+  select.innerHTML = channels
+    .map((ch) => `<option value="${escapeAttr(ch.id)}">${escapeHtml(ch.displayName ?? ch.id)}</option>`)
+    .join("");
+  if (previous && channels.some((ch) => ch.id === previous)) {
+    select.value = previous;
+  }
+}
+
+// One generic card built from the plugin meta + live status/runtime/config.
+// `binding === "qr"` cards show a QR area + bind button; credentials/token
+// cards show a config form + save button (scaffold for future channels).
+function channelCardHtml(ch) {
+  const badge = channelBadge(ch, tWeb);
+  const badgeClass = badge.tone === "success" ? "badge success" : badge.tone === "warning" ? "badge warning" : "badge";
+  const rows = channelRows(ch, tWeb)
+    .map((row) => `<dt>${escapeHtml(row.label)}</dt><dd>${escapeHtml(row.value)}</dd>`)
+    .join("");
+  const button = channelBoundButton(ch, tWeb, { activeLoginId: activeLogin[ch.id]?.loginId ?? null });
+  const icon = ch.icon ?? (ch.displayName ?? "")[0] ?? "";
+  const description = ch.descriptionKey ? tWeb(ch.descriptionKey) : "";
+
+  let widget;
+  if (ch.binding === "qr") {
+    widget = `
+      <div id="${escapeAttr(ch.id)}LoginResult" class="qr-result">
+        <div class="qr-glyph">
+          <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="#c4c2bc" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><path d="M14 14h3v3M21 14v7h-7M17 21v-4"/></svg>
+        </div>
+        <span>${escapeHtml(tWeb("web.channel.qr.scanHint"))}</span>
+      </div>
+      ${channelConfigFormHtml(ch)}
+      <div class="actions card-actions">
+        <button type="button" class="btn-primary-card" data-bind="${escapeAttr(ch.id)}">${escapeHtml(button.label)}</button>
+      </div>`;
+  } else {
+    widget = `
+      ${channelConfigFormHtml(ch)}
+      <div class="actions card-actions">
+        <button type="button" class="btn-primary-card" data-save-config="${escapeAttr(ch.id)}">${escapeHtml(tWeb("web.channel.save"))}</button>
+      </div>`;
+  }
+
+  return `
+    <article class="channel-card" data-channel="${escapeAttr(ch.id)}">
+      <div class="channel-head">
+        <div class="channel-tile ${escapeAttr(ch.id)}-icon" aria-hidden="true">${escapeHtml(icon)}</div>
+        <div class="ch-meta">
+          <h3>${escapeHtml(ch.displayName ?? ch.id)}</h3>
+          <div class="ch-sub">${escapeHtml(description)}</div>
+        </div>
+        <span class="${badgeClass}">${escapeHtml(badge.text)}</span>
+      </div>
+
+      <dl class="kv status-rows">${rows}</dl>
+      ${widget}
+    </article>`;
+}
+
+// Renders the visible configFields as form inputs. Empty when a channel has no
+// visible fields (e.g. wechat: only the hidden accountId field).
+function channelConfigFormHtml(ch) {
+  const spec = channelFormSpec(ch, tWeb);
+  if (spec.length === 0) {
+    return "";
+  }
+  const fields = spec
+    .map((field) => {
+      if (field.type === "select") {
+        const options = field.options
+          .map((opt) => `<option value="${escapeAttr(opt.value)}"${String(opt.value) === String(field.value) ? " selected" : ""}>${escapeHtml(opt.label)}</option>`)
+          .join("");
+        return `<div class="config-field"><label class="domain-label">${escapeHtml(field.label)}</label><label class="select-wrap"><select name="${escapeAttr(field.name)}">${options}</select></label></div>`;
+      }
+      if (field.type === "checkbox") {
+        return `<label class="config-field"><input name="${escapeAttr(field.name)}" type="checkbox"${field.value ? " checked" : ""}> <span>${escapeHtml(field.label)}</span></label>`;
+      }
+      const inputType = field.secret || field.type === "password" ? "password" : "text";
+      return `<div class="config-field"><label class="domain-label">${escapeHtml(field.label)}</label><input name="${escapeAttr(field.name)}" type="${inputType}" value="${escapeAttr(field.value ?? "")}"></div>`;
+    })
+    .join("");
+  return `<form class="stack-form channel-config-form" data-config-form="${escapeAttr(ch.id)}">${fields}</form>`;
+}
+
+function wireChannelCard(ch) {
+  const card = document.querySelector(`#channelCards article[data-channel="${cssEscapeId(ch.id)}"]`);
+  if (!card) {
+    return;
+  }
+  const bindBtn = card.querySelector("[data-bind]");
+  if (bindBtn) {
+    bindBtn.addEventListener("click", () => startQrLogin(ch));
+  }
+  const saveBtn = card.querySelector("[data-save-config]");
+  if (saveBtn) {
+    saveBtn.addEventListener("click", async () => {
+      await guardedAction(() =>
+        getJson(`/api/channels/${encodeURIComponent(ch.id)}/config`, {
+          method: "PUT",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(readChannelForm(ch.id)),
+        }),
+      );
+      await render();
+    });
+  }
+  // While no login is in flight, repaint the QR area to its resting state
+  // (bound account summary, or the empty scan hint) from current config.
+  if (ch.binding === "qr" && !activeLogin[ch.id]) {
+    renderQrInto(`${ch.id}LoginResult`, restingLoginView(ch));
+  }
+}
+
+// Reads the current values of a channel's visible config inputs. Returns {} when
+// the channel has no form (e.g. wechat) — a safe body for /login/start.
+function readChannelForm(id) {
+  const ch = channelsById[id];
+  const form = document.querySelector(`#channelCards form[data-config-form="${cssEscapeId(id)}"]`);
+  const values = {};
+  for (const field of channelFormSpec(ch ?? {}, tWeb)) {
+    const el = form?.elements?.[field.name];
+    if (!el) {
+      continue;
+    }
+    values[field.name] = field.type === "checkbox" ? el.checked : el.value;
+  }
+  return values;
+}
+
+function cssEscapeId(value) {
+  return String(value).replace(/["\\]/g, "\\$&");
 }
 
 function renderApprovals(result) {
@@ -594,27 +679,8 @@ document.querySelector("#approvalsList").addEventListener("click", async (event)
   await render();
 });
 
-document.querySelector("#wechatConfigForm").addEventListener("submit", async (event) => {
-  event.preventDefault();
-  const form = event.currentTarget;
-  const data = Object.fromEntries(new FormData(form));
-  await guardedAction(() =>
-    getJson("/api/channels/wechat/config", {
-      method: "PUT",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ enabled: form.elements.enabled.checked, accountId: data.accountId || "default" }),
-    }),
-  );
-  await render();
-});
-
-document.querySelector("#startWechatLogin").addEventListener("click", async (event) => {
-  await startWechatBinding(event.currentTarget);
-});
-
-document.querySelector("#startFeishuLogin").addEventListener("click", async (event) => {
-  await startFeishuBinding(event.currentTarget);
-});
+// Channel bind/save buttons are wired per-card in wireChannelCard() now that the
+// cards are generated from registry meta — no per-channel listeners here.
 
 // Surfaces write failures to the user instead of leaving the UI silently stale.
 async function guardedAction(action) {
@@ -635,267 +701,150 @@ function renderCodexNotice(state) {
   notice.hidden = state === "connected" || state === "available";
 }
 
-async function startWechatBinding(button) {
-  clearWechatLoginPolling();
-  button.disabled = true;
-  button.textContent = tWeb("web.qr.generating");
-  setWechatLoginView({ state: "loading" });
+// --- Generic QR login: ONE poller for every qr-binding channel (replaces the
+// per-channel wechat/feishu start + poll + view code). The backend now starts
+// the runtime on confirm and is the single source of truth for the normalized
+// {state}, so the frontend fires NO runtime/start and owns no confirm/failure
+// vocabulary.
+
+async function startQrLogin(ch) {
+  const card = document.querySelector(`#channelCards article[data-channel="${cssEscapeId(ch.id)}"]`);
+  const button = card?.querySelector("[data-bind]") ?? null;
+  if (button) {
+    button.disabled = true;
+    button.textContent = tWeb("web.qr.generating");
+  }
+  // configFields values (feishu: { domain }; wechat: {}). Sent as the login body;
+  // the backend takes what it needs and ignores the rest.
+  const configValues = readChannelForm(ch.id);
   try {
-    const result = await getJson("/api/channels/wechat/login/start", { method: "POST" });
-    activeWechatLoginId = result.loginId ?? null;
-    activeWechatQrUrl = result.qrUrl ?? null;
-    setWechatLoginView({
-      state: "qr",
-      loginId: activeWechatLoginId,
-      qrUrl: activeWechatQrUrl,
-      message: tWeb("web.wechat.qr.scanHint"),
-    });
-    await getJson("/api/channels/wechat/runtime/start", { method: "POST" });
-    if (activeWechatLoginId) {
-      startWechatLoginPolling(activeWechatLoginId);
-    }
-    await render();
-  } catch (error) {
-    activeWechatLoginId = null;
-    activeWechatQrUrl = null;
-    setWechatLoginView({ state: "error", message: tWeb("web.wechat.bind.startFailed", { message: error.message }) });
-  } finally {
-    button.disabled = false;
-    button.textContent = activeWechatLoginId ? tWeb("web.wechat.bind.refresh") : tWeb("web.wechat.bind.bind");
-  }
-}
-
-function startWechatLoginPolling(loginId) {
-  clearWechatLoginPolling();
-  wechatLoginPollTimer = setInterval(async () => {
-    try {
-      const result = await getJson(
-        `/api/channels/wechat/login/status?loginId=${encodeURIComponent(loginId)}`,
-      );
-      if (isWechatLoginConfirmed(result)) {
-        clearWechatLoginPolling();
-        activeWechatLoginId = null;
-        activeWechatQrUrl = null;
-        await getJson("/api/channels/wechat/runtime/start", { method: "POST" });
-        setWechatLoginView({ state: "bound", accountId: result.accountId, userId: result.userId, userName: result.userName });
-        await render();
-        return;
-      }
-      if (isWechatLoginFailed(result)) {
-        clearWechatLoginPolling();
-        activeWechatLoginId = null;
-        activeWechatQrUrl = null;
-        setWechatLoginView({
-          state: "error",
-          message: tWeb("web.wechat.qr.expired", { state: result.state ?? "unknown" }),
-        });
-        await render();
-        return;
-      }
-      setWechatLoginView({
-        state: "qr",
-        loginId,
-        qrUrl: activeWechatQrUrl,
-        message: tWeb("web.wechat.qr.waiting", { state: humanWechatLoginState(result.state) }),
-      });
-    } catch (error) {
-      setWechatLoginView({
-        state: "qr",
-        loginId,
-        qrUrl: activeWechatQrUrl,
-        message: tWeb("web.wechat.qr.checkFailed", { message: error.message }),
-      });
-    }
-  }, 2500);
-}
-
-function clearWechatLoginPolling() {
-  if (wechatLoginPollTimer) {
-    clearInterval(wechatLoginPollTimer);
-    wechatLoginPollTimer = null;
-  }
-}
-
-function setWechatLoginView({ state, qrUrl = null, loginId = null, accountId = null, userId = null, userName = null, message = null }) {
-  const target = document.querySelector("#wechatLoginResult");
-  target.replaceChildren();
-  target.className = "qr-result";
-
-  if (state === "loading") {
-    target.append(createQrGlyph());
-    target.append(createTextLine(tWeb("web.wechat.view.generating")));
-    return;
-  }
-  if (state === "empty") {
-    target.append(createQrGlyph());
-    target.append(createTextLine(tWeb("web.wechat.view.emptyHint")));
-    return;
-  }
-  if (state === "bound") {
-    target.append(createStrongLine(tWeb("web.wechat.view.boundTitle")));
-    target.append(
-      createTextLine(
-        userName
-          ? tWeb("web.wechat.view.allowedAccount", { name: userName })
-          : userId
-            ? tWeb("web.wechat.view.allowedAccount", { name: userId })
-            : tWeb("web.wechat.view.account", { account: accountId ?? tWeb("web.wechat.view.confirmed") }),
-      ),
-    );
-    target.append(createTextLine(tWeb("web.wechat.view.boundHint")));
-    return;
-  }
-  if (state === "error") {
-    target.append(createStrongLine(tWeb("web.qr.needRebind")));
-    target.append(createTextLine(message ?? tWeb("web.wechat.view.bindFailed")));
-    return;
-  }
-
-  target.classList.add("has-qr");
-  const imageSource = normalizeQrImageSource(qrUrl);
-  if (!imageSource) {
-    target.append(createStrongLine(tWeb("web.qr.invalidTitle")));
-    target.append(createTextLine(tWeb("web.wechat.view.invalidHint")));
-    return;
-  }
-  const image = document.createElement("img");
-  image.src = imageSource;
-  image.alt = tWeb("web.wechat.view.imageAlt");
-  target.append(image);
-  target.append(createStrongLine(tWeb("web.wechat.view.scanStrong")));
-  target.append(createTextLine(message ?? tWeb("web.wechat.view.scanHint")));
-  if (loginId) {
-    const code = document.createElement("code");
-    code.textContent = tWeb("web.qr.loginSession", { loginId });
-    target.append(code);
-  }
-}
-
-async function startFeishuBinding(button) {
-  clearFeishuLoginPolling();
-  button.disabled = true;
-  button.textContent = tWeb("web.qr.generating");
-  setFeishuLoginView({ state: "loading" });
-  try {
-    const domain = new FormData(document.querySelector("#feishuConfigForm")).get("domain")?.toString() ?? "feishu";
-    const result = await getJson("/api/channels/feishu/login/start", {
+    const start = await getJson(`/api/channels/${encodeURIComponent(ch.id)}/login/start`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ domain }),
+      body: JSON.stringify(configValues),
     });
-    activeFeishuLogin = result;
-    setFeishuLoginView({
-      state: "qr",
-      qrUrl: result.qrUrl,
-      loginId: result.loginId,
-      message: tWeb("web.feishu.qr.scanHint"),
-    });
-    startFeishuLoginPolling(result);
+    activeLogin[ch.id] = { loginId: start.loginId ?? null, startCtx: start, pollTimer: null };
+    renderQrInto(`${ch.id}LoginResult`, normalizedLoginView(start, tWeb));
+    pollQrLogin(ch, start);
   } catch (error) {
-    activeFeishuLogin = null;
-    setFeishuLoginView({ state: "error", message: tWeb("web.feishu.bind.startFailed", { message: error.message }) });
+    delete activeLogin[ch.id];
+    renderQrInto(`${ch.id}LoginResult`, { phase: "failed", qrUrl: null, accountLine: null, message: error.message });
   } finally {
-    button.disabled = false;
-    button.textContent = activeFeishuLogin ? tWeb("web.feishu.bind.refresh") : tWeb("web.feishu.bind.bind");
+    if (button) {
+      button.disabled = false;
+      button.textContent = activeLogin[ch.id]
+        ? tWeb("web.channel.refresh")
+        : channelBoundButton(channelsById[ch.id] ?? ch, tWeb, { activeLoginId: null }).label;
+    }
   }
 }
 
-function startFeishuLoginPolling(login) {
-  clearFeishuLoginPolling();
-  feishuLoginPollTimer = setInterval(async () => {
+function pollQrLogin(ch, startCtx) {
+  clearInterval(activeLogin[ch.id]?.pollTimer);
+  // Carry the start response's opaque fields back to /login/status; the backend
+  // takes what it needs (feishu reads domain/interval/expireIn; wechat ignores them).
+  const params = new URLSearchParams({ loginId: startCtx.loginId ?? "" });
+  for (const k of ["domain", "interval", "expireIn"]) {
+    if (startCtx[k] != null) {
+      params.set(k, startCtx[k]);
+    }
+  }
+  activeLogin[ch.id].pollTimer = setInterval(async () => {
     try {
-      const result = await getJson(
-        `/api/channels/feishu/login/status?loginId=${encodeURIComponent(login.loginId)}&domain=${encodeURIComponent(login.domain ?? "feishu")}&interval=${encodeURIComponent(login.interval ?? 5)}&expireIn=${encodeURIComponent(login.expireIn ?? 600)}`,
-      );
-      if (result.state === "confirmed" && result.appId) {
-        clearFeishuLoginPolling();
-        activeFeishuLogin = null;
-        setFeishuLoginView({ state: "bound", appId: result.appId, userId: result.userId, userName: result.userName });
-        await render();
-        return;
+      const status = await getJson(`/api/channels/${encodeURIComponent(ch.id)}/login/status?${params}`);
+      const view = normalizedLoginView(status, tWeb);
+      // Keep the QR image visible while waiting — status responses for pending
+      // states omit qrUrl, so fall back to the one from /login/start.
+      if (!view.qrUrl) {
+        view.qrUrl = startCtx.qrUrl ?? null;
       }
-      if (["expired", "access_denied", "timeout", "error", "failed"].includes(result.state)) {
-        clearFeishuLoginPolling();
-        activeFeishuLogin = null;
-        setFeishuLoginView({ state: "error", message: tWeb("web.feishu.bind.incomplete", { state: humanFeishuLoginState(result.state) }) });
-        await render();
-        return;
+      renderQrInto(`${ch.id}LoginResult`, view);
+      if (["confirmed", "expired", "failed"].includes(view.phase)) {
+        clearInterval(activeLogin[ch.id].pollTimer);
+        if (view.phase === "confirmed") {
+          // Backend already started the runtime on confirm — just reload.
+          delete activeLogin[ch.id];
+          await render();
+        } else {
+          delete activeLogin[ch.id];
+        }
       }
-      setFeishuLoginView({
-        state: "qr",
-        qrUrl: login.qrUrl,
-        loginId: login.loginId,
-        message: tWeb("web.feishu.qr.waiting", { state: humanFeishuLoginState(result.state) }),
-      });
     } catch (error) {
-      setFeishuLoginView({
-        state: "qr",
-        qrUrl: login.qrUrl,
-        loginId: login.loginId,
+      renderQrInto(`${ch.id}LoginResult`, {
+        phase: "pending",
+        qrUrl: startCtx.qrUrl ?? null,
+        accountLine: null,
         message: tWeb("web.feishu.qr.checkFailed", { message: error.message }),
       });
     }
   }, 2500);
 }
 
-function clearFeishuLoginPolling() {
-  if (feishuLoginPollTimer) {
-    clearInterval(feishuLoginPollTimer);
-    feishuLoginPollTimer = null;
+// Renders a normalized login view ({ phase, qrUrl, accountLine, message }) into a
+// channel's `.qr-result` element. Reuses normalizeQrImageSource + qrDataUrl.
+function renderQrInto(elId, view) {
+  const target = document.getElementById(elId);
+  if (!target) {
+    return;
   }
-}
-
-function setFeishuLoginView({ state, qrUrl = null, loginId = null, appId = null, userId = null, userName = null, message = null }) {
-  const target = document.querySelector("#feishuLoginResult");
   target.replaceChildren();
   target.className = "qr-result";
-  if (state === "loading") {
+
+  if (view.phase === "empty") {
     target.append(createQrGlyph());
-    target.append(createTextLine(tWeb("web.feishu.view.generating")));
+    target.append(createTextLine(view.message ?? tWeb("web.channel.qr.scanHint")));
     return;
   }
-  if (state === "empty") {
-    target.append(createQrGlyph());
-    target.append(createTextLine(tWeb("web.feishu.view.emptyHint")));
+  if (view.phase === "confirmed") {
+    target.append(createStrongLine(tWeb("web.channel.qr.confirmed")));
+    if (view.accountLine) {
+      target.append(createTextLine(view.accountLine));
+    }
+    if (view.message) {
+      target.append(createTextLine(view.message));
+    }
     return;
   }
-  if (state === "bound") {
-    target.append(createStrongLine(tWeb("web.feishu.view.boundTitle")));
-    target.append(
-      createTextLine(
-        userName
-          ? tWeb("web.feishu.view.allowedAccount", { name: userName })
-          : userId
-            ? tWeb("web.feishu.view.allowedAccount", { name: userId })
-            : tWeb("web.feishu.view.app", { app: appId ?? tWeb("web.feishu.connection.configured") }),
-      ),
-    );
-    target.append(createTextLine(tWeb("web.feishu.view.boundHint")));
-    return;
-  }
-  if (state === "error") {
+  if (view.phase === "expired" || view.phase === "failed") {
     target.append(createStrongLine(tWeb("web.qr.needRebind")));
-    target.append(createTextLine(message ?? tWeb("web.feishu.view.bindFailed")));
+    target.append(createTextLine(view.message ?? tWeb(`web.channel.qr.${view.phase}`)));
+    return;
+  }
+
+  // pending / scanned: show the QR image when available, otherwise the hint glyph.
+  const imageSource = normalizeQrImageSource(view.qrUrl);
+  if (!imageSource) {
+    target.append(createQrGlyph());
+    target.append(createTextLine(view.message ?? tWeb("web.channel.qr.scanHint")));
     return;
   }
   target.classList.add("has-qr");
-  const imageSource = normalizeQrImageSource(qrUrl);
-  if (!imageSource) {
-    target.append(createStrongLine(tWeb("web.qr.invalidTitle")));
-    target.append(createTextLine(tWeb("web.feishu.view.invalidHint")));
-    return;
-  }
   const image = document.createElement("img");
   image.src = imageSource;
-  image.alt = tWeb("web.feishu.view.imageAlt");
+  image.alt = tWeb("web.channel.qr.imageAlt");
   target.append(image);
-  target.append(createStrongLine(tWeb("web.feishu.view.scanStrong")));
-  target.append(createTextLine(message ?? tWeb("web.feishu.view.scanHint")));
-  if (loginId) {
-    const code = document.createElement("code");
-    code.textContent = tWeb("web.qr.loginSession", { loginId });
-    target.append(code);
+  target.append(createStrongLine(tWeb("web.channel.qr.scanHint")));
+  if (view.message) {
+    target.append(createTextLine(view.message));
   }
+}
+
+// Resting (no-login-in-flight) view for a qr channel: a bound summary when the
+// channel reports bound, otherwise the empty scan hint.
+function restingLoginView(ch) {
+  const bw = ch.boundWhen;
+  const bag = bw?.source === "runtime" ? ch.runtime : bw?.source === "status" ? ch.status : ch.config;
+  const bound = bw ? Boolean(bag?.[bw.field]) : false;
+  if (!bound) {
+    return { phase: "empty", qrUrl: null, accountLine: null, message: null };
+  }
+  const account = ch.config?.linkedUserName ?? ch.config?.linkedUserId ?? null;
+  return {
+    phase: "confirmed",
+    qrUrl: null,
+    accountLine: account ? tWeb("web.channel.row.account") + "：" + account : null,
+    message: null,
+  };
 }
 
 function createStrongLine(text) {
@@ -937,21 +886,6 @@ function normalizeQrImageSource(value) {
   return qrDataUrl(text);
 }
 
-function isWechatLoginConfirmed(result) {
-  return Boolean(result.token && result.accountId) || (result.state === "confirmed" && Boolean(result.accountId));
-}
-
-function isWechatLoginFailed(result) {
-  return ["expired", "cancelled", "canceled", "failed", "error"].includes(result.state);
-}
-
-function humanWechatLoginState(state) {
-  if (state === "scanned") return tWeb("web.wechatLogin.scanned");
-  if (state === "confirmed") return tWeb("web.wechatLogin.confirmed");
-  if (state === "pending" || state === "waiting" || state === "wait") return tWeb("web.wechatLogin.waiting");
-  return state ?? tWeb("web.wechatLogin.waiting");
-}
-
 function channelName(channel) {
   if (channel === "wechat") return tWeb("web.channelName.wechat");
   if (channel === "feishu") return tWeb("web.channelName.feishu");
@@ -964,39 +898,10 @@ function roleName(role) {
   return role;
 }
 
-function humanFeishuBadge(state) {
-  if (state === "running") return tWeb("web.feishuBadge.listening");
-  if (state === "configured") return tWeb("web.feishuBadge.enabled");
-  return tWeb("web.feishuBadge.needsSetup");
-}
-
-function humanFeishuState(state) {
-  if (state === "running") return tWeb("web.feishuState.listening");
-  if (state === "configured") return tWeb("web.feishuState.configured");
-  if (state === "reserved") return tWeb("web.feishuState.needsSetup");
-  if (state === "not_configured") return tWeb("web.feishuState.notConfigured");
-  return tWeb("web.feishuState.unbound");
-}
-
-function humanFeishuLoginState(state) {
-  if (state === "pending") return tWeb("web.feishuLogin.waiting");
-  if (state === "confirmed") return tWeb("web.feishuLogin.confirmed");
-  if (state === "access_denied") return tWeb("web.feishuLogin.cancelled");
-  if (state === "expired") return tWeb("web.feishuLogin.expired");
-  if (state === "timeout") return tWeb("web.feishuLogin.timeout");
-  return state ?? tWeb("web.feishuLogin.waiting");
-}
-
 function humanConnectorState(state) {
   if (state === "connected") return tWeb("web.connector.connected");
   if (state === "available") return tWeb("web.connector.available");
   return tWeb("web.connector.disconnected");
-}
-
-function humanRuntimeState(state) {
-  if (state === "running") return tWeb("web.runtime.listening");
-  if (state === "configured") return tWeb("web.runtime.ready");
-  return tWeb("web.runtime.needsSetup");
 }
 
 function formatTime(iso) {
