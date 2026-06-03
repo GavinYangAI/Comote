@@ -27,6 +27,7 @@ export function createComoteState({
   stateStore = null,
   autoStartWeChatRuntime = true,
   autoStartFeishuRuntime = true,
+  autoStartDelayMs = 5_000,
   desktop: desktopOverride = null,
   currentVersion = null,
   versionChecker = null,
@@ -509,18 +510,26 @@ export function createComoteState({
     }
   }
 
+  // Start saved channel runtimes after the HTTP daemon has had a chance to bind
+  // and answer health checks; some IM SDK startup paths can be slow or noisy.
   if (autoStartWeChatRuntime && wechatConfig.enabled && wechatConfig.token) {
-    wechatRuntime.start();
-    eventLog.info("微信运行时已自动启动", { accountId: wechatConfig.accountId });
+    const timer = setTimeout(() => {
+      wechatRuntime.start();
+      eventLog.info("微信运行时已自动启动", { accountId: wechatConfig.accountId });
+    }, autoStartDelayMs);
+    timer.unref?.();
   }
   if (autoStartFeishuRuntime && feishuConfig.enabled && feishuConfig.appId && feishuConfig.appSecret) {
-    feishuRuntime.start().then(
-      () => eventLog.info("飞书运行时已自动启动", { appId: feishuConfig.appId }),
-      (error) => {
-        feishuRuntime.lastError = error.message;
-        eventLog.error("飞书运行时启动失败", { error: error.message });
-      },
-    );
+    const timer = setTimeout(() => {
+      feishuRuntime.start().then(
+        () => eventLog.info("飞书运行时已自动启动", { appId: feishuConfig.appId }),
+        (error) => {
+          feishuRuntime.lastError = error.message;
+          eventLog.error("飞书运行时启动失败", { error: error.message });
+        },
+      );
+    }, autoStartDelayMs);
+    timer.unref?.();
   }
   return stateRef;
 }
