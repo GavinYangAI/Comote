@@ -173,7 +173,11 @@ fn main() {
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_opener::init())
-        .invoke_handler(tauri::generate_handler![open_external])
+        .invoke_handler(tauri::generate_handler![
+            open_external,
+            get_keep_daemon_alive,
+            set_keep_daemon_alive
+        ])
         .setup(|app| {
             let app_data_dir = app.path().app_data_dir()?;
             fs::create_dir_all(&app_data_dir)?;
@@ -318,6 +322,24 @@ fn handle_app_exit(app_handle: &AppHandle) {
     } else {
         stop_comote_sidecar(app_handle);
     }
+}
+
+// Reads the persisted "keep daemon alive after quit" preference for the UI
+// toggle (B3e) and the quit path (B3b).
+#[tauri::command]
+fn get_keep_daemon_alive(app: AppHandle) -> Result<bool, String> {
+    let app_data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    Ok(load_keep_daemon_alive_from_dir(&app_data_dir))
+}
+
+// Persists the keep-alive preference; the quit path reads it back to decide
+// whether to release or stop the daemon.
+#[tauri::command]
+fn set_keep_daemon_alive(app: AppHandle, enabled: bool) -> Result<bool, String> {
+    let app_data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    fs::create_dir_all(&app_data_dir).map_err(|e| e.to_string())?;
+    save_keep_daemon_alive_to_dir(&app_data_dir, enabled).map_err(|e| e.to_string())?;
+    Ok(enabled)
 }
 
 // Opens an external link in the system default browser. The daemon UI runs in a
@@ -663,7 +685,6 @@ fn load_keep_daemon_alive_from_dir(app_data_dir: &Path) -> bool {
     }
 }
 
-#[allow(dead_code)] // wired to the set_keep_daemon_alive command in B3e
 fn save_keep_daemon_alive_to_dir(app_data_dir: &Path, enabled: bool) -> std::io::Result<()> {
     fs::write(
         desktop_settings_path(app_data_dir),

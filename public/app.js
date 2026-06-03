@@ -102,6 +102,36 @@ if (isTauri) {
   );
 }
 
+// Wires the "keep daemon alive after quit" toggle. Only meaningful inside the
+// desktop app (the preference is read by the Rust quit path), so the panel stays
+// hidden in a plain browser where the command does not exist.
+async function setupKeepAliveToggle() {
+  const panel = document.querySelector("#keepAlivePanel");
+  const checkbox = document.querySelector("#keepDaemonAlive");
+  if (!panel || !checkbox || !isTauri) {
+    return;
+  }
+  panel.hidden = false;
+  try {
+    const enabled = await tauriInvoke("get_keep_daemon_alive");
+    checkbox.checked = Boolean(enabled);
+  } catch (error) {
+    console.error("get_keep_daemon_alive failed", error);
+  }
+  checkbox.addEventListener("change", async () => {
+    const desired = checkbox.checked;
+    checkbox.disabled = true;
+    try {
+      await tauriInvoke("set_keep_daemon_alive", { enabled: desired });
+    } catch (error) {
+      console.error("set_keep_daemon_alive failed", error);
+      checkbox.checked = !desired; // revert on failure
+    } finally {
+      checkbox.disabled = false;
+    }
+  });
+}
+
 // Generic per-channel login state: id -> { loginId, pollTimer, startCtx }.
 const activeLogin = {};
 let expandedChannelId = null; // accordion: at most one channel expanded at a time
@@ -1396,3 +1426,5 @@ init().catch((error) => {
   showLoadError(error);
   console.error(error);
 });
+
+setupKeepAliveToggle().catch((error) => console.error(error));

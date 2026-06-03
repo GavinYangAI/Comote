@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-get-keep-daemon-alive"
+description = "Enables the get_keep_daemon_alive command without any pre-configured scope."
+commands.allow = ["get_keep_daemon_alive"]
+
+[[permission]]
+identifier = "deny-get-keep-daemon-alive"
+description = "Denies the get_keep_daemon_alive command without any pre-configured scope."
+commands.deny = ["get_keep_daemon_alive"]

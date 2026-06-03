@@ -6,5 +6,10 @@
   "remote": {
     "urls": ["http://127.0.0.1:16208"]
   },
-  "permissions": ["core:default", "allow-open-external"]
+  "permissions": [
+    "core:default",
+    "allow-open-external",
+    "allow-get-keep-daemon-alive",
+    "allow-set-keep-daemon-alive"
+  ]
 }
