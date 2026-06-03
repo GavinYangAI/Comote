@@ -109,7 +109,7 @@ export class WeChatIlinkDriver {
     };
   }
 
-  async sendText({ conversationId, accountId = this.accountId, inReplyTo = null, text }) {
+  async sendText({ conversationId, accountId = this.accountId, inReplyTo = null, text, dedupeKey = null }) {
     this.#requireToken();
     if (!text) {
       throw new Error("text is required");
@@ -127,7 +127,10 @@ export class WeChatIlinkDriver {
       msg: {
         from_user_id: "",
         to_user_id: toUserId,
-        client_id: `comote-${crypto.randomUUID()}`,
+        // Idempotent send key: a stable client_id derived from dedupeKey lets the
+        // server collapse retries of the same logical reply. Fall back to random
+        // when no dedupeKey is supplied.
+        client_id: deliveryId(dedupeKey),
         context_token: inReplyTo,
         item_list: [{ type: 1, text_item: { text: body } }],
         message_type: 2,
@@ -239,6 +242,14 @@ export class WeChatIlinkDriver {
       ...(this.token ? { Authorization: `Bearer ${this.token}` } : {}),
     };
   }
+}
+
+function deliveryId(dedupeKey) {
+  if (dedupeKey == null || dedupeKey === "") {
+    return `comote-${crypto.randomUUID()}`;
+  }
+  const digest = crypto.createHash("sha256").update(String(dedupeKey)).digest("hex");
+  return `comote-${digest.slice(0, 32)}`;
 }
 
 function buildBaseInfo() {

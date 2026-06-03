@@ -218,6 +218,47 @@ test("sendText already-CRLF text is left as a single CRLF (no doubling)", async 
   assert.equal(calls[0].msg.item_list[0].text_item.text, "line1\r\nline2");
 });
 
+test("sendText derives a stable client_id from dedupeKey to dedupe retries", async () => {
+  const calls = [];
+  const driver = new WeChatIlinkDriver({
+    baseUrl: "http://x",
+    token: "t",
+    fetchImpl: async (u, o) => {
+      calls.push(JSON.parse(o.body));
+      return { ok: true, json: async () => ({ ok: true }) };
+    },
+  });
+
+  await driver.sendText({ conversationId: "c", text: "hi", dedupeKey: "reply-42" });
+  await driver.sendText({ conversationId: "c", text: "hi", dedupeKey: "reply-42" });
+
+  const first = calls[0].msg.client_id;
+  const second = calls[1].msg.client_id;
+  assert.equal(first, second, "same dedupeKey must yield the same client_id");
+  assert.match(first, /^comote-[0-9a-f]{32}$/, "client_id should be a sha256-derived stable key");
+
+  await driver.sendText({ conversationId: "c", text: "hi", dedupeKey: "reply-99" });
+  assert.notEqual(calls[2].msg.client_id, first, "different dedupeKey must yield a different client_id");
+});
+
+test("sendText falls back to a random client_id when no dedupeKey is supplied", async () => {
+  const calls = [];
+  const driver = new WeChatIlinkDriver({
+    baseUrl: "http://x",
+    token: "t",
+    fetchImpl: async (u, o) => {
+      calls.push(JSON.parse(o.body));
+      return { ok: true, json: async () => ({ ok: true }) };
+    },
+  });
+
+  await driver.sendText({ conversationId: "c", text: "hi" });
+  await driver.sendText({ conversationId: "c", text: "hi" });
+
+  assert.match(calls[0].msg.client_id, /^comote-[0-9a-f-]{36}$/);
+  assert.notEqual(calls[0].msg.client_id, calls[1].msg.client_id, "random fallback must differ between sends");
+});
+
 test("starts and checks a WeChat QR login session without user-supplied URL or token", async () => {
   const requests = [];
   const driver = new WeChatIlinkDriver({
