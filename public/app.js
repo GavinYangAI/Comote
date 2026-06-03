@@ -4,6 +4,12 @@ import {
   channelRows,
   channelFormSpec,
   channelBoundButton,
+  isBound,
+  isConnected,
+  partitionChannels,
+  channelSummaryLine,
+  bindingAffordance,
+  channelSetup,
   normalizedLoginView,
   restingLoginView,
   readinessFromChannels,
@@ -46,6 +52,8 @@ async function safeGet(path, fallback) {
 
 // Generic per-channel login state: id -> { loginId, pollTimer, startCtx }.
 const activeLogin = {};
+let expandedChannelId = null; // accordion: at most one channel expanded at a time
+let lastChannels = []; // latest fetched list, so toggle handlers can re-render
 // Latest channel list from GET /api/channels, kept so event handlers
 // (bind/save) can look a channel's meta up by id without re-fetching.
 let channelsById = {};
@@ -251,14 +259,25 @@ function renderProjects(result) {
 // --- Generic registry-meta-driven channel cards (replaces renderWechat/renderFeishu) ---
 
 function renderChannels(channels) {
+  lastChannels = channels;
   const container = document.querySelector("#channelCards");
-  if (!container) {
-    return;
+  if (!container) return;
+  const { connected, available } = partitionChannels(channels);
+  // Default: if nothing explicitly expanded yet, expand a pending channel (待配对/待扫码) so
+  // the pairing code/QR is visible without a click; else keep collapsed.
+  if (expandedChannelId === null) {
+    const pending = connected.find((c) => isConnected(c) && !isBound(c));
+    if (pending) expandedChannelId = pending.id;
   }
-  container.innerHTML = channels.map(channelCardHtml).join("");
-  // Bind/save are handled by ONE delegated listener on #channelCards (wired once
-  // in setupChannelCards); here we only repaint each card's resting QR state.
-  channels.forEach(paintChannelCardResting);
+  const sections = [];
+  if (connected.length) {
+    sections.push(`<section class="channel-section"><div class="channel-section-title">${escapeHtml(tWeb("web.channel.section.connected"))}</div>${connected.map(connectedRowHtml).join("")}</section>`);
+  }
+  if (available.length) {
+    sections.push(`<section class="channel-section"><div class="channel-section-title">${escapeHtml(tWeb("web.channel.section.available"))}</div><div class="channel-add-grid">${available.map(availableTileHtml).join("")}</div></section>`);
+  }
+  container.innerHTML = sections.join("");
+  channels.forEach(paintChannelCardResting); // repaint any in-flight/resting QR area
 }
 
 // One delegated click listener for every channel card's bind / save-config
@@ -270,6 +289,13 @@ function setupChannelCards() {
     return;
   }
   container.addEventListener("click", async (event) => {
+    const toggleBtn = event.target.closest("[data-toggle]");
+    if (toggleBtn) {
+      const id = toggleBtn.dataset.toggle;
+      expandedChannelId = expandedChannelId === id ? null : id;
+      renderChannels(lastChannels); // re-render from the last fetched list
+      return;
+    }
     const bindBtn = event.target.closest("[data-bind]");
     if (bindBtn) {
       const ch = channelsById[bindBtn.dataset.bind];
@@ -310,54 +336,80 @@ function renderChannelDropdown(channels) {
   }
 }
 
-// One generic card built from the plugin meta + live status/runtime/config.
-// `binding === "qr"` cards show a QR area + bind button; credentials/token
-// cards show a config form + save button (scaffold for future channels).
-function channelCardHtml(ch) {
+// A connected channel: collapsible row. Collapsed = icon+name+summary+badge+管理.
+// Expanded = binding affordance (pairing code / QR) + status rows + config form + setup.
+function connectedRowHtml(ch) {
   const badge = channelBadge(ch, tWeb);
-  const badgeClass = badge.tone === "success" ? "badge success" : badge.tone === "warning" ? "badge warning" : "badge";
-  const rows = channelRows(ch, tWeb)
-    .map((row) => `<dt>${escapeHtml(row.label)}</dt><dd>${escapeHtml(row.value)}</dd>`)
-    .join("");
-  const button = channelBoundButton(ch, tWeb, { activeLoginId: activeLogin[ch.id]?.loginId ?? null });
+  const pending = isConnected(ch) && !isBound(ch);
+  const badgeClass = `badge${pending ? " pending" : badge.tone === "success" ? " success" : badge.tone === "warning" ? " warning" : ""}`;
   const icon = ch.icon ?? (ch.displayName ?? "")[0] ?? "";
-  const description = ch.descriptionKey ? tWeb(ch.descriptionKey) : "";
-
-  let widget;
-  if (ch.binding === "qr") {
-    widget = `
-      <div id="${escapeAttr(ch.id)}LoginResult" class="qr-result">
-        <div class="qr-glyph">
-          <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="#c4c2bc" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><path d="M14 14h3v3M21 14v7h-7M17 21v-4"/></svg>
-        </div>
-        <span>${escapeHtml(tWeb("web.channel.qr.scanHint"))}</span>
-      </div>
-      ${channelConfigFormHtml(ch)}
-      <div class="actions card-actions">
-        <button type="button" class="btn-primary-card" data-bind="${escapeAttr(ch.id)}">${escapeHtml(button.label)}</button>
-      </div>`;
-  } else {
-    widget = `
-      ${channelConfigFormHtml(ch)}
-      <div class="actions card-actions">
-        <button type="button" class="btn-primary-card" data-save-config="${escapeAttr(ch.id)}">${escapeHtml(tWeb("web.channel.save"))}</button>
-      </div>`;
-  }
-
+  const summary = channelSummaryLine(ch, tWeb);
+  const expanded = expandedChannelId === ch.id;
+  const toggleLabel = expanded ? tWeb("web.channel.collapse") : tWeb("web.channel.manage");
   return `
-    <article class="channel-card" data-channel="${escapeAttr(ch.id)}">
-      <div class="channel-head">
+    <article class="channel-row ${expanded ? "expanded" : ""}" data-channel="${escapeAttr(ch.id)}">
+      <div class="channel-row-head" data-toggle="${escapeAttr(ch.id)}">
         <div class="channel-tile ${escapeAttr(ch.id)}-icon" aria-hidden="true">${escapeHtml(icon)}</div>
-        <div class="ch-meta">
-          <h3>${escapeHtml(ch.displayName ?? ch.id)}</h3>
-          <div class="ch-sub">${escapeHtml(description)}</div>
-        </div>
+        <div><div class="ch-name">${escapeHtml(ch.displayName ?? ch.id)}</div>${summary ? `<div class="ch-summary">${escapeHtml(summary)}</div>` : ""}</div>
         <span class="${badgeClass}">${escapeHtml(badge.text)}</span>
+        <button type="button" class="secondary-button" data-toggle="${escapeAttr(ch.id)}">${escapeHtml(toggleLabel)} ${expanded ? "▴" : "▾"}</button>
       </div>
-
-      <dl class="kv status-rows">${rows}</dl>
-      ${widget}
+      ${expanded ? `<div class="channel-row-body">${channelDetailHtml(ch)}</div>` : ""}
     </article>`;
+}
+
+// An available (unconfigured) channel: compact add tile; expands into the same
+// config detail when clicked.
+function availableTileHtml(ch) {
+  const icon = ch.icon ?? (ch.displayName ?? "")[0] ?? "";
+  const expanded = expandedChannelId === ch.id;
+  const desc = ch.descriptionKey ? tWeb(ch.descriptionKey) : "";
+  if (expanded) {
+    return `<article class="channel-add-tile expanded" data-channel="${escapeAttr(ch.id)}">
+      <div class="channel-row-head" data-toggle="${escapeAttr(ch.id)}" style="padding:0 0 8px">
+        <div class="channel-tile ${escapeAttr(ch.id)}-icon" aria-hidden="true">${escapeHtml(icon)}</div>
+        <div class="ch-name">${escapeHtml(ch.displayName ?? ch.id)}</div>
+        <button type="button" class="secondary-button" data-toggle="${escapeAttr(ch.id)}" style="margin-left:auto">${escapeHtml(tWeb("web.channel.collapse"))} ▴</button>
+      </div>
+      ${channelDetailHtml(ch)}</article>`;
+  }
+  return `<article class="channel-add-tile" data-channel="${escapeAttr(ch.id)}">
+    <div class="channel-tile ${escapeAttr(ch.id)}-icon" aria-hidden="true">${escapeHtml(icon)}</div>
+    <div class="ch-name">${escapeHtml(ch.displayName ?? ch.id)}</div>
+    <div class="ch-sub">${escapeHtml(desc)}</div>
+    <button type="button" class="btn-primary-card" data-toggle="${escapeAttr(ch.id)}">+ ${escapeHtml(tWeb("web.channel.add"))}</button>
+  </article>`;
+}
+
+// Shared expanded detail: binding affordance + status rows + config form + setup +
+// actions. Reuses channelConfigFormHtml + the QR area for qr channels.
+function channelDetailHtml(ch) {
+  const aff = bindingAffordance(ch);
+  let affHtml = "";
+  if (aff?.kind === "pairingCode") {
+    affHtml = `<div class="pairing-block"><div class="intro">${escapeHtml(tWeb("web.channel.pairing.intro"))}</div><span class="pairing-code">${escapeHtml(aff.code ?? "—")}</span></div>`;
+  } else if (aff?.kind === "qr") {
+    affHtml = qrAreaHtml(ch); // the <id>LoginResult scan area, painted by paintChannelCardResting
+  }
+  // bound qr channel: still show its resting QR area (account summary) on expand
+  const qrResting = ch.binding === "qr" && !aff ? qrAreaHtml(ch) : "";
+  const rows = channelRows(ch, tWeb).map((r) => `<dt>${escapeHtml(r.label)}</dt><dd>${escapeHtml(r.value)}</dd>`).join("");
+  const setup = channelSetup(ch, tWeb);
+  const setupHtml = setup ? `<details class="channel-setup"><summary>${escapeHtml(tWeb("web.channel.howTo"))} ▸</summary><ol>${setup.steps.map((s) => `<li>${escapeHtml(s)}</li>`).join("")}</ol>${setup.link ? `<a href="${escapeAttr(setup.link.url)}" target="_blank" rel="noopener">↗ ${escapeHtml(setup.link.label)}</a>` : ""}</details>` : "";
+  const button = channelBoundButton(ch, tWeb, { activeLoginId: activeLogin[ch.id]?.loginId ?? null });
+  const actionBtn = ch.binding === "qr"
+    ? `<button type="button" class="btn-primary-card" data-bind="${escapeAttr(ch.id)}">${escapeHtml(button.label)}</button>`
+    : `<button type="button" class="btn-primary-card" data-save-config="${escapeAttr(ch.id)}">${escapeHtml(tWeb("web.channel.save"))}</button>`;
+  return `${affHtml}${qrResting}${rows ? `<dl class="kv status-rows">${rows}</dl>` : ""}${channelConfigFormHtml(ch)}${setupHtml}<div class="actions card-actions">${actionBtn}</div>`;
+}
+
+// The qr scan area (extracted from the old channelCardHtml qr branch) so both the
+// pending-scan affordance and a bound qr channel's resting summary can render it.
+function qrAreaHtml(ch) {
+  return `<div id="${escapeAttr(ch.id)}LoginResult" class="qr-result">
+    <div class="qr-glyph"><svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="#c4c2bc" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><path d="M14 14h3v3M21 14v7h-7M17 21v-4"/></svg></div>
+    <span>${escapeHtml(tWeb("web.channel.qr.scanHint"))}</span>
+  </div>`;
 }
 
 // Renders the visible configFields as form inputs. Empty when a channel has no
