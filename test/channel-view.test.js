@@ -1,0 +1,80 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import {
+  channelBadge, channelRows, channelFormSpec,
+  channelBoundButton, normalizedLoginView, readinessFromChannels,
+} from "../public/channel-view.js";
+
+const t = (k) => k; // echo key
+
+const feishu = {
+  id: "feishu", displayName: "飞书 / Lark", binding: "qr", icon: "飞",
+  descriptionKey: "web.channel.feishu.desc",
+  states: { running: { labelKey: "S.running", tone: "success" }, not_configured: { labelKey: "S.nc", tone: "warning" } },
+  statusFlags: [],
+  statusRows: [{ labelKey: "R.account", source: "config", field: "linkedUserName", fallback: ["linkedUserId"], fallbackKey: "R.account.waiting" }],
+  configFields: [{ name: "domain", type: "select", labelKey: "F.domain", default: "feishu", options: [{ value: "feishu", labelKey: "O.feishu" }, { value: "lark", labelKey: "O.lark" }] }],
+  boundWhen: { source: "config", field: "configured" },
+  status: { state: "adapter_ready" }, runtime: { state: "running" }, config: { configured: true, linkedUserName: "Alice", domain: "lark" },
+};
+const wechat = {
+  id: "wechat", displayName: "微信", binding: "qr", icon: "微",
+  states: { running: { labelKey: "S.running", tone: "success" }, configured: { labelKey: "S.cfg", tone: "neutral" } },
+  statusFlags: [{ source: "runtime", field: "needsRelogin", tone: "warning", badgeKey: "B.relogin", labelKey: "L.relogin" }],
+  statusRows: [{ labelKey: "R.host", source: "status", field: "externalAgentHostRequired", map: { true: "H.req", false: "H.no" } }],
+  configFields: [{ name: "enabled", type: "checkbox", labelKey: "F.enabled", default: true }, { name: "accountId", type: "text", labelKey: "F.acc", default: "default", hidden: true }],
+  boundWhen: { source: "config", field: "loggedIn" },
+  status: { externalAgentHostRequired: false }, runtime: { state: "configured", needsRelogin: true }, config: { loggedIn: false },
+};
+
+test("channelBadge uses states[runtime.state] tone+label", () => {
+  assert.deepEqual(channelBadge(feishu, t), { text: "S.running", tone: "success" });
+});
+test("channelBadge: statusFlag overrides state (wechat needsRelogin)", () => {
+  assert.deepEqual(channelBadge(wechat, t), { text: "B.relogin", tone: "warning" });
+});
+test("channelRows resolves source/field with fallback + map", () => {
+  assert.deepEqual(channelRows(feishu, t), [{ label: "R.account", value: "Alice" }]);
+  const f2 = { ...feishu, config: { configured: true, linkedUserId: "uid7" } };
+  assert.equal(channelRows(f2, t)[0].value, "uid7");
+  const f3 = { ...feishu, config: { configured: true } };
+  assert.equal(channelRows(f3, t)[0].value, "R.account.waiting");
+  assert.equal(channelRows(wechat, t)[0].value, "H.no");
+});
+test("channelFormSpec emits visible fields with current values + select options", () => {
+  const spec = channelFormSpec(feishu, t);
+  assert.equal(spec[0].name, "domain");
+  assert.equal(spec[0].type, "select");
+  assert.equal(spec[0].value, "lark");
+  assert.deepEqual(spec[0].options, [{ value: "feishu", label: "O.feishu" }, { value: "lark", label: "O.lark" }]);
+  assert.ok(!channelFormSpec(wechat, t).some((f) => f.name === "accountId"));
+});
+test("channelBoundButton is 3-state via boundWhen", () => {
+  assert.equal(channelBoundButton(feishu, t, { activeLoginId: null }).label, "web.channel.rebind");
+  assert.equal(channelBoundButton(wechat, t, { activeLoginId: null }).label, "web.channel.bind");
+  assert.equal(channelBoundButton(wechat, t, { activeLoginId: "x" }).label, "web.channel.refresh");
+});
+test("normalizedLoginView maps {state} to a phase + lines", () => {
+  assert.equal(normalizedLoginView({ state: "pending", qrUrl: "Q" }, t).phase, "pending");
+  assert.equal(normalizedLoginView({ state: "confirmed", account: { name: "Bob" } }, t).phase, "confirmed");
+  assert.equal(normalizedLoginView({ state: "expired" }, t).phase, "expired");
+  assert.equal(normalizedLoginView({ state: "failed", message: "nope" }, t).message, "nope");
+});
+test("readinessFromChannels: bound + running derived across channels", () => {
+  assert.equal(readinessFromChannels([feishu, wechat]).bound, true);
+  assert.equal(readinessFromChannels([feishu, wechat]).running, true);
+  assert.equal(readinessFromChannels([wechat]).bound, false);
+});
+test("works for an arbitrary credentials plugin (generalization)", () => {
+  const dingtalk = {
+    id: "dingtalk", displayName: "钉钉", binding: "credentials", icon: "钉",
+    states: { configured: { labelKey: "S.cfg", tone: "neutral" }, not_configured: { labelKey: "S.nc", tone: "warning" } },
+    statusFlags: [], statusRows: [],
+    configFields: [{ name: "appKey", type: "text", labelKey: "F.key" }, { name: "appSecret", type: "password", labelKey: "F.secret", secret: true }],
+    boundWhen: { source: "config", field: "configured" },
+    status: {}, runtime: { state: "not_configured" }, config: {},
+  };
+  assert.equal(channelBadge(dingtalk, t).tone, "warning");
+  const spec = channelFormSpec(dingtalk, t);
+  assert.equal(spec.find((f) => f.name === "appSecret").type, "password");
+});
