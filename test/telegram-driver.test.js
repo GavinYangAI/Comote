@@ -91,6 +91,22 @@ test("loop calls onError + stops on a fatal 401", async () => {
   assert.equal(d.running, false);
 });
 
+test("sendDocument uses the provided fileName as the multipart filename", async () => {
+  const { mkdtemp, writeFile } = await import("node:fs/promises");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const dir = await mkdtemp(join(tmpdir(), "tgd-"));
+  const p = join(dir, "tmp-abc123.bin");
+  await writeFile(p, Buffer.from("data"));
+  let captured = null;
+  const fetchImpl = async (url, opts) => { captured = opts.body; return { ok: true, json: async () => ({ ok: true, result: {} }) }; };
+  const d = new TelegramDriver({ botToken: "T", fetchImpl });
+  await d.sendDocument({ chatId: "9", path: p, fileName: "report.pdf" });
+  assert.ok(captured instanceof FormData);
+  const doc = captured.get("document");
+  assert.equal(doc.name, "report.pdf");
+});
+
 test("downloadAttachment resolves file_path then fetches the file bytes", async () => {
   const fetchImpl = fakeFetch((url) => {
     if (url.endsWith("/getFile")) return okJson({ file_path: "photos/p.jpg" });

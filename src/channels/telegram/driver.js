@@ -64,12 +64,12 @@ export class TelegramDriver {
     return this._call("sendChatAction", { chat_id: chatId, action });
   }
 
-  async _sendMultipart(method, chatId, field, localPath, extra = {}) {
+  async _sendMultipart(method, chatId, field, localPath, extra = {}, fileName = null) {
     const bytes = await readFile(localPath);
     const form = new FormData();
     form.append("chat_id", String(chatId));
     for (const [k, v] of Object.entries(extra)) if (v != null) form.append(k, String(v));
-    form.append(field, new Blob([bytes]), basename(localPath));
+    form.append(field, new Blob([bytes]), fileName ?? basename(localPath));
     const res = await this.fetch(`${this.apiBase}/bot${this.botToken}/${method}`, { method: "POST", body: form });
     const body = await res.json();
     if (!body.ok) {
@@ -85,7 +85,7 @@ export class TelegramDriver {
   }
 
   async sendDocument({ chatId, path, fileName = null, caption = null }) {
-    return this._sendMultipart("sendDocument", chatId, "document", path, { caption });
+    return this._sendMultipart("sendDocument", chatId, "document", path, { caption }, fileName);
   }
 
   async getFile(fileId) {
@@ -120,7 +120,7 @@ export class TelegramDriver {
         updates = await this._call("getUpdates", {
           offset: this.offset,
           timeout: this.longPollSeconds,
-          allowed_updates: ["message", "callback_query"],
+          allowed_updates: ["message", "edited_message", "callback_query"],
         }, { signal: this._abort.signal });
         this.lastPollAt = new Date().toISOString();
       } catch (error) {
