@@ -13,6 +13,8 @@ import { CodexCliConnector } from "../connectors/codex-cli/index.js";
 import feishuPlugin from "../channels/feishu/index.js";
 import wechatPlugin from "../channels/wechat/index.js";
 import dingtalkPlugin from "../channels/dingtalk/index.js";
+import telegramPlugin from "../channels/telegram/index.js";
+import { generatePairingCode as generateTelegramPairingCode } from "../channels/telegram/cards.js";
 import { createRegistry } from "../channels/registry.js";
 import { JsonFileStore } from "../core/persistence.js";
 import { OutboundQueue } from "../core/outbound-queue.js";
@@ -28,6 +30,7 @@ export function createComoteState({
   autoStartWeChatRuntime = true,
   autoStartFeishuRuntime = true,
   autoStartDingTalkRuntime = true,
+  autoStartTelegramRuntime = true,
   desktop: desktopOverride = null,
   currentVersion = null,
   versionChecker = null,
@@ -62,7 +65,7 @@ export function createComoteState({
     persisted: persisted.router ?? {},
     transcript,
   });
-  const registry = createRegistry([feishuPlugin, wechatPlugin, dingtalkPlugin]);
+  const registry = createRegistry([feishuPlugin, wechatPlugin, dingtalkPlugin, telegramPlugin]);
 
   // Per-channel seed configs (env-var defaults), keyed by plugin id. Normalized
   // through each plugin's normalizeConfig below.
@@ -86,6 +89,10 @@ export function createComoteState({
       approvalTemplateId: process.env.COMOTE_DINGTALK_APPROVAL_TEMPLATE ?? null,
       statusTemplateId: process.env.COMOTE_DINGTALK_STATUS_TEMPLATE ?? null,
       pickerTemplateId: process.env.COMOTE_DINGTALK_PICKER_TEMPLATE ?? null,
+    },
+    telegram: persisted.channelConfigs?.telegram ?? {
+      enabled: Boolean(process.env.COMOTE_TELEGRAM_BOT_TOKEN),
+      botToken: process.env.COMOTE_TELEGRAM_BOT_TOKEN ?? null,
     },
   };
 
@@ -276,6 +283,43 @@ export function createComoteState({
         driver: stack.driver,
         persist: async () => stateRef.persist?.(),
         eventLog,
+      }),
+    },
+    telegram: {
+      buildAdapterOpts: (stack) => ({
+        commandRouter,
+        onDetectedIdentity: (identity) => authorization.detectIdentity(identity),
+        isAuthorized: (identity) => authorization.isAuthorized(identity),
+        getPairingState: () => ({ pairingCode: stack.config.pairingCode, linkedChatId: stack.config.linkedChatId }),
+        onPaired: async ({ chatId, identity, displayName }) => {
+          authorization.confirmIdentity(identity);
+          stack.config = stack.plugin.normalizeConfig({ ...stack.config, linkedChatId: String(chatId), linkedUserName: displayName ?? null, pairingCode: null });
+          await stateRef.persist?.();
+        },
+        downloadAttachment: async ({ attachment, identity }) => {
+          const projectPath = commandRouter.currentProjectByIdentity.get(commandRouter.identityKey(identity));
+          if (!projectPath) throw new Error("NO_PROJECT");
+          const { join } = await import("node:path");
+          const safeName = sanitizeUploadName(attachment.fileName);
+          const destPath = join(projectPath, ".comote", "uploads", safeName);
+          if (!resolveWithinProject(projectPath, destPath)) throw new Error("UNSAFE_ATTACHMENT_PATH");
+          await stack.runtime.driver.downloadAttachment({ downloadCode: attachment.downloadCode, destPath });
+          return { relativePath: join(".comote", "uploads", safeName) };
+        },
+        sendReply: async (reply) => { outboundReplies.enqueue(reply); return { ok: true }; },
+      }),
+      buildRuntimeOpts: (stack) => ({
+        adapter: stack.adapter,
+        outboundQueue: outboundReplies,
+        renderer: stack.renderer,
+        driver: stack.driver,
+        persist: async () => stateRef.persist?.(),
+        eventLog,
+        ensurePairingCode: async () => {
+          if (stack.config.linkedChatId || stack.config.pairingCode) return;
+          stack.config = stack.plugin.normalizeConfig({ ...stack.config, pairingCode: generateTelegramPairingCode() });
+          await stateRef.persist?.();
+        },
       }),
     },
   };
@@ -760,6 +804,15 @@ export function createComoteState({
       (error) => {
         channelStacks.get("dingtalk").runtime.lastError = error.message;
         eventLog.error("钉钉运行时启动失败", { error: error.message });
+      },
+    );
+  }
+  const telegramConfig = channelStacks.get("telegram").config;
+  if (autoStartTelegramRuntime && telegramConfig.enabled && telegramConfig.botToken) {
+    channelStacks.get("telegram").runtime.start().then(
+      () => eventLog.info("Telegram 运行时已自动启动"),
+      (error) => {
+        channelStacks.get("telegram").runtime.lastError = error.message;
       },
     );
   }
