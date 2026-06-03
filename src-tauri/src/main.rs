@@ -347,7 +347,10 @@ fn set_keep_daemon_alive(app: AppHandle, enabled: bool) -> Result<bool, String> 
 // routes outbound links here. Only http(s) is allowed — never file:, etc.
 #[tauri::command]
 fn open_external(app: AppHandle, url: String) -> Result<(), String> {
-    if !(url.starts_with("http://") || url.starts_with("https://")) {
+    // Lowercase only for the scheme gate so `HTTPS://` is accepted; still
+    // http(s)-only (fail safe). The original-case url is what we actually open.
+    let scheme = url.to_ascii_lowercase();
+    if !(scheme.starts_with("http://") || scheme.starts_with("https://")) {
         return Err(format!("refused to open non-http(s) url: {url}"));
     }
     app.opener()
@@ -600,41 +603,73 @@ fn wait_for_service(port: u16, timeout: Duration) -> bool {
     false
 }
 
+// Outcome of probing the daemon port. Distinguishing "nothing is listening"
+// from "something answered but we couldn't read it" is load-bearing: only the
+// former is safe to start our own daemon onto. See classify_service_probe.
+enum ServiceProbe {
+    // TCP connect failed — the port is free, nothing is listening.
+    Unreachable,
+    // TCP connect succeeded but the /api/version body couldn't be read or
+    // parsed (read timeout, partial/non-UTF-8, missing version). Something
+    // already owns the port, so we must NOT start a second daemon onto it.
+    Unreadable,
+    // A version (and optionally pid) was successfully read from the daemon.
+    Read(String, Option<u32>),
+}
+
 // Probes the port for an existing daemon and classifies it for reuse. A daemon
 // is reusable only when its reported version equals ours.
 fn inspect_existing_service(port: u16, expected_version: &str) -> ExistingService {
-    let Some((version, pid)) = fetch_service_version(port) else {
-        return ExistingService::None;
-    };
-    match version {
-        None => ExistingService::Mismatched(None),
-        Some(version) if can_reuse_existing_service(Some(&version), expected_version) => {
-            ExistingService::Reusable(pid)
+    classify_service_probe(fetch_service_version(port), expected_version)
+}
+
+// Pure classification of a probe outcome into a reuse decision. Kept separate
+// from the TCP I/O so it can be unit-tested without a live socket.
+//   Unreachable    -> None        (port free; start our own daemon)
+//   Unreadable     -> Mismatched  (port occupied; refuse, do NOT double-spawn)
+//   Read(version)  -> Reusable iff version matches, else Mismatched
+fn classify_service_probe(probe: ServiceProbe, expected_version: &str) -> ExistingService {
+    match probe {
+        ServiceProbe::Unreachable => ExistingService::None,
+        ServiceProbe::Unreadable => ExistingService::Mismatched(None),
+        ServiceProbe::Read(version, pid) => {
+            if can_reuse_existing_service(Some(&version), expected_version) {
+                ExistingService::Reusable(pid)
+            } else {
+                ExistingService::Mismatched(Some(version))
+            }
         }
-        Some(version) => ExistingService::Mismatched(Some(version)),
     }
 }
 
 // Speaks just enough HTTP/1.1 to GET /api/version and read the JSON body. Kept
 // dependency-free (raw TCP) because the only consumer is this one probe and we
-// don't want an HTTP client crate in the desktop shell.
-fn fetch_service_version(port: u16) -> Option<(Option<String>, Option<u32>)> {
-    let mut stream = TcpStream::connect(("127.0.0.1", port)).ok()?;
+// don't want an HTTP client crate in the desktop shell. A successful connect
+// whose body can't be read or parsed yields Unreadable (NOT Unreachable) so the
+// caller refuses the port instead of spawning a second daemon onto it.
+fn fetch_service_version(port: u16) -> ServiceProbe {
+    let Ok(mut stream) = TcpStream::connect(("127.0.0.1", port)) else {
+        return ServiceProbe::Unreachable;
+    };
     let timeout = Some(Duration::from_millis(600));
     let _ = stream.set_read_timeout(timeout);
     let _ = stream.set_write_timeout(timeout);
     let request = "GET /api/version HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n";
-    stream.write_all(request.as_bytes()).ok()?;
+    if stream.write_all(request.as_bytes()).is_err() {
+        return ServiceProbe::Unreadable;
+    }
     let mut response = String::new();
-    stream.read_to_string(&mut response).ok()?;
+    if stream.read_to_string(&mut response).is_err() {
+        return ServiceProbe::Unreadable;
+    }
     let body = response
         .split("\r\n\r\n")
         .nth(1)
         .unwrap_or(response.as_str());
-    Some((
-        service_version_from_status_body(body),
-        service_pid_from_body(body),
-    ))
+    match service_version_from_status_body(body) {
+        Some(version) => ServiceProbe::Read(version, service_pid_from_body(body)),
+        None => ServiceProbe::Unreadable,
+    }
 }
 
 fn can_reuse_existing_service(found_version: Option<&str>, expected_version: &str) -> bool {
@@ -745,6 +780,37 @@ mod tests {
             Some(91632)
         );
         assert_eq!(service_pid_from_body(r#"{"version":"0.2.1"}"#), None);
+    }
+
+    #[test]
+    fn connected_but_unreadable_is_mismatched_not_none() {
+        // A successful connect whose body couldn't be read/parsed must NOT be
+        // classified as None — None means "port free", which would spawn a
+        // second daemon onto the already-occupied port.
+        assert!(matches!(
+            classify_service_probe(ServiceProbe::Unreadable, "0.2.1"),
+            ExistingService::Mismatched(None)
+        ));
+    }
+
+    #[test]
+    fn unreachable_port_is_none_so_we_start_our_own_daemon() {
+        assert!(matches!(
+            classify_service_probe(ServiceProbe::Unreachable, "0.2.1"),
+            ExistingService::None
+        ));
+    }
+
+    #[test]
+    fn read_version_classifies_reuse_vs_mismatch() {
+        assert!(matches!(
+            classify_service_probe(ServiceProbe::Read("0.2.1".to_string(), Some(42)), "0.2.1"),
+            ExistingService::Reusable(Some(42))
+        ));
+        assert!(matches!(
+            classify_service_probe(ServiceProbe::Read("0.2.0".to_string(), None), "0.2.1"),
+            ExistingService::Mismatched(Some(_))
+        ));
     }
 
     #[test]
