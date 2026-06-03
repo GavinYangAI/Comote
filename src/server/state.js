@@ -31,6 +31,7 @@ export function createComoteState({
   autoStartFeishuRuntime = true,
   autoStartDingTalkRuntime = true,
   autoStartTelegramRuntime = true,
+  autoStartDelayMs = 5_000,
   desktop: desktopOverride = null,
   currentVersion = null,
   versionChecker = null,
@@ -792,38 +793,53 @@ export function createComoteState({
   // point-in-time config snapshot, used only for auto-start enabled-gating
   const wechatConfig = channelStacks.get("wechat").config;
   const feishuConfig = channelStacks.get("feishu").config;
+  const dingtalkConfig = channelStacks.get("dingtalk").config;
+  const telegramConfig = channelStacks.get("telegram").config;
+  // Delay saved-channel runtime auto-start so the HTTP daemon binds and answers
+  // health checks first; some IM SDK startup paths can be slow or noisy. A delay
+  // of 0 (used by tests) still defers to the next tick, which the callers await.
+  const deferAutoStart = (fn) => {
+    const timer = setTimeout(fn, autoStartDelayMs);
+    timer.unref?.();
+  };
   if (autoStartWeChatRuntime && wechatConfig.enabled && wechatConfig.token) {
-    wechatRuntime.start();
-    eventLog.info("微信运行时已自动启动", { accountId: wechatConfig.accountId });
+    deferAutoStart(() => {
+      wechatRuntime.start();
+      eventLog.info("微信运行时已自动启动", { accountId: wechatConfig.accountId });
+    });
   }
   if (autoStartFeishuRuntime && feishuConfig.enabled && feishuConfig.appId && feishuConfig.appSecret) {
-    feishuRuntime.start().then(
-      () => eventLog.info("飞书运行时已自动启动", { appId: feishuConfig.appId }),
-      (error) => {
-        feishuRuntime.lastError = error.message;
-        eventLog.error("飞书运行时启动失败", { error: error.message });
-      },
-    );
+    deferAutoStart(() => {
+      feishuRuntime.start().then(
+        () => eventLog.info("飞书运行时已自动启动", { appId: feishuConfig.appId }),
+        (error) => {
+          feishuRuntime.lastError = error.message;
+          eventLog.error("飞书运行时启动失败", { error: error.message });
+        },
+      );
+    });
   }
-  const dingtalkConfig = channelStacks.get("dingtalk").config;
   if (autoStartDingTalkRuntime && dingtalkConfig.enabled && dingtalkConfig.appKey && dingtalkConfig.appSecret) {
-    channelStacks.get("dingtalk").runtime.start().then(
-      () => eventLog.info("钉钉运行时已自动启动", { appKey: dingtalkConfig.appKey }),
-      (error) => {
-        channelStacks.get("dingtalk").runtime.lastError = error.message;
-        eventLog.error("钉钉运行时启动失败", { error: error.message });
-      },
-    );
+    deferAutoStart(() => {
+      channelStacks.get("dingtalk").runtime.start().then(
+        () => eventLog.info("钉钉运行时已自动启动", { appKey: dingtalkConfig.appKey }),
+        (error) => {
+          channelStacks.get("dingtalk").runtime.lastError = error.message;
+          eventLog.error("钉钉运行时启动失败", { error: error.message });
+        },
+      );
+    });
   }
-  const telegramConfig = channelStacks.get("telegram").config;
   if (autoStartTelegramRuntime && telegramConfig.enabled && telegramConfig.botToken) {
-    channelStacks.get("telegram").runtime.start().then(
-      () => eventLog.info("Telegram 运行时已自动启动"),
-      (error) => {
-        channelStacks.get("telegram").runtime.lastError = error.message;
-        eventLog.error("Telegram 运行时自动启动失败", { error: error.message });
-      },
-    );
+    deferAutoStart(() => {
+      channelStacks.get("telegram").runtime.start().then(
+        () => eventLog.info("Telegram 运行时已自动启动"),
+        (error) => {
+          channelStacks.get("telegram").runtime.lastError = error.message;
+          eventLog.error("Telegram 运行时自动启动失败", { error: error.message });
+        },
+      );
+    });
   }
   return stateRef;
 }

@@ -40,8 +40,9 @@ test("stores WeChat login results when token and account id are present", () => 
   );
 });
 
-test("auto-starts WeChat runtime when a saved login token exists", () => {
+test("auto-starts WeChat runtime when a saved login token exists", async () => {
   const state = createComoteState({
+    autoStartDelayMs: 0,
     persisted: {
       channelConfigs: {
         wechat: {
@@ -55,6 +56,7 @@ test("auto-starts WeChat runtime when a saved login token exists", () => {
     },
   });
 
+  await tick();
   assert.equal(state.runtime.wechat.getStatus().state, "running");
   state.runtime.wechat.stop();
 });
@@ -108,6 +110,10 @@ test("can keep WeChat runtime stopped for tests and diagnostics", () => {
 
   assert.equal(state.runtime.wechat.getStatus().state, "configured");
 });
+
+function tick() {
+  return new Promise((resolve) => setTimeout(resolve, 0));
+}
 
 test("routeDesktopEvent drives a dingtalk live status card", async (t) => {
   // De-flake: configure() builds a REAL DingTalkDriver and start()s it, whose
