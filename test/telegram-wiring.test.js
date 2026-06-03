@@ -48,3 +48,26 @@ test("sending the pairing code binds the chat + authorizes the identity", async 
   assert.equal(cfg.pairingCode, null); // cleared after pairing
   assert.equal(state.authorization.isAuthorized({ channel: "telegram", stableId: "555" }), true);
 });
+
+test("persist() syncs the live telegram driver offset into channelConfigs", async (t) => {
+  // Simulate the driver having long-polled: startEventStream advances this.offset.
+  const original = TelegramDriver.prototype.startEventStream;
+  TelegramDriver.prototype.startEventStream = async function () { this.offset = 4242; return { ok: true }; };
+  t.after(() => { TelegramDriver.prototype.startEventStream = original; });
+
+  let saved = null;
+  const stateStore = { async load() { return {}; }, async save(payload) { saved = payload; } };
+  const state = createComoteState({
+    desktop: { onEvent: null, async listProjects() { return []; } },
+    stateStore,
+    persisted: {},
+    autoStartTelegramRuntime: false,
+  });
+  // configure() builds the live driver and starts the runtime, which calls the
+  // patched startEventStream and sets driver.offset to 4242. configure() itself
+  // does not persist in this codebase, so trigger one explicit persist below.
+  await state.runtime.telegram.configure({ enabled: true, botToken: "T" });
+  await state.persist();
+  assert.ok(saved, "stateStore.save was called");
+  assert.equal(saved.channelConfigs.telegram.offset, 4242);
+});

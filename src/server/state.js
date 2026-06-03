@@ -461,6 +461,14 @@ export function createComoteState({
       if (!stateStore) {
         return;
       }
+      // Keep the persisted telegram offset current: the driver advances it in memory
+      // as it long-polls, so sync it into config before serialization (channelConfigs
+      // carries it, so it round-trips to setOffset on the next boot).
+      const telegramStack = channelStacks.get("telegram");
+      const liveOffset = telegramStack?.runtime?.driver?.offset;
+      if (typeof liveOffset === "number") {
+        telegramStack.config.offset = liveOffset;
+      }
       await stateStore.save({
         settings,
         identities: authorization.listIdentities(),
@@ -813,6 +821,7 @@ export function createComoteState({
       () => eventLog.info("Telegram 运行时已自动启动"),
       (error) => {
         channelStacks.get("telegram").runtime.lastError = error.message;
+        eventLog.error("Telegram 运行时自动启动失败", { error: error.message });
       },
     );
   }
