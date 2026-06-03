@@ -50,6 +50,58 @@ async function safeGet(path, fallback) {
   }
 }
 
+// --- Tauri desktop bridge ---------------------------------------------------
+// The desktop UI runs in a remote-origin webview where <a target="_blank"> is a
+// no-op (the OS just swallows the click), so external links go nowhere. When
+// running inside Tauri we route http(s) links through the open_external command,
+// which opens them in the system default browser. In a plain browser there is no
+// Tauri global, so links keep their normal behavior.
+function tauriInvoke(command, args) {
+  const tauri = window.__TAURI__;
+  const invoke = tauri && tauri.core && tauri.core.invoke;
+  if (typeof invoke !== "function") {
+    return null;
+  }
+  return invoke(command, args);
+}
+
+const isTauri = typeof window.__TAURI__ !== "undefined";
+
+// Treat the daemon's own origin as internal so in-app navigation (and the boot
+// page) is never hijacked; only genuinely external http(s) links are diverted.
+function isExternalHttpLink(anchor) {
+  if (!anchor || anchor.target === "_self") {
+    return false;
+  }
+  const href = anchor.getAttribute("href") || "";
+  if (!/^https?:\/\//i.test(href)) {
+    return false;
+  }
+  try {
+    return new URL(anchor.href).origin !== window.location.origin;
+  } catch {
+    return true;
+  }
+}
+
+if (isTauri) {
+  document.addEventListener(
+    "click",
+    (event) => {
+      const anchor = event.target.closest && event.target.closest("a[href]");
+      if (!anchor || !isExternalHttpLink(anchor)) {
+        return;
+      }
+      event.preventDefault();
+      const result = tauriInvoke("open_external", { url: anchor.href });
+      if (result && typeof result.catch === "function") {
+        result.catch((error) => console.error("open_external failed", error));
+      }
+    },
+    true,
+  );
+}
+
 // Generic per-channel login state: id -> { loginId, pollTimer, startCtx }.
 const activeLogin = {};
 let expandedChannelId = null; // accordion: at most one channel expanded at a time

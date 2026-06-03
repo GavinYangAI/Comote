@@ -19,6 +19,7 @@ use tauri::{
     tray::TrayIconBuilder,
     AppHandle, Manager, RunEvent, WebviewUrl, WebviewWindow, WebviewWindowBuilder, WindowEvent,
 };
+use tauri_plugin_opener::OpenerExt;
 use tauri_plugin_shell::process::CommandChild;
 #[cfg(not(target_os = "windows"))]
 use tauri_plugin_shell::{process::CommandEvent, ShellExt};
@@ -171,6 +172,8 @@ const READY_TIMEOUT: Duration = Duration::from_secs(40);
 fn main() {
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
+        .plugin(tauri_plugin_opener::init())
+        .invoke_handler(tauri::generate_handler![open_external])
         .setup(|app| {
             let app_data_dir = app.path().app_data_dir()?;
             fs::create_dir_all(&app_data_dir)?;
@@ -315,6 +318,19 @@ fn handle_app_exit(app_handle: &AppHandle) {
     } else {
         stop_comote_sidecar(app_handle);
     }
+}
+
+// Opens an external link in the system default browser. The daemon UI runs in a
+// remote-origin webview where <a target="_blank"> is a no-op, so the frontend
+// routes outbound links here. Only http(s) is allowed — never file:, etc.
+#[tauri::command]
+fn open_external(app: AppHandle, url: String) -> Result<(), String> {
+    if !(url.starts_with("http://") || url.starts_with("https://")) {
+        return Err(format!("refused to open non-http(s) url: {url}"));
+    }
+    app.opener()
+        .open_url(url, None::<&str>)
+        .map_err(|error| error.to_string())
 }
 
 fn show_main_window(app: &AppHandle) {
