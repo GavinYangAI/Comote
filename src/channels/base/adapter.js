@@ -1,3 +1,4 @@
+import { classifyMedia } from "../../core/paths.js";
 import { routerReplyToSemantic } from "./messages.js";
 
 // Shared inbound pipeline for every channel: normalize → group-gate → detect
@@ -44,12 +45,22 @@ export class BaseChannelAdapter {
     this.onDetectedIdentity?.(message.identity);
 
     let promptText = message.text;
+    let attachments = message.attachments;
     if (message.attachments?.length > 0 && this.downloadAttachment) {
       const prefixes = [];
+      attachments = [];
       for (const attachment of message.attachments) {
         try {
           const { relativePath } = await this.downloadAttachment({ attachment, identity: message.identity });
           prefixes.push(`[attachment: ${relativePath}]`);
+          // Stamp the downloaded local path + media kind so the command router
+          // can forward image attachments to Codex as real images (localImage /
+          // --image) instead of only referencing them in the prompt text.
+          attachments.push({
+            ...attachment,
+            localPath: relativePath,
+            kind: attachment.kind ?? classifyMedia(relativePath),
+          });
         } catch (error) {
           if (error.message === "NO_PROJECT") {
             await this.sendReply({
@@ -70,7 +81,7 @@ export class BaseChannelAdapter {
     const reply = await this.commandRouter.handleMessageAsync({
       identity: message.identity,
       text: promptText,
-      attachments: message.attachments,
+      attachments,
       conversation: {
         channel: this.channelId,
         conversationId: message.conversationId,

@@ -357,6 +357,44 @@ test("plain messages resume the active Codex Desktop thread before starting a tu
   ]);
 });
 
+test("inbound image attachments are forwarded to startTurn as resolved image paths", async () => {
+  const authorization = new AuthorizationStore();
+  const projects = new ProjectStore();
+  const sessions = new SessionStore();
+  const identity = { channel: "telegram", stableId: "tg_owner", displayName: "Alice" };
+  const calls = [];
+  const codexDesktop = {
+    getStatus: () => ({ state: "connected" }),
+    resumeThread: async () => ({ thread: { id: "thread_1" } }),
+    startTurn: async ({ threadId, text, cwd, images }) => {
+      calls.push({ threadId, text, cwd, images });
+      return { turnId: "turn_1" };
+    },
+  };
+  const router = new CommandRouter({ authorization, projects, sessions, codexDesktop });
+  authorization.confirmIdentity(identity);
+  projects.replaceProjects([{ name: "comote", path: "/repo", source: "codex-desktop", status: "available" }]);
+
+  router.handleMessage({ identity, text: "/open 1" });
+  sessions.upsertExternalSession({ projectPath: "/repo", id: "thread_1", title: "Existing thread" });
+  sessions.useSession("/repo", "thread_1");
+
+  await router.handleMessageAsync({
+    identity,
+    text: "what is in this picture?",
+    attachments: [
+      { type: "image", kind: "image", localPath: ".comote/uploads/a.png", fileName: "a.png" },
+      { type: "file", kind: "file", localPath: ".comote/uploads/notes.txt", fileName: "notes.txt" },
+    ],
+  });
+
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].text, "what is in this picture?");
+  // Only the image attachment is forwarded as an image, resolved to an absolute
+  // path within the project; the non-image file is not.
+  assert.deepEqual(calls[0].images, ["/repo/.comote/uploads/a.png"]);
+});
+
 test("/approve and /deny resolve pending Codex Desktop approvals", async () => {
   const authorization = new AuthorizationStore();
   const projects = new ProjectStore();
