@@ -4,7 +4,11 @@ import { readFileSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { CodexDesktopConnector, extractChangePaths } from "../src/connectors/codex-desktop/index.js";
+import {
+  CodexDesktopConnector,
+  extractChangePaths,
+  resolveCodexCommand,
+} from "../src/connectors/codex-desktop/index.js";
 import { CodexCliConnector } from "../src/connectors/codex-cli/index.js";
 
 class MemoryTransport {
@@ -840,4 +844,69 @@ test("cli connector is explicitly fallback", () => {
     role: "fallback",
     state: "available",
   });
+});
+
+test("resolveCodexCommand finds codex.exe in LOCALAPPDATA on Windows", () => {
+  const localAppData = "C:\\Users\\you\\AppData\\Local";
+  const expected = "C:\\Users\\you\\AppData\\Local\\OpenAI\\Codex\\bin\\codex.exe";
+  const command = resolveCodexCommand({
+    platform: "win32",
+    env: { LOCALAPPDATA: localAppData },
+    pathEnv: "",
+    exists: (candidate) => candidate === expected,
+    readdir: () => [],
+  });
+  assert.equal(command, expected);
+});
+
+test("resolveCodexCommand recurses into nested LOCALAPPDATA layouts on Windows", () => {
+  const localAppData = "C:\\Users\\you\\AppData\\Local";
+  const binRoot = "C:\\Users\\you\\AppData\\Local\\OpenAI\\Codex\\bin";
+  const nested = "C:\\Users\\you\\AppData\\Local\\OpenAI\\Codex\\bin\\1.2.3\\codex.exe";
+  const dirEntry = (name) => ({ name, isDirectory: () => true });
+  const command = resolveCodexCommand({
+    platform: "win32",
+    env: { LOCALAPPDATA: localAppData },
+    pathEnv: "",
+    exists: (candidate) => candidate === nested,
+    readdir: (dir) => (dir === binRoot ? [dirEntry("1.2.3")] : []),
+  });
+  assert.equal(command, nested);
+});
+
+test("resolveCodexCommand uses PATH on Windows but skips the WindowsApps shim", () => {
+  const shim = "C:\\Users\\you\\AppData\\Local\\Microsoft\\WindowsApps\\codex.exe";
+  const real = "C:\\Tools\\codex\\codex.exe";
+  const command = resolveCodexCommand({
+    platform: "win32",
+    env: {},
+    pathEnv: "C:\\Users\\you\\AppData\\Local\\Microsoft\\WindowsApps;C:\\Tools\\codex",
+    exists: (candidate) => candidate === shim || candidate === real,
+    readdir: () => [],
+  });
+  assert.equal(command, real);
+});
+
+test("resolveCodexCommand falls back to bare 'codex' when only the WindowsApps shim is on PATH", () => {
+  const shim = "C:\\Users\\you\\AppData\\Local\\Microsoft\\WindowsApps\\codex.exe";
+  const command = resolveCodexCommand({
+    platform: "win32",
+    env: {},
+    pathEnv: "C:\\Users\\you\\AppData\\Local\\Microsoft\\WindowsApps",
+    exists: (candidate) => candidate === shim,
+    readdir: () => [],
+  });
+  assert.equal(command, "codex");
+});
+
+test("resolveCodexCommand prefers the bundled Codex.app binary on macOS", () => {
+  const bundled = "/Applications/Codex.app/Contents/Resources/codex";
+  assert.equal(
+    resolveCodexCommand({ platform: "darwin", exists: (c) => c === bundled }),
+    bundled,
+  );
+  assert.equal(
+    resolveCodexCommand({ platform: "darwin", exists: () => false }),
+    "codex",
+  );
 });
