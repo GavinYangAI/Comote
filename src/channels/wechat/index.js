@@ -56,7 +56,25 @@ const wechatPlugin = {
     inboundMode: "poll",
     binding: "qr",
     capabilities: { cards: 0, media: 0, liveUpdates: 0, typing: 1 },
-    configFields: [],
+    descriptionKey: "web.channel.wechat.desc",
+    icon: "微",
+    configFields: [
+      { name: "enabled", type: "checkbox", labelKey: "web.channel.wechat.enabledLabel", default: true },
+      { name: "accountId", type: "text", labelKey: "web.channel.wechat.accountLabel", default: "default", hidden: true },
+    ],
+    states: {
+      running: { labelKey: "web.channel.state.running", tone: "success" },
+      configured: { labelKey: "web.channel.state.configured", tone: "neutral" },
+      not_configured: { labelKey: "web.channel.state.notConfigured", tone: "warning" },
+    },
+    statusFlags: [
+      { source: "runtime", field: "needsRelogin", tone: "warning", badgeKey: "web.channel.flag.needsRelogin.badge", labelKey: "web.channel.flag.needsRelogin.label" },
+    ],
+    statusRows: [
+      { labelKey: "web.channel.row.account", source: "config", field: "linkedUserName", fallback: ["linkedUserId"], fallbackKey: "web.channel.row.account.waiting" },
+      { labelKey: "web.channel.wechat.row.hostApp", source: "status", field: "externalAgentHostRequired", map: { true: "web.channel.wechat.row.hostApp.required", false: "web.channel.wechat.row.hostApp.notRequired" } },
+    ],
+    boundWhen: { source: "config", field: "loggedIn" },
   },
   normalizeConfig: (raw) => normalizeWeChatConfig(raw),
   publicConfig: (config) => publicWeChatConfig(config),

@@ -52,5 +52,34 @@ test("createAdapter/createRuntime construct the wechat classes", () => {
 
 test("meta is complete", () => {
   assert.equal(typeof wechatPlugin.meta.displayName, "string");
-  assert.deepEqual(wechatPlugin.meta.configFields, []);
+  // C1: configFields was previously [] — it now declares the enabled checkbox
+  // and the (hidden) accountId field the generic binding page reads. Behavior-
+  // preserving: defaults (enabled:true, accountId:"default") match the existing
+  // normalizeConfig defaults, so nothing changes at runtime.
+  assert.equal(Array.isArray(wechatPlugin.meta.configFields), true);
+  assert.deepEqual(
+    wechatPlugin.meta.configFields.map((f) => f.name),
+    ["enabled", "accountId"],
+  );
+});
+
+test("wechat meta declares the binding-page schema", () => {
+  const m = wechatPlugin.meta;
+  assert.equal(typeof m.descriptionKey, "string");
+  assert.equal(typeof m.icon, "string");
+  assert.ok(m.states.running && m.states.configured);
+  const flag = m.statusFlags.find((f) => f.field === "needsRelogin");
+  assert.equal(flag.source, "runtime");
+  assert.equal(flag.tone, "warning");
+  assert.equal(typeof flag.badgeKey, "string");
+  assert.equal(typeof flag.labelKey, "string");
+  const enabled = m.configFields.find((f) => f.name === "enabled");
+  assert.equal(enabled.type, "checkbox");
+  const accountId = m.configFields.find((f) => f.name === "accountId");
+  assert.equal(accountId.hidden, true);
+  assert.equal(accountId.default, "default");
+  const host = m.statusRows.find((r) => r.field === "externalAgentHostRequired");
+  assert.equal(host.source, "status");
+  assert.ok(host.map);
+  assert.deepEqual(m.boundWhen, { source: "config", field: "loggedIn" });
 });

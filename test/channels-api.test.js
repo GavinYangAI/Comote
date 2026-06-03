@@ -186,6 +186,18 @@ test("GET /api/status falls back to hardcoded wechat/feishu when state has no re
   assert.equal(body.channels.feishu, "reserved");
 });
 
+test("GET /api/channels carries the enriched binding-page meta", async () => {
+  const { server, port } = await startServer();
+  const res = await fetch(`http://127.0.0.1:${port}/api/channels`);
+  const byId = Object.fromEntries((await res.json()).map((c) => [c.id, c]));
+  server.close();
+
+  assert.ok(byId.feishu.states.running.tone);
+  assert.ok(byId.feishu.configFields.find((f) => f.name === "domain"));
+  assert.ok(byId.wechat.statusFlags.find((f) => f.field === "needsRelogin"));
+  assert.equal(byId.wechat.boundWhen.field, "loggedIn");
+});
+
 test("outbound-replies (no id) lists across channels", async () => {
   const { server, port } = await startServer();
   const response = await fetch(`http://127.0.0.1:${port}/api/channels/outbound-replies`);

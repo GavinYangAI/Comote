@@ -72,5 +72,34 @@ test("createAdapter/createRuntime construct the feishu classes", () => {
 
 test("meta is complete", () => {
   assert.equal(feishuPlugin.meta.displayName, "飞书 / Lark");
-  assert.deepEqual(feishuPlugin.meta.configFields, []);
+  // C1: configFields was previously [] — it now declares the domain select the
+  // generic binding page renders. Behavior-preserving: an empty list rendered
+  // nothing; this list still has no default-changing effect on config.
+  assert.equal(Array.isArray(feishuPlugin.meta.configFields), true);
+  assert.deepEqual(
+    feishuPlugin.meta.configFields.map((f) => f.name),
+    ["domain"],
+  );
+});
+
+test("feishu meta declares the binding-page schema", () => {
+  const m = feishuPlugin.meta;
+  assert.equal(typeof m.descriptionKey, "string");
+  assert.equal(typeof m.icon, "string");
+  for (const [, v] of Object.entries(m.states)) {
+    assert.equal(typeof v.labelKey, "string");
+    assert.ok(["success", "warning", "neutral"].includes(v.tone));
+  }
+  assert.ok(m.states.running && m.states.not_configured);
+  const domain = m.configFields.find((f) => f.name === "domain");
+  assert.equal(domain.type, "select");
+  assert.equal(typeof domain.labelKey, "string");
+  assert.ok(domain.options.every((o) => o.value && o.labelKey));
+  assert.ok(m.statusRows.length >= 1);
+  for (const r of m.statusRows) {
+    assert.equal(typeof r.labelKey, "string");
+    assert.ok(["config", "runtime", "status"].includes(r.source));
+    assert.equal(typeof r.field, "string");
+  }
+  assert.deepEqual(m.boundWhen, { source: "config", field: "configured" });
 });
