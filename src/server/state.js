@@ -131,8 +131,19 @@ export function createComoteState({
             });
             stack.runtime.configureDriver(stack.plugin.createDriver(stack.config));
             await stateRef.persist?.();
+            // Confirm side-effect sunk from the frontend into the backend (C2):
+            // start the runtime here so the binding flow no longer needs the
+            // frontend to POST /runtime/start on confirm. feishu already does
+            // this in its closure below.
+            await stack.runtime.start().catch((error) => {
+              stack.runtime.lastError = error.message;
+            });
           }
-          return result;
+          // Spread raw result first (back-compat: preserve raw fields the current
+          // frontend still reads), then let the normalized {state,qrUrl,account,message}
+          // overwrite. The normalized "failed" vocab is recognized by the frontend
+          // poller (transitional until C4 makes the frontend fully normalized-aware).
+          return { ...result, ...stack.plugin.normalizeLoginStatus(result) };
         });
       },
     },
@@ -213,7 +224,13 @@ export function createComoteState({
             stack.runtime.lastError = error.message;
           });
         }
-        return result;
+        // userName was resolved + assigned to result above (before this return),
+        // so normalizeLoginStatus sees the resolved account name.
+        // Spread raw result first (back-compat: preserve raw fields the current
+        // frontend still reads), then let the normalized {state,qrUrl,account,message}
+        // overwrite. The normalized "failed" vocab is recognized by the frontend
+        // poller (transitional until C4 makes the frontend fully normalized-aware).
+        return { ...result, ...stack.plugin.normalizeLoginStatus(result) };
       },
     },
   };
@@ -270,9 +287,11 @@ export function createComoteState({
         return stack.runtime.stop();
       },
     };
-    // Poll-mode channels expose pollOnce (manual drain).
+    // Poll-mode channels expose pollOnce (manual drain). __setTestDriver mirrors
+    // the push-mode seam below so tests can inject a fake driver symmetrically.
     if (plugin.meta.inboundMode === "poll") {
       wrapper.pollOnce = () => stack.runtime.pollOnce();
+      wrapper.__setTestDriver = (testDriver) => stack.runtime.configureDriver(testDriver);
     }
     // Push-mode channels expose inbound webhook + test seam + manual delivery.
     if (plugin.meta.inboundMode === "push") {

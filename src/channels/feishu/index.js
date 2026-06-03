@@ -115,6 +115,21 @@ const feishuPlugin = {
   createDriver: (config) => createFeishuDriver(config),
   createLoginDriver: ({ domain } = {}) => createFeishuLoginDriver({ domain }),
   shouldStoreLoginResult: (result) => shouldStoreFeishuLoginResult(result),
+  normalizeLoginStatus: (raw = {}) => {
+    const confirmed = raw.state === "confirmed" && Boolean(raw.appId);
+    const failed = ["access_denied", "timeout", "error", "cancelled"].includes(raw.state);
+    const state = confirmed ? "confirmed"
+      : raw.state === "expired" ? "expired"
+      : failed ? "failed"
+      : raw.state === "scanned" ? "scanned"
+      : "pending";
+    return {
+      state,
+      qrUrl: raw.qrUrl ?? null,
+      account: confirmed ? { name: raw.userName ?? null, id: raw.appId ?? raw.userId ?? null } : null,
+      message: raw.message ?? null,
+    };
+  },
   createRenderer: () => createFeishuRenderer(),
   createAdapter: (opts) => new FeishuChannelAdapter(opts),
   createRuntime: (opts) => new FeishuRuntimeService(opts),

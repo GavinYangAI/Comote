@@ -80,6 +80,21 @@ const wechatPlugin = {
   publicConfig: (config) => publicWeChatConfig(config),
   createDriver: (config) => createWeChatDriver(config),
   shouldStoreLoginResult: (result) => shouldStoreWeChatLoginResult(result),
+  normalizeLoginStatus: (raw = {}) => {
+    const confirmed = Boolean(raw.token && raw.accountId) || (raw.state === "confirmed" && Boolean(raw.accountId));
+    const failed = ["cancelled", "canceled", "failed", "error"].includes(raw.state);
+    const state = confirmed ? "confirmed"
+      : raw.state === "expired" ? "expired"
+      : failed ? "failed"
+      : raw.state === "scanned" ? "scanned"
+      : "pending";
+    return {
+      state,
+      qrUrl: raw.qrUrl ?? null,
+      account: confirmed ? { name: raw.userName ?? null, id: raw.accountId ?? null } : null,
+      message: raw.message ?? null,
+    };
+  },
   createRenderer: () => createWeChatRenderer(),
   createAdapter: (opts) => new WeChatChannelAdapter(opts),
   createRuntime: (opts) => new WeChatRuntimeService(opts),

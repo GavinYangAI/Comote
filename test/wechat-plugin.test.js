@@ -63,6 +63,17 @@ test("meta is complete", () => {
   );
 });
 
+test("wechat normalizeLoginStatus maps raw login states", () => {
+  const n = wechatPlugin.normalizeLoginStatus;
+  assert.equal(n({ token: "t", accountId: "acc", userName: "u" }).state, "confirmed");
+  assert.equal(n({ token: "t", accountId: "acc", userName: "u" }).account.id, "acc");
+  assert.equal(n({ state: "confirmed", accountId: "acc" }).state, "confirmed");
+  assert.equal(n({ state: "scanned", qrUrl: "Q" }).state, "scanned");
+  assert.equal(n({ state: "cancelled" }).state, "failed");
+  assert.equal(n({ state: "expired" }).state, "expired");
+  assert.equal(n({}).state, "pending");
+});
+
 test("wechat meta declares the binding-page schema", () => {
   const m = wechatPlugin.meta;
   assert.equal(typeof m.descriptionKey, "string");

@@ -82,6 +82,18 @@ test("meta is complete", () => {
   );
 });
 
+test("feishu normalizeLoginStatus maps raw login states", () => {
+  const n = feishuPlugin.normalizeLoginStatus;
+  assert.equal(n({ state: "confirmed", appId: "a", userName: "u" }).state, "confirmed");
+  assert.equal(n({ state: "confirmed", appId: "a", userName: "u" }).account.name, "u");
+  assert.equal(n({ state: "waiting", qrUrl: "Q" }).state, "pending");
+  assert.equal(n({ state: "waiting", qrUrl: "Q" }).qrUrl, "Q");
+  assert.equal(n({ state: "scanned", qrUrl: "Q" }).state, "scanned");
+  assert.equal(n({ state: "access_denied" }).state, "failed");
+  assert.equal(n({ state: "timeout" }).state, "failed");
+  assert.equal(n({ state: "expired" }).state, "expired");
+});
+
 test("feishu meta declares the binding-page schema", () => {
   const m = feishuPlugin.meta;
   assert.equal(typeof m.descriptionKey, "string");

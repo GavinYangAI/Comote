@@ -814,7 +814,7 @@ function startFeishuLoginPolling(login) {
         await render();
         return;
       }
-      if (["expired", "access_denied", "timeout", "error"].includes(result.state)) {
+      if (["expired", "access_denied", "timeout", "error", "failed"].includes(result.state)) {
         clearFeishuLoginPolling();
         activeFeishuLogin = null;
         setFeishuLoginView({ state: "error", message: tWeb("web.feishu.bind.incomplete", { state: humanFeishuLoginState(result.state) }) });
