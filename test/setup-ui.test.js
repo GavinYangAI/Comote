@@ -7,14 +7,11 @@ test("setup flow starts with phone channels instead of asking users to connect C
   const setupFlow = html.match(/<section id="connectPhone"[\s\S]*?<\/section>/)?.[0] ?? "";
 
   assert.match(setupFlow, /<h2[^>]*>连接手机<\/h2>/);
-  assert.match(setupFlow, /<h3[^>]*>微信<\/h3>/);
-  assert.match(setupFlow, /<h3[^>]*>飞书<\/h3>/);
-  assert.match(setupFlow, /id="wechatLoginResult"/);
-  assert.match(setupFlow, /id="startWechatLogin"[\s\S]*?>绑定微信<\/button>/);
-  assert.match(setupFlow, /id="feishuLoginResult"/);
-  assert.match(setupFlow, /id="feishuConfigForm"/);
-  assert.match(setupFlow, /name="domain"/);
-  assert.match(setupFlow, /id="startFeishuLogin"[\s\S]*?>绑定飞书<\/button>/);
+  // C4: the two hardcoded feishu/wechat cards were replaced by one empty
+  // container that app.js fills from the registry-driven GET /api/channels, so
+  // the cards (incl. 微信/飞书 headings, login areas, domain select, bind buttons)
+  // are now rendered client-side rather than present in the static HTML.
+  assert.match(setupFlow, /<div class="channel-grid" id="channelCards"><\/div>/);
   assert.doesNotMatch(setupFlow, /<h2[^>]*>连接 Codex Desktop<\/h2>/);
   assert.doesNotMatch(setupFlow, /id="autoConnectDesktop"/);
   assert.doesNotMatch(setupFlow, /id="connectDesktop"/);

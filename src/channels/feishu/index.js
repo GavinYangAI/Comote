@@ -82,7 +82,32 @@ const feishuPlugin = {
     inboundMode: "push",
     binding: "qr",
     capabilities: { cards: 1, media: 1, liveUpdates: 1, typing: 0 },
-    configFields: [],
+    descriptionKey: "web.channel.feishu.desc",
+    icon: "飞",
+    configFields: [
+      {
+        name: "domain",
+        type: "select",
+        labelKey: "web.channel.feishu.domainLabel",
+        default: "feishu",
+        options: [
+          { value: "feishu", labelKey: "web.channel.feishu.domainFeishu" },
+          { value: "lark", labelKey: "web.channel.feishu.domainLark" },
+        ],
+      },
+    ],
+    states: {
+      running: { labelKey: "web.channel.state.running", tone: "success" },
+      configured: { labelKey: "web.channel.state.configured", tone: "neutral" },
+      not_configured: { labelKey: "web.channel.state.notConfigured", tone: "warning" },
+      reserved: { labelKey: "web.channel.state.reserved", tone: "warning" },
+    },
+    statusFlags: [],
+    statusRows: [
+      { labelKey: "web.channel.row.account", source: "config", field: "linkedUserName", fallback: ["linkedUserId"], fallbackKey: "web.channel.row.account.waiting" },
+      { labelKey: "web.channel.feishu.row.app", source: "config", field: "appId", fallbackKey: "web.channel.feishu.row.app.unset" },
+    ],
+    boundWhen: { source: "config", field: "configured" },
   },
   normalizeConfig: (raw) => normalizeFeishuConfig(raw),
   normalizeSecretPatch: (raw) => normalizeFeishuSecretPatch(raw),
@@ -90,6 +115,21 @@ const feishuPlugin = {
   createDriver: (config) => createFeishuDriver(config),
   createLoginDriver: ({ domain } = {}) => createFeishuLoginDriver({ domain }),
   shouldStoreLoginResult: (result) => shouldStoreFeishuLoginResult(result),
+  normalizeLoginStatus: (raw = {}) => {
+    const confirmed = raw.state === "confirmed" && Boolean(raw.appId);
+    const failed = ["access_denied", "timeout", "error", "cancelled"].includes(raw.state);
+    const state = confirmed ? "confirmed"
+      : raw.state === "expired" ? "expired"
+      : failed ? "failed"
+      : raw.state === "scanned" ? "scanned"
+      : "pending";
+    return {
+      state,
+      qrUrl: raw.qrUrl ?? null,
+      account: confirmed ? { name: raw.userName ?? null, id: raw.appId ?? raw.userId ?? null } : null,
+      message: raw.message ?? null,
+    };
+  },
   createRenderer: () => createFeishuRenderer(),
   createAdapter: (opts) => new FeishuChannelAdapter(opts),
   createRuntime: (opts) => new FeishuRuntimeService(opts),

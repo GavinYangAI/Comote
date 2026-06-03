@@ -135,7 +135,8 @@ test("GET /api/channels lists channel meta + status", async () => {
   assert.equal(byId.wechat.inboundMode, "poll");
   assert.equal(byId.feishu.binding, "qr");
   // status + runtime + config attached:
-  assert.equal(typeof byId.feishu.status, "string"); // adapter state
+  assert.equal(typeof byId.feishu.status, "object"); // full adapter status object
+  assert.equal(typeof byId.feishu.status.state, "string"); // adapter state conveyed via .state
   assert.ok(byId.feishu.runtime); // runtime status object
   assert.ok(byId.wechat.config !== undefined); // public config (or {})
   // config must be the REDACTED public config — never a raw secret.
@@ -184,6 +185,18 @@ test("GET /api/status falls back to hardcoded wechat/feishu when state has no re
   // Fallback resolved each channel's adapter state via getStatus().state.
   assert.equal(body.channels.wechat, "adapter_ready");
   assert.equal(body.channels.feishu, "reserved");
+});
+
+test("GET /api/channels carries the enriched binding-page meta", async () => {
+  const { server, port } = await startServer();
+  const res = await fetch(`http://127.0.0.1:${port}/api/channels`);
+  const byId = Object.fromEntries((await res.json()).map((c) => [c.id, c]));
+  server.close();
+
+  assert.ok(byId.feishu.states.running.tone);
+  assert.ok(byId.feishu.configFields.find((f) => f.name === "domain"));
+  assert.ok(byId.wechat.statusFlags.find((f) => f.field === "needsRelogin"));
+  assert.equal(byId.wechat.boundWhen.field, "loggedIn");
 });
 
 test("outbound-replies (no id) lists across channels", async () => {

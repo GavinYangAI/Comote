@@ -56,12 +56,45 @@ const wechatPlugin = {
     inboundMode: "poll",
     binding: "qr",
     capabilities: { cards: 0, media: 0, liveUpdates: 0, typing: 1 },
-    configFields: [],
+    descriptionKey: "web.channel.wechat.desc",
+    icon: "微",
+    configFields: [
+      { name: "enabled", type: "checkbox", labelKey: "web.channel.wechat.enabledLabel", default: true, hidden: true },
+      { name: "accountId", type: "text", labelKey: "web.channel.wechat.accountLabel", default: "default", hidden: true },
+    ],
+    states: {
+      running: { labelKey: "web.channel.state.running", tone: "success" },
+      configured: { labelKey: "web.channel.state.configured", tone: "neutral" },
+      not_configured: { labelKey: "web.channel.state.notConfigured", tone: "warning" },
+    },
+    statusFlags: [
+      { source: "runtime", field: "needsRelogin", tone: "warning", badgeKey: "web.channel.flag.needsRelogin.badge", labelKey: "web.channel.flag.needsRelogin.label" },
+    ],
+    statusRows: [
+      { labelKey: "web.channel.row.account", source: "config", field: "linkedUserName", fallback: ["linkedUserId"], fallbackKey: "web.channel.row.account.waiting" },
+      { labelKey: "web.channel.wechat.row.hostApp", source: "status", field: "externalAgentHostRequired", map: { true: "web.channel.wechat.row.hostApp.required", false: "web.channel.wechat.row.hostApp.notRequired" } },
+    ],
+    boundWhen: { source: "config", field: "loggedIn" },
   },
   normalizeConfig: (raw) => normalizeWeChatConfig(raw),
   publicConfig: (config) => publicWeChatConfig(config),
   createDriver: (config) => createWeChatDriver(config),
   shouldStoreLoginResult: (result) => shouldStoreWeChatLoginResult(result),
+  normalizeLoginStatus: (raw = {}) => {
+    const confirmed = Boolean(raw.token && raw.accountId) || (raw.state === "confirmed" && Boolean(raw.accountId));
+    const failed = ["cancelled", "canceled", "failed", "error"].includes(raw.state);
+    const state = confirmed ? "confirmed"
+      : raw.state === "expired" ? "expired"
+      : failed ? "failed"
+      : raw.state === "scanned" ? "scanned"
+      : "pending";
+    return {
+      state,
+      qrUrl: raw.qrUrl ?? null,
+      account: confirmed ? { name: raw.userName ?? null, id: raw.accountId ?? null } : null,
+      message: raw.message ?? null,
+    };
+  },
   createRenderer: () => createWeChatRenderer(),
   createAdapter: (opts) => new WeChatChannelAdapter(opts),
   createRuntime: (opts) => new WeChatRuntimeService(opts),

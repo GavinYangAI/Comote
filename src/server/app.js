@@ -240,7 +240,7 @@ async function handleApi(request, response, state) {
   if (request.method === "GET" && url.pathname === "/api/channels") {
     const list = (state.registry?.listChannels?.() ?? []).map((p) => ({
       ...p.meta,
-      status: state.channels?.[p.meta.id]?.getStatus?.().state ?? "reserved",
+      status: state.channels?.[p.meta.id]?.getStatus?.() ?? { state: "reserved" },
       runtime: state.runtime?.[p.meta.id]?.getStatus?.() ?? { state: "not_configured" },
       config: state.runtime?.[p.meta.id]?.getConfig?.() ?? {},
     }));

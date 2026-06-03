@@ -106,73 +106,7 @@
             <button id="refreshConnect" class="secondary-button" type="button" data-i18n="web.button.refresh">刷新</button>
           </div>
 
-          <div class="channel-grid">
-            <article class="channel-card">
-              <div class="channel-head">
-                <div class="channel-tile feishu-icon" aria-hidden="true">飞</div>
-                <div class="ch-meta">
-                  <h3 data-i18n="web.channel.feishu.name">飞书</h3>
-                  <div class="ch-sub" data-i18n="web.channel.feishu.desc">通过飞书机器人收发消息</div>
-                </div>
-                <span id="feishuBadge" class="badge warning">需要设置</span>
-              </div>
-
-              <dl id="feishuStatus" class="kv status-rows"></dl>
-
-              <div id="feishuLoginResult" class="qr-result">
-                <div class="qr-glyph">
-                  <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="#c4c2bc" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><path d="M14 14h3v3M21 14v7h-7M17 21v-4"/></svg>
-                </div>
-                <span data-i18n="web.channel.feishu.qrHint">完成应用授权后，二维码会显示在这里</span>
-              </div>
-
-              <div class="feishu-domain-field">
-                <label class="domain-label" data-i18n="web.channel.feishu.domainLabel">飞书域名</label>
-                <form id="feishuConfigForm" class="stack-form channel-config-form feishu-domain-select">
-                  <label class="select-wrap">
-                    <select name="domain">
-                      <option value="feishu" data-i18n="web.channel.feishu.domainFeishu">飞书 · feishu.cn（中国）</option>
-                      <option value="lark" data-i18n="web.channel.feishu.domainLark">Lark · larksuite.com（海外）</option>
-                    </select>
-                  </label>
-                </form>
-              </div>
-
-              <div class="actions card-actions">
-                <button id="startFeishuLogin" type="button" class="btn-primary-card" data-i18n="web.channel.feishu.bind">绑定飞书</button>
-              </div>
-            </article>
-
-            <article class="channel-card">
-              <div class="channel-head">
-                <div class="channel-tile wechat-icon" aria-hidden="true">微</div>
-                <div class="ch-meta">
-                  <h3 data-i18n="web.channel.wechat.name">微信</h3>
-                  <div class="ch-sub" data-i18n="web.channel.wechat.desc">通过个人微信收发消息</div>
-                </div>
-                <span id="wechatBadge" class="badge">未绑定</span>
-              </div>
-
-              <dl id="wechatStatus" class="kv status-rows"></dl>
-
-              <div id="wechatLoginResult" class="qr-result">
-                <div class="qr-glyph">
-                  <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="#c4c2bc" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><path d="M14 14h3v3M21 14v7h-7M17 21v-4"/></svg>
-                </div>
-                <span data-i18n="web.channel.wechat.qrHint">点击「绑定微信」后，二维码会显示在这里</span>
-              </div>
-
-              <div class="actions card-actions">
-                <button id="startWechatLogin" type="button" class="btn-primary-card" data-i18n="web.channel.wechat.bind">绑定微信</button>
-              </div>
-
-              <form id="wechatConfigForm" class="hidden-form">
-                <label><input name="enabled" type="checkbox" checked> <span data-i18n="web.channel.wechat.enabled">启用</span></label>
-                <input name="accountId" type="hidden" value="default">
-                <button type="submit" data-i18n="web.button.save">保存</button>
-              </form>
-            </article>
-          </div>
+          <div class="channel-grid" id="channelCards"></div>
         </section>
 
         <section id="phoneCommands" class="section-block">
@@ -272,10 +206,7 @@
             <article class="panel">
               <h3 data-i18n="web.advanced.addUser">手动添加用户</h3>
               <form id="identityForm" class="inline-form">
-                <select name="channel" aria-label="通道" data-i18n-attr="aria-label:web.advanced.channelLabel">
-                  <option value="wechat" data-i18n="web.channel.wechat.name">微信</option>
-                  <option value="feishu" data-i18n="web.channel.feishu.name">飞书</option>
-                </select>
+                <select name="channel" aria-label="通道" data-i18n-attr="aria-label:web.advanced.channelLabel"></select>
                 <input name="stableId" placeholder="用户 ID" required data-i18n-attr="placeholder:web.advanced.userIdPlaceholder">
                 <input name="displayName" placeholder="显示名称" required data-i18n-attr="placeholder:web.advanced.displayNamePlaceholder">
                 <button type="submit" data-i18n="web.button.confirm">确认</button>
