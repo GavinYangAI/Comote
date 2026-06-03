@@ -6,7 +6,8 @@
 :root {
   color-scheme: light;
   /* Global visual scale. Adjust this single number to shrink/grow the whole UI. */
-  zoom: 0.85;
+  --ui-zoom: 0.85;
+  zoom: var(--ui-zoom);
 
   /* Canvas & surfaces */
   --canvas:        #fbfaf9;
@@ -108,8 +109,8 @@ button,
 .app-frame {
   display: grid;
   grid-template-columns: 230px minmax(0, 1fr);
-  min-height: 100vh;
-  /* Compensate for the :root zoom so visual width still feels right. */
+  /* Compensate for the :root zoom so the frame still fills the viewport. */
+  min-height: calc(100vh / var(--ui-zoom));
   max-width: 1460px;
   margin: 0 auto;
 }
@@ -121,7 +122,8 @@ button,
   position: sticky;
   top: 0;
   display: flex;
-  height: 100vh;
+  /* Compensate for the :root zoom so the sidebar spans the full viewport. */
+  height: calc(100vh / var(--ui-zoom));
   flex-direction: column;
   gap: 22px;
   background: var(--surface-low);

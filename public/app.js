@@ -1018,7 +1018,7 @@ function setupNavigation() {
     for (const item of navItems) {
       item.classList.toggle("active", item.getAttribute("href") === `#${sectionId}`);
     }
-    if (NAV_LABEL_KEYS[sectionId]) {
+    if (eyebrow && NAV_LABEL_KEYS[sectionId]) {
       eyebrow.textContent = tWeb(NAV_LABEL_KEYS[sectionId]);
     }
   }
