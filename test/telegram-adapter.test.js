@@ -83,3 +83,9 @@ test("group message is ignored (allowGroups false)", async () => {
   assert.equal(routed.length, 0);
   assert.equal(sent.length, 0);
 });
+
+test("displayName falls back to the id when no username and no names", () => {
+  const { adapter } = makeAdapter();
+  const m = adapter.normalizeInbound({ message: { message_id: 1, chat: { id: 7, type: "private" }, from: { id: 7 }, text: "x" } });
+  assert.equal(m.identity.displayName, "7");
+});

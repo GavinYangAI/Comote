@@ -34,6 +34,7 @@ export class TelegramChannelAdapter extends BaseChannelAdapter {
     if (!m) throw new Error("Telegram inbound payload requires a message");
     const from = m.from ?? {};
     const isDirect = (m.chat?.type ?? "private") === "private";
+    const fullName = [from.first_name, from.last_name].filter(Boolean).join(" ").trim();
     return {
       messageId: m.message_id ?? null,
       conversationId: String(m.chat?.id),
@@ -41,7 +42,7 @@ export class TelegramChannelAdapter extends BaseChannelAdapter {
       identity: {
         channel: "telegram",
         stableId: String(from.id),
-        displayName: from.username ?? [from.first_name, from.last_name].filter(Boolean).join(" ").trim() ?? String(from.id),
+        displayName: from.username ?? (fullName || String(from.id)),
       },
       text: m.text ?? m.caption ?? "",
       attachments: readAttachments(m, m.message_id ?? null),
