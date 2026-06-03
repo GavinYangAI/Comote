@@ -21,10 +21,19 @@ export function createDingTalkRenderer({ templates = {} } = {}) {
   return {
     templates,
 
-    // Used by the runtime/routeDesktopEvent live status card (Part B).
+    // Used by the runtime/routeDesktopEvent live status card (Part B). Forwards the
+    // cancel affordance too: cancelParams is null on a done card (→ "" via toParamMap),
+    // so the template's cancel button only carries working params while in-flight.
     buildStatusCard(status) {
       const raw = statusCardData(status);
-      return toParamMap({ title: raw.title, body: raw.body, steps: raw.steps, done: raw.done });
+      return toParamMap({
+        title: raw.title,
+        body: raw.body,
+        steps: raw.steps,
+        done: raw.done,
+        cancelLabel: raw.cancelLabel,
+        cancelParams: raw.cancelParams,
+      });
     },
 
     pickerTitle(pickKind) {

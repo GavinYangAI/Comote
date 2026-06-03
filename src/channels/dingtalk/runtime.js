@@ -129,6 +129,13 @@ export class DingTalkRuntimeService extends BaseChannelRuntime {
       return {};
     }
 
+    if (params.action === "cancel") {
+      // Cancel button on a live status card: request thread cancellation (mirrors
+      // feishu's cancel handling). The card finishes via the turn's end event.
+      await router?.cancelThread?.(params.threadId);
+      return {};
+    }
+
     return {};
   }
 

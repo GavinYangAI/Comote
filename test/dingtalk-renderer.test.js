@@ -84,6 +84,15 @@ test("buildStatusCard returns a cardParamMap", () => {
   assert.equal(map.body, "done");
 });
 
+test("buildStatusCard carries a cancel button while in-flight, drops it when done", () => {
+  const r = createDingTalkRenderer({ templates: { status: "st.schema" } });
+  const live = r.buildStatusCard({ phase: "progress", threadId: "t9", steps: 1, done: false });
+  assert.equal(typeof live.cancelLabel, "string");
+  assert.deepEqual(JSON.parse(live.cancelParams), { action: "cancel", threadId: "t9" });
+  const finished = r.buildStatusCard({ phase: "completed", threadId: "t9", text: "done", done: true });
+  assert.equal(finished.cancelParams, ""); // null params → "" via toParamMap (no working button)
+});
+
 test("buildStatusCard maps each phase to a title + steps", () => {
   const r = createDingTalkRenderer({ templates: { status: "st.schema" } });
   const started = r.buildStatusCard({ phase: "started", threadId: "t", steps: 0 });

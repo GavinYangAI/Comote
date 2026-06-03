@@ -54,6 +54,14 @@ test("pick callback dispatches async and returns immediately", async () => {
   assert.ok(enqueued.some((r) => r.conversationId === "staff-9"), "a reply was enqueued for the conversation");
 });
 
+test("cancel callback requests thread cancellation", async () => {
+  const cancelled = [];
+  const { runtime } = makeRuntime({ async cancelThread(threadId) { cancelled.push(threadId); } });
+  const res = await runtime.handleCardAction(cardPayload({ params: { action: "cancel", threadId: "thread-7" } }));
+  assert.deepEqual(res, {});
+  assert.deepEqual(cancelled, ["thread-7"]);
+});
+
 test("unknown action returns empty object", async () => {
   const { runtime } = makeRuntime();
   const res = await runtime.handleCardAction(cardPayload({ params: { action: "nope" } }));
