@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { resolve } from "node:path";
 import { classifyMedia, isWithinDir, resolveWithinProject, sanitizeUploadName } from "../src/core/paths.js";
 
 test("classifyMedia routes image extensions to image, else file", () => {
@@ -17,8 +18,10 @@ test("isWithinDir blocks path escape", () => {
 });
 
 test("resolveWithinProject returns absolute path inside root or null on escape", () => {
-  assert.equal(resolveWithinProject("/home/proj", "out/a.png"), "/home/proj/out/a.png");
-  assert.equal(resolveWithinProject("/home/proj", "/home/proj/x"), "/home/proj/x");
+  // Expected values are computed via path.resolve so the assertions hold on both
+  // POSIX and Windows (where path.resolve prefixes a drive letter and uses "\").
+  assert.equal(resolveWithinProject("/home/proj", "out/a.png"), resolve("/home/proj", "out/a.png"));
+  assert.equal(resolveWithinProject("/home/proj", "/home/proj/x"), resolve("/home/proj", "/home/proj/x"));
   assert.equal(resolveWithinProject("/home/proj", "../../etc/passwd"), null);
 });
 

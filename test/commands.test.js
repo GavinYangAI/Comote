@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { resolve } from "node:path";
 
 import { AuthorizationStore } from "../src/core/authorization.js";
 import { ProjectStore } from "../src/core/projects.js";
@@ -391,8 +392,9 @@ test("inbound image attachments are forwarded to startTurn as resolved image pat
   assert.equal(calls.length, 1);
   assert.equal(calls[0].text, "what is in this picture?");
   // Only the image attachment is forwarded as an image, resolved to an absolute
-  // path within the project; the non-image file is not.
-  assert.deepEqual(calls[0].images, ["/repo/.comote/uploads/a.png"]);
+  // path within the project; the non-image file is not. The expected path is
+  // computed via path.resolve so the assertion holds on both POSIX and Windows.
+  assert.deepEqual(calls[0].images, [resolve("/repo", ".comote/uploads/a.png")]);
 });
 
 test("/approve and /deny resolve pending Codex Desktop approvals", async () => {
