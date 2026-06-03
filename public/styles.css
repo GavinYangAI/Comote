@@ -867,6 +867,19 @@ button:disabled {
   color: var(--ink);
 }
 
+/* Anchors styled as secondary buttons (查看所有版本 / 下载新版) don't match the
+   `button` element selector, so they miss the base box-model. Give them the same
+   sizing + kill the default underline so they sit flush with real buttons. */
+a.secondary-button {
+  display: inline-flex;
+  align-items: center;
+  min-height: 36px;
+  padding: 0 12px;
+  font-size: 14px;
+  line-height: 1.5;
+  text-decoration: none;
+}
+
 /* Ghost button */
 .ghost-button {
   background: var(--surface);
@@ -1389,3 +1402,39 @@ code {
     grid-template-columns: 1fr 1fr;
   }
 }
+
+/* ---- Channels page redesign (connected / available + accordion) ---- */
+.channel-section-title { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 18px 2px 8px; }
+.channel-section:first-child .channel-section-title { margin-top: 4px; }
+
+/* connected: a collapsible card per channel */
+.channel-row { border: 1px solid var(--line); border-radius: 12px; background: var(--surface); margin: 8px 0; overflow: hidden; }
+.channel-row.expanded { box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent, #2f6f4f) 18%, transparent); }
+.channel-row-head { display: flex; align-items: center; gap: 10px; padding: 12px 14px; cursor: pointer; }
+.channel-row-head .ch-name { font-weight: 600; font-size: 14px; }
+.channel-row-head .ch-summary { font-size: 11.5px; color: var(--muted); }
+.channel-row-head .badge { margin-left: auto; }
+.channel-row-body { padding: 0 14px 14px; border-top: 1px solid var(--line); }
+
+/* pending-binding affordance (pairing code) */
+.pairing-block { text-align: center; margin: 14px 0 6px; }
+.pairing-block .intro { font-size: 11.5px; color: var(--muted); margin-bottom: 8px; }
+.pairing-code { font-family: ui-monospace, monospace; font-size: 22px; letter-spacing: 4px; font-weight: 700; color: var(--accent, #2f6f4f); background: color-mix(in srgb, var(--accent, #2f6f4f) 8%, transparent); border: 1px dashed color-mix(in srgb, var(--accent, #2f6f4f) 45%, transparent); border-radius: 10px; padding: 10px 18px; display: inline-block; }
+
+/* setup help (如何获取) */
+.channel-setup { margin-top: 10px; }
+.channel-setup > summary { cursor: pointer; font-size: 12px; color: var(--muted); }
+.channel-setup ol { margin: 8px 0 6px; padding-left: 18px; font-size: 12px; color: var(--ink); }
+.channel-setup li { margin: 3px 0; }
+.channel-setup a { font-size: 12px; }
+
+/* available: compact add tiles */
+.channel-add-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; }
+.channel-add-tile { border: 1px dashed var(--line); border-radius: 12px; background: var(--surface-low); padding: 14px; text-align: center; }
+.channel-add-tile .channel-tile { margin: 0 auto 8px; }
+.channel-add-tile .ch-name { font-weight: 600; font-size: 13px; }
+.channel-add-tile .ch-sub { font-size: 11px; color: var(--muted); margin-bottom: 10px; }
+.channel-add-tile.expanded { grid-column: 1 / -1; text-align: left; }
+
+/* pending badge tone (amber) */
+.badge.pending { background: #fcf4e2; color: #9b7a2e; }
