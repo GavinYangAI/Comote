@@ -422,9 +422,27 @@ test("GET /api/settings returns locale and supported list", async () => {
 
   assert.equal(response.status, 200);
   assert.equal(body.locale, "en");
+  assert.equal(body.localeExplicit, true, "a persisted locale is an explicit choice");
   assert.ok(body.supported.includes("ja"));
 
   // i18n locale is a module-level global; reset so other test files aren't polluted.
+  setI18nLocale("zh");
+});
+
+test("GET /api/settings reports localeExplicit=false on first launch (no persisted locale)", async () => {
+  const state = createComoteState({
+    autoStartWeChatRuntime: false,
+    autoStartFeishuRuntime: false,
+  });
+  const app = createServer(state);
+  const server = app.listen(0);
+  await new Promise((resolve) => server.once("listening", resolve));
+
+  const { port } = server.address();
+  const body = await (await fetch(`http://127.0.0.1:${port}/api/settings`)).json();
+  server.close();
+
+  assert.equal(body.localeExplicit, false, "first launch is not an explicit choice → frontend follows the OS language");
   setI18nLocale("zh");
 });
 

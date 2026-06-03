@@ -23,6 +23,10 @@
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="7" y="2" width="10" height="20" rx="2.5"/><path d="M11 18h2"/></svg>
             <span data-i18n="web.nav.connectPhone">连接手机</span>
           </a>
+          <a class="nav-item" href="#users">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 3.5-6 8-6s8 2 8 6"/></svg>
+            <span data-i18n="web.nav.users">授权用户</span>
+          </a>
           <a class="nav-item" href="#phoneCommands">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 17V7a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v10"/><path d="M2 21h20"/></svg>
             <span data-i18n="web.nav.phoneCommands">从手机使用</span>
@@ -30,10 +34,6 @@
           <a class="nav-item" href="#approvals">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 11l3 3 8-8"/><path d="M20 12v6a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h9"/></svg>
             <span data-i18n="web.nav.approvals">待审批</span><span id="approvalsNavCount" class="nav-count" hidden>0</span>
-          </a>
-          <a class="nav-item" href="#users">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 3.5-6 8-6s8 2 8 6"/></svg>
-            <span data-i18n="web.nav.users">授权用户</span>
           </a>
           <div class="nav-group-label" data-i18n="web.nav.groupRecords">记录</div>
           <a class="nav-item" href="#conversation">
@@ -62,7 +62,13 @@
             <h1 class="top-title" data-i18n="web.top.title">Comote 设置</h1>
             <p class="top-subtitle" data-i18n="web.top.subtitle">把 Codex 接到你的手机上，随时随地继续你的工作。</p>
           </div>
-          <span id="bridgeStatus" class="status-pill">启动中</span>
+          <div class="top-bar-actions">
+            <label class="lang-switch" title="Language / 语言">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M3 12h18"/><path d="M12 3a14 14 0 0 1 3.5 9A14 14 0 0 1 12 21a14 14 0 0 1-3.5-9A14 14 0 0 1 12 3z"/></svg>
+              <select id="langSelect" aria-label="Language"></select>
+            </label>
+            <span id="bridgeStatus" class="status-pill">启动中</span>
+          </div>
         </header>
 
         <section id="updateNotice" class="system-notice" hidden>
@@ -109,6 +115,27 @@
           <div id="channelCards"></div>
         </section>
 
+        <section id="users" class="section-block">
+          <div class="section-heading inline-heading">
+            <div>
+              <h2 data-i18n="web.users.title">授权用户</h2>
+              <p data-i18n="web.users.subtitle">只有在本机确认过的微信或飞书用户可以控制 Comote。</p>
+            </div>
+            <button id="refreshUsers" class="secondary-button" type="button" data-i18n="web.button.refresh">刷新</button>
+          </div>
+
+          <div class="user-grid">
+            <article class="panel">
+              <h3 data-i18n="web.users.authorized">已授权用户</h3>
+              <ul id="identities" class="list"></ul>
+            </article>
+            <article class="panel">
+              <h3 data-i18n="web.users.pending">待确认用户</h3>
+              <ul id="identityCandidates" class="list compact-list"></ul>
+            </article>
+          </div>
+        </section>
+
         <section id="phoneCommands" class="section-block">
           <div class="section-heading inline-heading">
             <div>
@@ -137,27 +164,6 @@
             <span id="approvalsBadge" class="badge neutral">0 项待处理</span>
           </div>
           <ul id="approvalsList" class="list"></ul>
-        </section>
-
-        <section id="users" class="section-block">
-          <div class="section-heading inline-heading">
-            <div>
-              <h2 data-i18n="web.users.title">授权用户</h2>
-              <p data-i18n="web.users.subtitle">只有在本机确认过的微信或飞书用户可以控制 Comote。</p>
-            </div>
-            <button id="refreshUsers" class="secondary-button" type="button" data-i18n="web.button.refresh">刷新</button>
-          </div>
-
-          <div class="user-grid">
-            <article class="panel">
-              <h3 data-i18n="web.users.authorized">已授权用户</h3>
-              <ul id="identities" class="list"></ul>
-            </article>
-            <article class="panel">
-              <h3 data-i18n="web.users.pending">待确认用户</h3>
-              <ul id="identityCandidates" class="list compact-list"></ul>
-            </article>
-          </div>
         </section>
 
         <section id="conversation" class="section-block">
@@ -254,13 +260,6 @@
                 <dt data-i18n="web.about.license">协议</dt><dd>MIT License</dd>
                 <dt data-i18n="web.about.reportBug">报 Bug</dt><dd><a href="https://github.com/GavinYangAI/comote/issues" target="_blank" rel="noopener" data-i18n="web.about.submitIssue">提交 Issue</a></dd>
               </dl>
-            </article>
-            <article class="panel">
-              <h3 data-i18n="web.settings.title">界面</h3>
-              <label class="lang-select">
-                <span data-i18n="web.settings.language">语言</span>
-                <select id="langSelect" aria-label="Language"></select>
-              </label>
             </article>
           </div>
         </section>

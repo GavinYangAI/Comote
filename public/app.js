@@ -447,7 +447,6 @@ function connectedRowHtml(ch) {
 function availableTileHtml(ch) {
   const icon = ch.icon ?? (ch.displayName ?? "")[0] ?? "";
   const expanded = expandedChannelId === ch.id;
-  const desc = ch.descriptionKey ? tWeb(ch.descriptionKey) : "";
   if (expanded) {
     return `<article class="channel-add-tile expanded" data-channel="${escapeAttr(ch.id)}">
       <div class="channel-row-head" data-toggle="${escapeAttr(ch.id)}" style="padding:0 0 8px">
@@ -460,7 +459,6 @@ function availableTileHtml(ch) {
   return `<article class="channel-add-tile" data-channel="${escapeAttr(ch.id)}">
     <div class="channel-tile ${escapeAttr(ch.id)}-icon" aria-hidden="true">${escapeHtml(icon)}</div>
     <div class="ch-name">${escapeHtml(ch.displayName ?? ch.id)}</div>
-    <div class="ch-sub">${escapeHtml(desc)}</div>
     <button type="button" class="btn-primary-card" data-toggle="${escapeAttr(ch.id)}">+ ${escapeHtml(tWeb("web.channel.add"))}</button>
   </article>`;
 }
@@ -1390,6 +1388,13 @@ function startAutoRefresh() {
   }, REFRESH_MS);
 }
 
+// Map the OS/browser language to a supported UI locale. Unmatched → English
+// (the most universal fallback for an international audience), NOT zh.
+function mapSystemLocale(navLang) {
+  const primary = String(navLang || "").toLowerCase().split("-")[0];
+  return WEB_LOCALES.includes(primary) ? primary : "en";
+}
+
 function populateLangSelect() {
   const sel = document.querySelector("#langSelect");
   if (!sel) {
@@ -1426,8 +1431,26 @@ async function init() {
   setupNavigation();
   setupChannelCards();
   setBridgeStatus(tWeb("web.status.starting"));
-  const settings = await safeGet("/api/settings", { locale: "zh", supported: ["zh"] });
-  setWebLocale(settings.value?.locale ?? "zh");
+  const settings = await safeGet("/api/settings", { locale: "zh", supported: ["zh"], localeExplicit: true });
+  let locale = settings.value?.locale ?? "zh";
+  // First launch (no committed locale): follow the OS language, English if unmatched,
+  // and persist the choice so subsequent launches respect it (and a manual switch).
+  if (!settings.value?.localeExplicit) {
+    const sys = mapSystemLocale(navigator.language || navigator.languages?.[0]);
+    if (sys !== locale) {
+      locale = sys;
+      try {
+        await getJson("/api/settings", {
+          method: "PUT",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ locale }),
+        });
+      } catch {
+        // still apply locally even if persisting failed
+      }
+    }
+  }
+  setWebLocale(locale);
   applyTranslations(document);
   populateLangSelect();
   await refreshVersionStatus();

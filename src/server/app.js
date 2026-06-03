@@ -68,7 +68,7 @@ async function handleApi(request, response, state) {
   }
 
   if (request.method === "GET" && url.pathname === "/api/settings") {
-    sendJson(response, 200, { locale: state.getSettings().locale, supported: SUPPORTED_LOCALES });
+    sendJson(response, 200, { locale: state.getSettings().locale, localeExplicit: state.getSettings().localeExplicit ?? false, supported: SUPPORTED_LOCALES });
     return;
   }
 

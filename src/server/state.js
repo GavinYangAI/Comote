@@ -38,7 +38,12 @@ export function createComoteState({
 } = {}) {
   // Route the persisted value through i18n's validation so a hand-edited or
   // stale state.json can't desync settings.locale from the locale actually served.
-  const settings = { locale: setI18nLocale(persisted?.settings?.locale ?? DEFAULT_LOCALE) };
+  // localeExplicit = the user (or a prior system-detection) has committed a locale.
+  // First launch leaves it false so the frontend can follow the OS language.
+  const settings = {
+    locale: setI18nLocale(persisted?.settings?.locale ?? DEFAULT_LOCALE),
+    localeExplicit: Boolean(persisted?.settings?.locale),
+  };
 
   const authorization = new AuthorizationStore({ identities: persisted.identities ?? [] });
   for (const identity of persisted.detectedIdentities ?? []) {
@@ -456,6 +461,7 @@ export function createComoteState({
     setLocale(locale) {
       const applied = setI18nLocale(locale);
       settings.locale = applied;
+      settings.localeExplicit = true;
       return applied;
     },
     async persist() {

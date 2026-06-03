@@ -262,6 +262,49 @@ button,
   padding: 34px 0 28px;
 }
 
+/* Top-bar right cluster: prominent language switcher + bridge status */
+.top-bar-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-shrink: 0;
+}
+
+.lang-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  padding: 5px 9px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-low);
+  transition: color 0.13s, background 0.13s;
+}
+
+.lang-switch:hover {
+  color: var(--ink);
+  background: var(--surface-mid);
+}
+
+.lang-switch svg {
+  flex-shrink: 0;
+}
+
+.lang-switch select {
+  border: none;
+  background: transparent;
+  color: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  min-height: auto;
+  padding: 0;
+  cursor: pointer;
+}
+
+.lang-switch select:focus {
+  outline: none;
+}
+
 .top-title {
   font-size: 27px;
   font-weight: 700;
