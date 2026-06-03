@@ -1,7 +1,7 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 
-const DEFAULT_REPO = "GavinYangAI/comote";
+const DEFAULT_REPO = "GavinYangAI/Comote";
 const DEFAULT_INTERVAL_MS = 6 * 60 * 60 * 1000;
 const DEFAULT_INITIAL_DELAY_MS = 30_000;
 const CACHE_TTL_MS = 60 * 60 * 1000;
@@ -29,6 +29,8 @@ function emptyResult(currentVersion) {
     latest: null,
     hasUpdate: false,
     releaseUrl: null,
+    releasesUrl: `https://github.com/${DEFAULT_REPO}/releases`,
+    downloadUrl: null,
     releaseNotes: null,
     checkedAt: null,
     error: null,
@@ -44,6 +46,8 @@ export class VersionChecker {
     intervalMs = DEFAULT_INTERVAL_MS,
     initialDelayMs = DEFAULT_INITIAL_DELAY_MS,
     now = () => Date.now(),
+    platform = process.platform,
+    arch = process.arch,
   } = {}) {
     if (!currentVersion) {
       throw new Error("VersionChecker requires currentVersion");
@@ -58,9 +62,16 @@ export class VersionChecker {
     this.intervalMs = intervalMs;
     this.initialDelayMs = initialDelayMs;
     this.now = now;
+    this.platform = platform;
+    this.arch = arch;
     this.lastResult = emptyResult(currentVersion);
+    this.lastResult.releasesUrl = this.releasesUrl;
     this._initialTimer = null;
     this._timer = null;
+  }
+
+  get releasesUrl() {
+    return `https://github.com/${this.repo}/releases`;
   }
 
   getLastResult() {
@@ -94,7 +105,7 @@ export class VersionChecker {
       );
       if (response.status === 404) {
         // No published release yet — valid state, not an error.
-        this.lastResult = { ...emptyResult(this.currentVersion), checkedAt: this.now() };
+        this.lastResult = { ...emptyResult(this.currentVersion), releasesUrl: this.releasesUrl, checkedAt: this.now() };
       } else if (!response.ok) {
         this.lastResult = {
           ...this.lastResult,
@@ -110,6 +121,12 @@ export class VersionChecker {
           latest,
           hasUpdate,
           releaseUrl: data.html_url ?? null,
+          releasesUrl: this.releasesUrl,
+          downloadUrl: selectDownloadUrl(data.assets, {
+            platform: this.platform,
+            arch: this.arch,
+            fallbackUrl: data.html_url ?? this.releasesUrl,
+          }),
           releaseNotes: data.body ?? null,
           checkedAt: this.now(),
           error: null,
@@ -159,4 +176,34 @@ export class VersionChecker {
       // Cache persistence is best-effort.
     }
   }
+}
+
+export function selectDownloadUrl(assets, { platform = process.platform, arch = process.arch, fallbackUrl = null } = {}) {
+  if (!Array.isArray(assets) || assets.length === 0) {
+    return fallbackUrl;
+  }
+  const candidates = assets
+    .filter((asset) => asset?.browser_download_url && asset?.name)
+    .map((asset) => ({
+      name: String(asset.name).toLowerCase(),
+      url: asset.browser_download_url,
+    }));
+  const platformMatchers =
+    platform === "darwin"
+      ? [/\.dmg$/, /mac|darwin|apple/]
+      : platform === "win32"
+        ? [/(setup|installer).*\.exe$/, /\.msi$/, /\.exe$/]
+        : [/\.appimage$/, /\.deb$/, /\.rpm$/, /linux|gnu|musl|\.tar\.gz$|\.tgz$/];
+  const archMatchers =
+    arch === "arm64"
+      ? [/arm64|aarch64|universal|apple|mac|darwin|\.dmg$/]
+      : arch === "x64"
+        ? [/x64|x86_64|amd64|universal|\.dmg$|\.exe$|\.msi$/]
+        : [];
+  return (
+    candidates.find((asset) => platformMatchers.some((matcher) => matcher.test(asset.name)) && archMatchers.some((matcher) => matcher.test(asset.name)))?.url ??
+    candidates.find((asset) => platformMatchers.some((matcher) => matcher.test(asset.name)))?.url ??
+    candidates[0]?.url ??
+    fallbackUrl
+  );
 }

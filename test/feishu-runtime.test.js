@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 
 import { AuthorizationStore } from "../src/core/authorization.js";
 import { CommandRouter } from "../src/core/commands.js";
@@ -203,6 +204,7 @@ test("feishu runtime delivers a queued card via sendCard", async () => {
   assert.equal(result.outbound, 1);
   assert.equal(cardCalls.length, 1);
   assert.equal(cardCalls[0].receiveId, "oc_chat");
+  assert.equal(cardCalls[0].uuid, deliveryId("card:1"));
   assert.deepEqual(outbound.list({ channel: "feishu" }), []);
 });
 
@@ -286,10 +288,99 @@ test("handleCardAction resolves an approval and refreshes the card", async () =>
     open_message_id: "om_approval",
     action: { value: { kind: "approval", code: "a1", decision: "accept" } },
   });
+  await new Promise((resolve) => setImmediate(resolve));
+  await new Promise((resolve) => setImmediate(resolve));
 
   assert.deepEqual(resolved, [["a1", "accept"]]);
   assert.equal(updated[0].messageId, "om_approval");
-  assert.match(result.toast.content, /已批准/);
+  assert.match(result.toast.content, /处理中/);
+});
+
+test("handleCardAction approval branch toasts immediately and resolves in the background", async () => {
+  let releaseApproval;
+  const approvalGate = new Promise((resolve) => {
+    releaseApproval = resolve;
+  });
+  const resolved = [];
+  const updated = [];
+  const runtime = new FeishuRuntimeService({
+    adapter: {
+      handleInbound: async () => ({ kind: "text" }),
+      commandRouter: {
+        resolveApproval: async (code, decision) => {
+          await approvalGate;
+          resolved.push([code, decision]);
+        },
+      },
+    },
+    outboundQueue: new OutboundQueue(),
+    driver: {
+      getStatus: () => ({ state: "configured" }),
+      verifyEvent: () => true,
+      async updateCard(message) {
+        updated.push(message);
+      },
+    },
+  });
+
+  const actionPromise = runtime.handleCardAction({
+    open_id: "ou_owner",
+    open_message_id: "om_approval",
+    action: { value: { kind: "approval", code: "a1", decision: "accept" } },
+  });
+  const raced = await Promise.race([
+    actionPromise.then((result) => ({ state: "returned", result })),
+    new Promise((resolve) => setTimeout(() => resolve({ state: "pending" }), 20)),
+  ]);
+
+  assert.equal(raced.state, "returned", "Feishu card callback must not wait for Codex Desktop approval RPC");
+  assert.equal(raced.result.toast.type, "info");
+  assert.match(raced.result.toast.content, /处理中/);
+  assert.deepEqual(resolved, []);
+
+  releaseApproval();
+  await new Promise((resolve) => setImmediate(resolve));
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.deepEqual(resolved, [["a1", "accept"]]);
+  assert.equal(updated[0].messageId, "om_approval");
+});
+
+test("handleCardAction approval branch logs async failures without rejecting callback", async () => {
+  const errors = [];
+  const runtime = new FeishuRuntimeService({
+    adapter: {
+      handleInbound: async () => ({ kind: "text" }),
+      commandRouter: {
+        resolveApproval: async () => {
+          throw new Error("unknown approval: a404");
+        },
+      },
+    },
+    outboundQueue: new OutboundQueue(),
+    driver: {
+      getStatus: () => ({ state: "configured" }),
+      verifyEvent: () => true,
+      async updateCard() {},
+    },
+    eventLog: {
+      info: () => {},
+      warn: () => {},
+      error: (message, context) => errors.push({ message, context }),
+    },
+  });
+
+  const result = await runtime.handleCardAction({
+    open_id: "ou_owner",
+    open_message_id: "om_approval",
+    action: { value: { kind: "approval", code: "a404", decision: "accept" } },
+  });
+
+  assert.equal(result.toast.type, "info");
+  await new Promise((resolve) => setImmediate(resolve));
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(runtime.getStatus().lastError, "unknown approval: a404");
+  assert.ok(errors.some((call) => call.context?.error === "unknown approval: a404"));
 });
 
 test("handleCardAction cancels a thread", async () => {
@@ -356,6 +447,49 @@ test("configureDriver while running stops the old driver and starts the new one"
 
   assert.ok(oldCalls.includes("stopEventStream"), "old driver's stopEventStream must be called");
   assert.ok(newCalls.includes("startEventStream"), "new driver's startEventStream must be called");
+});
+
+test("configureDriver ignores stale in-flight starts from the previous driver", async () => {
+  let releaseOldStart;
+  const oldStart = new Promise((resolve) => {
+    releaseOldStart = resolve;
+  });
+  const oldCalls = [];
+  const newCalls = [];
+  const oldDriver = {
+    getStatus: () => ({ appId: "cli_old" }),
+    startEventStream: async () => {
+      oldCalls.push("startEventStream");
+      await oldStart;
+      oldCalls.push("started");
+    },
+    stopEventStream: () => oldCalls.push("stopEventStream"),
+  };
+  const newDriver = {
+    getStatus: () => ({ appId: "cli_new" }),
+    startEventStream: async () => {
+      newCalls.push("startEventStream");
+    },
+    stopEventStream: () => newCalls.push("stopEventStream"),
+  };
+  const runtime = new FeishuRuntimeService({
+    adapter: { handleInbound: async () => ({ kind: "text" }) },
+    outboundQueue: new OutboundQueue(),
+    driver: oldDriver,
+  });
+
+  const oldStartPromise = runtime.start();
+  await new Promise((resolve) => setImmediate(resolve));
+  runtime.configureDriver(newDriver);
+  await new Promise((resolve) => setImmediate(resolve));
+  releaseOldStart();
+  await oldStartPromise;
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.deepEqual(runtime.getStatus().driver, { appId: "cli_new" });
+  assert.equal(runtime.getStatus().state, "running");
+  assert.ok(oldCalls.includes("stopEventStream"), "old in-flight driver should be closed when it resolves");
+  assert.deepEqual(newCalls, ["startEventStream"]);
 });
 
 // ── handleCardAction pick branch: async dispatch error handling ─────────────
@@ -494,3 +628,26 @@ test("start() must not leave running true if the WebSocket setup throws", async 
   assert.equal(runtime.getStatus().state, "configured", "state must not be running");
   assert.equal(runtime.running, false, "running flag must remain false");
 });
+
+test("auth-like Feishu startup failures mark runtime as needing relogin", async () => {
+  const runtime = new FeishuRuntimeService({
+    adapter: { handleInbound: async () => ({ kind: "text", text: "unused" }) },
+    outboundQueue: new OutboundQueue(),
+    driver: {
+      getStatus: () => ({ state: "configured" }),
+      startEventStream: async () => {
+        throw new Error("Feishu token failed: 401 invalid app secret");
+      },
+    },
+  });
+
+  await assert.rejects(() => runtime.start(), /invalid app secret/);
+
+  const status = runtime.getStatus();
+  assert.equal(status.needsRelogin, true);
+  assert.match(status.lastError, /invalid app secret/);
+});
+
+function deliveryId(source) {
+  return `comote-${createHash("sha256").update(String(source)).digest("hex").slice(0, 32)}`;
+}

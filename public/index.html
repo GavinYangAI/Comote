@@ -4,6 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Comote</title>
+    <link rel="icon" href="/logo.svg" type="image/svg+xml">
     <link rel="stylesheet" href="/styles.css">
   </head>
   <body>
@@ -38,7 +39,7 @@
           <div class="nav-group-label">记录</div>
           <a class="nav-item" href="#conversation">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
-            对话记录
+            Codex 对话
           </a>
           <a class="nav-item" href="#logs">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 4h16v16H4z"/><path d="M8 9h8M8 13h5"/></svg>
@@ -127,10 +128,10 @@
               </div>
 
               <div class="feishu-domain-field">
-                <label class="domain-label">飞书域名</label>
+                <label class="domain-label" for="feishuDomain">飞书域名</label>
                 <form id="feishuConfigForm" class="stack-form channel-config-form feishu-domain-select">
                   <label class="select-wrap">
-                    <select name="domain">
+                    <select id="feishuDomain" name="domain">
                       <option value="feishu">飞书 · feishu.cn（中国）</option>
                       <option value="lark">Lark · larksuite.com（海外）</option>
                     </select>
@@ -227,11 +228,45 @@
         </section>
 
         <section id="conversation" class="section-block">
-          <div class="section-heading">
-            <h2>对话记录</h2>
-            <p>手机上与 Codex 的最近往来，daemon 重启后保留。</p>
+          <div class="section-heading inline-heading">
+            <div>
+              <h2>Codex 对话</h2>
+              <p>按项目查看 Codex Desktop 里的对话线程，点开拉取明细。</p>
+            </div>
+            <div id="conversationProjectPicker" class="project-picker" hidden>
+              <span class="project-picker-label">项目</span>
+              <div class="project-combo">
+                <button id="projectComboTrigger" class="project-combo-trigger" type="button" aria-haspopup="listbox" aria-expanded="false">
+                  <span id="projectComboLabel" class="project-combo-label">选择项目</span>
+                  <svg class="project-combo-caret" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>
+                </button>
+                <div id="projectComboPanel" class="project-combo-panel" role="listbox" hidden>
+                  <div class="project-combo-search">
+                    <input id="projectComboSearch" type="text" placeholder="搜索项目…" autocomplete="off" aria-label="搜索项目">
+                  </div>
+                  <ul id="projectComboList" class="project-combo-list"></ul>
+                </div>
+              </div>
+              <button id="discoverProjects" class="secondary-button" type="button">刷新</button>
+            </div>
           </div>
-          <div id="conversationList"></div>
+
+          <div class="convo-toolbar">
+            <label class="phone-filter" for="phoneOnlyFilter">
+              <span class="switch-control">
+                <input id="phoneOnlyFilter" type="checkbox" role="switch" aria-label="仅显示手机渠道对话">
+                <span class="switch-track" aria-hidden="true"></span>
+              </span>
+              <span class="phone-filter-label">仅手机渠道</span>
+            </label>
+            <div id="channelFilter" class="channel-filter" hidden>
+              <button type="button" class="chan-chip active" data-channel="">全部</button>
+              <button type="button" class="chan-chip" data-channel="feishu">飞书</button>
+              <button type="button" class="chan-chip" data-channel="wechat">微信</button>
+            </div>
+          </div>
+
+          <ul id="threads" class="list"></ul>
         </section>
 
         <section id="logs" class="section-block">
@@ -247,41 +282,58 @@
 
         <details id="advanced" class="advanced">
           <summary>高级设置</summary>
-          <section class="advanced-grid">
-            <article class="panel">
-              <h3>Codex 项目</h3>
-              <div class="actions">
-                <button id="discoverProjects" type="button">刷新</button>
-              </div>
-              <ul id="projects" class="list"></ul>
-            </article>
+          <div class="advanced-body">
+            <div class="advanced-section">
+              <h4 class="advanced-group-title">连接与诊断</h4>
+              <article class="panel">
+                <dl id="connections" class="kv"></dl>
+                <div class="actions">
+                  <button id="connectDesktop" class="secondary-button" type="button">重试连接 Codex Desktop</button>
+                </div>
+              </article>
+            </div>
 
-            <article class="panel">
-              <h3>诊断</h3>
-              <dl id="connections" class="kv"></dl>
-              <div class="actions">
-                <button id="connectDesktop" class="secondary-button" type="button">重试连接 Codex Desktop</button>
-              </div>
-            </article>
+            <div class="advanced-section">
+              <h4 class="advanced-group-title">用户管理</h4>
+              <article class="panel">
+                <form id="identityForm" class="inline-form">
+                  <select name="channel" aria-label="通道">
+                    <option value="wechat">微信</option>
+                    <option value="feishu">飞书</option>
+                  </select>
+                  <input name="stableId" placeholder="用户 ID" required>
+                  <input name="displayName" placeholder="显示名称" required>
+                  <button type="submit">确认</button>
+                </form>
+              </article>
+            </div>
 
-            <article class="panel">
-              <h3>Codex 对话</h3>
-              <ul id="threads" class="list"></ul>
-            </article>
-
-            <article class="panel">
-              <h3>手动添加用户</h3>
-              <form id="identityForm" class="inline-form">
-                <select name="channel" aria-label="通道">
-                  <option value="wechat">微信</option>
-                  <option value="feishu">飞书</option>
-                </select>
-                <input name="stableId" placeholder="用户 ID" required>
-                <input name="displayName" placeholder="显示名称" required>
-                <button type="submit">确认</button>
-              </form>
-            </article>
-          </section>
+            <div class="advanced-section">
+              <h4 class="advanced-group-title">桌面与运行</h4>
+              <article class="panel desktop-settings-panel">
+                <label class="setting-toggle" for="showDockIcon">
+                  <span class="setting-copy">
+                    <strong>显示 Dock 图标</strong>
+                    <span id="dockIconSettingStatus" class="setting-note">读取中…</span>
+                  </span>
+                  <span class="switch-control">
+                    <input id="showDockIcon" type="checkbox" role="switch" aria-label="显示 Dock 图标">
+                    <span class="switch-track" aria-hidden="true"></span>
+                  </span>
+                </label>
+                <label class="setting-toggle" for="keepDaemonAlive">
+                  <span class="setting-copy">
+                    <strong>保持后台服务在线</strong>
+                    <span id="keepDaemonAliveStatus" class="setting-note">读取中…</span>
+                  </span>
+                  <span class="switch-control">
+                    <input id="keepDaemonAlive" type="checkbox" role="switch" aria-label="保持后台服务在线">
+                    <span class="switch-track" aria-hidden="true"></span>
+                  </span>
+                </label>
+              </article>
+            </div>
+          </div>
         </details>
 
         <section id="about" class="section-block">
@@ -298,16 +350,16 @@
               </dl>
               <div class="actions">
                 <button id="aboutCheckUpdate" class="secondary-button" type="button">检查更新</button>
-                <a id="aboutReleasesLink" class="secondary-button" href="https://github.com/GavinYangAI/comote/releases" target="_blank" rel="noopener">查看所有版本</a>
+                <a id="aboutReleasesLink" class="secondary-button" href="https://github.com/GavinYangAI/Comote/releases" target="_blank" rel="noopener">查看所有版本</a>
               </div>
             </article>
             <article class="panel">
               <h3>项目</h3>
               <dl class="kv">
-                <dt>仓库</dt><dd><a href="https://github.com/GavinYangAI/comote" target="_blank" rel="noopener">GavinYangAI/comote</a></dd>
+                <dt>仓库</dt><dd><a href="https://github.com/GavinYangAI/Comote" target="_blank" rel="noopener">GavinYangAI/Comote</a></dd>
                 <dt>作者</dt><dd><a href="https://github.com/GavinYangAI" target="_blank" rel="noopener">@GavinYangAI</a></dd>
                 <dt>协议</dt><dd>MIT License</dd>
-                <dt>报 Bug</dt><dd><a href="https://github.com/GavinYangAI/comote/issues" target="_blank" rel="noopener">提交 Issue</a></dd>
+                <dt>报 Bug</dt><dd><a href="https://github.com/GavinYangAI/Comote/issues" target="_blank" rel="noopener">提交 Issue</a></dd>
               </dl>
             </article>
           </div>

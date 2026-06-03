@@ -1,0 +1,21 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Allow the local Comote daemon UI (served from 127.0.0.1:16208) to call the desktop commands it needs.",
+  "windows": ["main"],
+  "remote": {
+    "urls": ["http://127.0.0.1:16208"]
+  },
+  "permissions": [
+    "core:default",
+    "core:window:allow-show",
+    "core:window:allow-hide",
+    "core:window:allow-set-focus",
+    "allow-get-show-dock-icon",
+    "allow-set-show-dock-icon",
+    "allow-get-keep-daemon-alive",
+    "allow-set-keep-daemon-alive",
+    "allow-open-external",
+    "allow-get-platform"
+  ]
+}

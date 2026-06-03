@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { access, copyFile, mkdir, rm } from "node:fs/promises";
+import { access, copyFile, mkdir, rm, stat } from "node:fs/promises";
 import { basename, join } from "node:path";
 import { promisify } from "node:util";
 
@@ -8,6 +8,7 @@ const nodeVersion = process.versions.node;
 const mode = process.argv[2] ?? "current";
 const binariesDir = join(process.cwd(), "src-tauri", "binaries");
 const cacheDir = join(process.cwd(), ".comote", "node-runtime-cache");
+const MIN_STANDALONE_NODE_BYTES = 10 * 1024 * 1024;
 
 await mkdir(binariesDir, { recursive: true });
 await mkdir(cacheDir, { recursive: true });
@@ -16,8 +17,6 @@ if (mode === "current") {
   await copyFile(process.execPath, join(binariesDir, sidecarName(currentTargetTriple())));
 } else if (mode === "aarch64-apple-darwin") {
   await buildMacAarch64Node();
-} else if (mode === "universal-apple-darwin") {
-  await buildMacUniversalNode();
 } else if (mode === "x86_64-pc-windows-msvc") {
   await buildWindowsNode();
 } else {
@@ -26,40 +25,16 @@ if (mode === "current") {
 
 console.log(`Prepared Comote sidecar for ${mode}`);
 
-async function buildMacUniversalNode() {
-  if (process.platform !== "darwin") {
-    throw new Error("macOS universal sidecar must be built on macOS.");
-  }
-
-  const outputPath = join(binariesDir, sidecarName("universal-apple-darwin"));
-  const armOutputPath = join(binariesDir, sidecarName("aarch64-apple-darwin"));
-  const x64OutputPath = join(binariesDir, sidecarName("x86_64-apple-darwin"));
-  if ((await exists(outputPath)) && (await exists(armOutputPath)) && (await exists(x64OutputPath))) {
-    return;
-  }
-
-  const armNode = await downloadNodeRuntime("darwin", "arm64");
-  const x64Node = await downloadNodeRuntime("darwin", "x64");
-  await copyFile(armNode, armOutputPath);
-  await copyFile(x64Node, x64OutputPath);
-  await execFileAsync("lipo", [
-    "-create",
-    armNode,
-    x64Node,
-    "-output",
-    outputPath,
-  ]);
-}
-
 async function buildMacAarch64Node() {
   if (process.platform !== "darwin") {
     throw new Error("macOS aarch64 sidecar must be built on macOS.");
   }
   const armOutputPath = join(binariesDir, sidecarName("aarch64-apple-darwin"));
-  if (await exists(armOutputPath)) {
+  if (await isUsableSidecar(armOutputPath)) {
     return;
   }
   const armNode = await downloadNodeRuntime("darwin", "arm64");
+  await rm(armOutputPath, { force: true });
   await copyFile(armNode, armOutputPath);
 }
 
@@ -104,6 +79,15 @@ async function exists(path) {
   try {
     await access(path);
     return true;
+  } catch {
+    return false;
+  }
+}
+
+async function isUsableSidecar(path) {
+  try {
+    const info = await stat(path);
+    return info.size >= MIN_STANDALONE_NODE_BYTES;
   } catch {
     return false;
   }

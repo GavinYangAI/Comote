@@ -75,6 +75,13 @@ export class WeChatIlinkDriver {
       .map((item) => item.text_item?.text ?? item.text ?? "")
       .find((text) => text);
 
+    // Surface non-text items (image/voice/file/video) so the adapter can tell
+    // the user that inbound media is not forwarded to Codex on WeChat. The
+    // payloads are AES+CDN encrypted, so we only flag the kind, not the bytes.
+    const mediaAttachments = (update.item_list ?? [])
+      .filter((item) => item.type && item.type !== 1)
+      .map((item) => ({ kind: ilinkItemKind(item.type) }));
+
     return {
       accountId: update.accountId ?? update.account_id ?? this.accountId,
       peer: {
@@ -99,12 +106,13 @@ export class WeChatIlinkDriver {
           update.text ??
           update.content ??
           "",
-        attachments: message.attachments ?? update.attachments ?? [],
+        attachments:
+          mediaAttachments.length > 0 ? mediaAttachments : message.attachments ?? update.attachments ?? [],
       },
     };
   }
 
-  async sendText({ conversationId, accountId = this.accountId, inReplyTo = null, text }) {
+  async sendText({ conversationId, accountId = this.accountId, inReplyTo = null, text, clientId = null }) {
     this.#requireToken();
     if (!text) {
       throw new Error("text is required");
@@ -113,13 +121,18 @@ export class WeChatIlinkDriver {
     if (!toUserId) {
       throw new Error("conversationId is required for WeChat delivery");
     }
+    // WeChat desktop (PC) collapses a lone "\n" into a space, so multi-line
+    // replies (/help, Codex output) render as one blob there while mobile honours
+    // it. Normalising to CRLF makes the desktop client break lines too; mobile
+    // still renders a single break.
+    const normalizedText = String(text).replace(/\r?\n/g, "\r\n");
     return this.#post("ilink/bot/sendmessage", {
       msg: {
         from_user_id: "",
         to_user_id: toUserId,
-        client_id: `comote-${crypto.randomUUID()}`,
+        client_id: clientId ?? `comote-${crypto.randomUUID()}`,
         context_token: inReplyTo,
-        item_list: [{ type: 1, text_item: { text } }],
+        item_list: [{ type: 1, text_item: { text: normalizedText } }],
         message_type: 2,
         message_state: 2,
       },
@@ -228,6 +241,21 @@ export class WeChatIlinkDriver {
       "iLink-App-ClientVersion": String(buildClientVersion(OPENCLAW_WEIXIN_VERSION)),
       ...(this.token ? { Authorization: `Bearer ${this.token}` } : {}),
     };
+  }
+}
+
+function ilinkItemKind(type) {
+  switch (type) {
+    case 2:
+      return "image";
+    case 3:
+      return "voice";
+    case 4:
+      return "file";
+    case 5:
+      return "video";
+    default:
+      return "file";
   }
 }
 

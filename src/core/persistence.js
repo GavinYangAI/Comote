@@ -8,7 +8,7 @@ export class JsonFileStore {
 
   async load() {
     try {
-      return JSON.parse(await readFile(this.filePath, "utf8"));
+      return JSON.parse(stripUtf8Bom(await readFile(this.filePath, "utf8")));
     } catch (error) {
       if (error.code === "ENOENT") {
         return {};
@@ -23,4 +23,8 @@ export class JsonFileStore {
     await writeFile(tmpPath, `${JSON.stringify(state, null, 2)}\n`);
     await rename(tmpPath, this.filePath);
   }
+}
+
+function stripUtf8Bom(text) {
+  return text.charCodeAt(0) === 0xfeff ? text.slice(1) : text;
 }

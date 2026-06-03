@@ -4,7 +4,7 @@ import { readFileSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { CodexDesktopConnector } from "../src/connectors/codex-desktop/index.js";
+import { CodexDesktopConnector, resolveCodexCommand } from "../src/connectors/codex-desktop/index.js";
 import { CodexCliConnector } from "../src/connectors/codex-cli/index.js";
 
 class MemoryTransport {
@@ -56,6 +56,50 @@ test("desktop connector is the primary Codex connector", () => {
     protocol: "app-server",
     endpoint: "codex app-server (stdio)",
   });
+});
+
+test("desktop connector prefers the Windows Codex Desktop binary over WindowsApps aliases", () => {
+  const localAppData = "C:\\Users\\Alice\\AppData\\Local";
+  const preferred = `${localAppData}\\OpenAI\\Codex\\bin\\codex.exe`;
+  const windowsApps = `${localAppData}\\Microsoft\\WindowsApps\\codex.exe`;
+
+  assert.equal(
+    resolveCodexCommand({
+      platform: "win32",
+      env: { LOCALAPPDATA: localAppData },
+      pathEnv: windowsApps,
+      exists: (path) => path === preferred || path === windowsApps,
+    }),
+    preferred,
+  );
+});
+
+test("desktop connector searches nested Windows Codex Desktop bin folders", () => {
+  const localAppData = "C:\\Users\\Alice\\AppData\\Local";
+  const nested = `${localAppData}\\OpenAI\\Codex\\bin\\app-0.2.1\\resources\\codex.exe`;
+  const windowsApps = `${localAppData}\\Microsoft\\WindowsApps\\codex.exe`;
+  const dirs = new Map([
+    [
+      `${localAppData}\\OpenAI\\Codex\\bin`,
+      [{ name: "app-0.2.1", isDirectory: () => true }],
+    ],
+    [
+      `${localAppData}\\OpenAI\\Codex\\bin\\app-0.2.1`,
+      [{ name: "resources", isDirectory: () => true }],
+    ],
+    [`${localAppData}\\OpenAI\\Codex\\bin\\app-0.2.1\\resources`, []],
+  ]);
+
+  assert.equal(
+    resolveCodexCommand({
+      platform: "win32",
+      env: { LOCALAPPDATA: localAppData },
+      pathEnv: windowsApps,
+      exists: (path) => path === nested || path === windowsApps,
+      readdir: (path) => dirs.get(path) ?? [],
+    }),
+    nested,
+  );
 });
 
 test("desktop connector initializes through app-server JSON-RPC", async () => {
@@ -268,6 +312,25 @@ test("desktop connector starts turns and records approval requests", async () =>
   ]);
 });
 
+test("desktop connector forwards image attachments as localImage input items", async () => {
+  const transport = new MemoryTransport();
+  const connector = new CodexDesktopConnector({ transport });
+
+  connector.startTurn({
+    threadId: "thread_2",
+    text: "look at this",
+    cwd: "/repo",
+    images: ["/tmp/comote-inbound/a.png", "/tmp/comote-inbound/b.jpg"],
+  });
+  await flushAsyncWork();
+
+  assert.deepEqual(transport.sent[0].params.input, [
+    { type: "text", text: "look at this", text_elements: [] },
+    { type: "localImage", path: "/tmp/comote-inbound/a.png" },
+    { type: "localImage", path: "/tmp/comote-inbound/b.jpg" },
+  ]);
+});
+
 test("desktop connector emits thread events and routes approvals by short code", async () => {
   const transport = new MemoryTransport();
   const connector = new CodexDesktopConnector({ transport });
@@ -383,6 +446,42 @@ test("desktop connector resumes existing Codex Desktop threads", async () => {
   });
 
   assert.deepEqual(await resumePromise, { thread: { id: "thread_1", preview: "Existing thread" } });
+});
+
+test("desktop connector extracts user bubbles from alternate turn shapes", async () => {
+  const transport = new MemoryTransport();
+  const connector = new CodexDesktopConnector({ transport });
+
+  const transcriptPromise = connector.getThreadTranscript({ threadId: "thread_1", limit: 10, offset: 0 });
+  await flushAsyncWork();
+  assert.deepEqual(transport.sent[0], {
+    jsonrpc: "2.0",
+    id: 1,
+    method: "thread/turns/list",
+    params: { threadId: "thread_1" },
+  });
+  transport.receive({
+    jsonrpc: "2.0",
+    id: 1,
+    result: {
+      data: [
+        {
+          id: "turn_1",
+          userMessage: { content: [{ type: "input_text", text: "show the current status" }] },
+          messages: [
+            { type: "message", role: "assistant", content: [{ type: "output_text", text: "status is green" }] },
+          ],
+        },
+      ],
+    },
+  });
+
+  const transcript = await transcriptPromise;
+  assert.deepEqual(transcript.messages.map((message) => [message.role, message.text]), [
+    ["assistant", "status is green"],
+    ["user", "show the current status"],
+  ]);
+  assert.equal(transcript.total, 2);
 });
 
 test("desktop connector interrupts the active turn when cancelling", async () => {

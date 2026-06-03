@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-get-show-dock-icon"
+description = "Enables the get_show_dock_icon command without any pre-configured scope."
+commands.allow = ["get_show_dock_icon"]
+
+[[permission]]
+identifier = "deny-get-show-dock-icon"
+description = "Denies the get_show_dock_icon command without any pre-configured scope."
+commands.deny = ["get_show_dock_icon"]

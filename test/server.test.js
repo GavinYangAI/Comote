@@ -158,6 +158,50 @@ test("desktop connector API initializes and lists threads", async () => {
   });
 });
 
+test("codex transcript preserves phone user messages when Desktop returns assistant-only history", async () => {
+  const state = {
+    transcript: {
+      listThread: () => ({
+        threadId: "thread_phone",
+        messages: [
+          { role: "assistant", text: "明白，就是连通性测试。现在确认没问题。", at: "2026-05-29T01:02:03.000Z" },
+          { role: "user", text: "我就是测试一下", at: "2026-05-29T01:02:02.000Z" },
+        ],
+        total: 2,
+        hasMore: false,
+      }),
+    },
+    connectors: {
+      desktop: {
+        getStatus: () => ({ name: "Codex Desktop", role: "primary", state: "connected" }),
+        getThreadTranscript: async () => ({
+          threadId: "thread_phone",
+          messages: [{ role: "assistant", text: "明白，就是连通性测试。现在确认没问题。" }],
+          total: 1,
+          hasMore: false,
+        }),
+      },
+    },
+  };
+  const app = createServer(state);
+  const server = app.listen(0);
+  await new Promise((resolve) => server.once("listening", resolve));
+
+  const { port } = server.address();
+  const response = await fetch(
+    `http://127.0.0.1:${port}/api/codex/transcript?threadId=${encodeURIComponent("thread_phone")}&limit=5&offset=0`,
+  );
+  const body = await response.json();
+  server.close();
+
+  assert.equal(response.status, 200);
+  assert.deepEqual(body.messages.map((message) => [message.role, message.text]), [
+    ["assistant", "明白，就是连通性测试。现在确认没问题。"],
+    ["user", "我就是测试一下"],
+  ]);
+  assert.equal(body.total, 2);
+});
+
 test("channel message API routes authorized phone commands", async () => {
   const app = createServer(createStateWithProject());
   const server = app.listen(0);

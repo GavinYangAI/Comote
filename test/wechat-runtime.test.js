@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 
 import { AuthorizationStore } from "../src/core/authorization.js";
 import { CommandRouter } from "../src/core/commands.js";
@@ -66,6 +67,7 @@ test("wechat runtime polls updates, routes commands, and delivers queued replies
   assert.equal(runtime.getStatus().cursor, "cursor_2");
   assert.equal(delivered.length, 1);
   assert.match(delivered[0].text, /comote/);
+  assert.equal(delivered[0].clientId, deliveryId(delivered[0].dedupeKey));
   assert.deepEqual(outbound.list(), []);
 });
 
@@ -238,3 +240,7 @@ test("wechat runtime tracks bounded set of seen message ids without rebuilding",
     `at least 900 recent messages should be tracked, got ${recentCount}`
   );
 });
+
+function deliveryId(source) {
+  return `comote-${createHash("sha256").update(String(source)).digest("hex").slice(0, 32)}`;
+}

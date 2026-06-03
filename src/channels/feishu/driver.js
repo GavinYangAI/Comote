@@ -1,3 +1,6 @@
+import { readFile } from "node:fs/promises";
+import { basename, extname } from "node:path";
+
 export class FeishuDriver {
   constructor({
     appId,
@@ -49,7 +52,7 @@ export class FeishuDriver {
     return payload?.token === this.verificationToken || payload?.header?.token === this.verificationToken;
   }
 
-  async sendText({ receiveId, receiveIdType = "chat_id", text }) {
+  async sendText({ receiveId, receiveIdType = "chat_id", text, uuid = null }) {
     if (!receiveId) {
       throw new Error("receiveId is required");
     }
@@ -69,6 +72,7 @@ export class FeishuDriver {
           receive_id: receiveId,
           msg_type: "text",
           content: JSON.stringify({ text }),
+          ...(uuid ? { uuid } : {}),
         }),
       },
     );
@@ -80,7 +84,7 @@ export class FeishuDriver {
     return body;
   }
 
-  async sendCard({ receiveId, receiveIdType = "chat_id", card }) {
+  async sendCard({ receiveId, receiveIdType = "chat_id", card, uuid = null }) {
     if (!receiveId) {
       throw new Error("receiveId is required");
     }
@@ -100,6 +104,7 @@ export class FeishuDriver {
           receive_id: receiveId,
           msg_type: "interactive",
           content: JSON.stringify(card),
+          ...(uuid ? { uuid } : {}),
         }),
       },
     );
@@ -136,6 +141,142 @@ export class FeishuDriver {
     const body = await response.json();
     this._assertApiSuccess(body);
     return body;
+  }
+
+  // Uploads a local image, returning its image_key. Requires the `im:resource`
+  // scope on the Feishu app. multipart/form-data is built via the global
+  // FormData/Blob — do NOT set content-type, fetch adds the boundary.
+  async uploadImage(filePath) {
+    const token = await this.getTenantAccessToken();
+    const buffer = await readFile(filePath);
+    const form = new FormData();
+    form.append("image_type", "message");
+    form.append("image", new Blob([buffer]), basename(filePath));
+    const response = await this.fetch(`${this.baseUrl}/im/v1/images`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${token}` },
+      body: form,
+    });
+    if (!response.ok) {
+      throw new Error(`Feishu image upload failed: ${response.status} ${await response.text()}`);
+    }
+    const body = await response.json();
+    this._assertApiSuccess(body);
+    const imageKey = body.data?.image_key;
+    if (!imageKey) {
+      throw new Error("Feishu image upload returned no image_key");
+    }
+    return imageKey;
+  }
+
+  // Uploads a local file, returning its file_key. Requires the `im:resource`
+  // scope. file_type is inferred from the extension (Feishu accepts a fixed
+  // set; anything else falls back to "stream").
+  async uploadFile(filePath, fileName = basename(filePath)) {
+    const token = await this.getTenantAccessToken();
+    const buffer = await readFile(filePath);
+    const form = new FormData();
+    form.append("file_type", feishuFileType(fileName));
+    form.append("file_name", fileName);
+    form.append("file", new Blob([buffer]), fileName);
+    const response = await this.fetch(`${this.baseUrl}/im/v1/files`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${token}` },
+      body: form,
+    });
+    if (!response.ok) {
+      throw new Error(`Feishu file upload failed: ${response.status} ${await response.text()}`);
+    }
+    const body = await response.json();
+    this._assertApiSuccess(body);
+    const fileKey = body.data?.file_key;
+    if (!fileKey) {
+      throw new Error("Feishu file upload returned no file_key");
+    }
+    return fileKey;
+  }
+
+  async sendImage({ receiveId, receiveIdType = "chat_id", imageKey, uuid = null }) {
+    if (!receiveId) {
+      throw new Error("receiveId is required");
+    }
+    if (!imageKey) {
+      throw new Error("imageKey is required");
+    }
+    return this._sendMessage({
+      receiveId,
+      receiveIdType,
+      msgType: "image",
+      content: { image_key: imageKey },
+      label: "image",
+      uuid,
+    });
+  }
+
+  async sendFile({ receiveId, receiveIdType = "chat_id", fileKey, uuid = null }) {
+    if (!receiveId) {
+      throw new Error("receiveId is required");
+    }
+    if (!fileKey) {
+      throw new Error("fileKey is required");
+    }
+    return this._sendMessage({
+      receiveId,
+      receiveIdType,
+      msgType: "file",
+      content: { file_key: fileKey },
+      label: "file",
+      uuid,
+    });
+  }
+
+  async _sendMessage({ receiveId, receiveIdType, msgType, content, label, uuid = null }) {
+    const token = await this.getTenantAccessToken();
+    const response = await this.fetch(
+      `${this.baseUrl}/im/v1/messages?receive_id_type=${encodeURIComponent(receiveIdType)}`,
+      {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          receive_id: receiveId,
+          msg_type: msgType,
+          content: JSON.stringify(content),
+          ...(uuid ? { uuid } : {}),
+        }),
+      },
+    );
+    if (!response.ok) {
+      throw new Error(`Feishu ${label} send failed: ${response.status} ${await response.text()}`);
+    }
+    const body = await response.json();
+    this._assertApiSuccess(body);
+    return body;
+  }
+
+  // Downloads an inbound message resource (image or file) as binary. `type` is
+  // "image" or "file"; `fileKey` is the image_key/file_key from the message.
+  // Needs the `im:message` (or readonly) scope, normally already granted.
+  async downloadResource({ messageId, fileKey, type }) {
+    if (!messageId) {
+      throw new Error("messageId is required");
+    }
+    if (!fileKey) {
+      throw new Error("fileKey is required");
+    }
+    const token = await this.getTenantAccessToken();
+    const response = await this.fetch(
+      `${this.baseUrl}/im/v1/messages/${encodeURIComponent(messageId)}/resources/${encodeURIComponent(fileKey)}?type=${encodeURIComponent(type)}`,
+      { method: "GET", headers: { authorization: `Bearer ${token}` } },
+    );
+    if (!response.ok) {
+      throw new Error(`Feishu resource download failed: ${response.status} ${await response.text()}`);
+    }
+    const contentType = response.headers?.get?.("content-type") ?? null;
+    const arrayBuffer = await response.arrayBuffer();
+    return { buffer: Buffer.from(arrayBuffer), contentType };
   }
 
   async getTenantAccessToken() {
@@ -419,4 +560,29 @@ async function postRegistration({ domain, fetchImpl, body }) {
 
 function accountsBaseUrl(domain) {
   return domain === "lark" ? LARK_ACCOUNTS_URL : FEISHU_ACCOUNTS_URL;
+}
+
+// Maps a filename to one of Feishu's accepted im/v1/files `file_type` values.
+// Unknown types use "stream", which Feishu treats as a generic binary file.
+function feishuFileType(fileName) {
+  const ext = extname(fileName).toLowerCase().replace(/^\./, "");
+  switch (ext) {
+    case "pdf":
+      return "pdf";
+    case "doc":
+    case "docx":
+      return "doc";
+    case "xls":
+    case "xlsx":
+      return "xls";
+    case "ppt":
+    case "pptx":
+      return "ppt";
+    case "mp4":
+      return "mp4";
+    case "opus":
+      return "opus";
+    default:
+      return "stream";
+  }
 }

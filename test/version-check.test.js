@@ -5,7 +5,7 @@ import { readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { VersionChecker, compareSemver } from "../src/core/version-check.js";
+import { VersionChecker, compareSemver, selectDownloadUrl } from "../src/core/version-check.js";
 
 function makeFetch(responses) {
   const calls = [];
@@ -45,7 +45,13 @@ test("checkNow flags an update when GitHub returns a newer release", async () =>
   const fetchImpl = makeFetch(
     jsonResponse({
       tag_name: "v0.3.0",
-      html_url: "https://github.com/GavinYangAI/comote/releases/tag/v0.3.0",
+      html_url: "https://github.com/GavinYangAI/Comote/releases/tag/v0.3.0",
+      assets: [
+        {
+          name: "Comote-0.3.0.dmg",
+          browser_download_url: "https://github.com/GavinYangAI/Comote/releases/download/v0.3.0/Comote-0.3.0.dmg",
+        },
+      ],
       body: "new things",
     }),
   );
@@ -53,6 +59,8 @@ test("checkNow flags an update when GitHub returns a newer release", async () =>
     currentVersion: "0.2.0",
     fetchImpl,
     now: () => 1000,
+    platform: "darwin",
+    arch: "arm64",
   });
 
   const result = await checker.checkNow();
@@ -60,9 +68,39 @@ test("checkNow flags an update when GitHub returns a newer release", async () =>
   assert.equal(result.current, "0.2.0");
   assert.equal(result.latest, "0.3.0");
   assert.equal(result.hasUpdate, true);
-  assert.equal(result.releaseUrl, "https://github.com/GavinYangAI/comote/releases/tag/v0.3.0");
+  assert.equal(result.releaseUrl, "https://github.com/GavinYangAI/Comote/releases/tag/v0.3.0");
+  assert.equal(result.releasesUrl, "https://github.com/GavinYangAI/Comote/releases");
+  assert.equal(result.downloadUrl, "https://github.com/GavinYangAI/Comote/releases/download/v0.3.0/Comote-0.3.0.dmg");
   assert.equal(result.checkedAt, 1000);
   assert.equal(result.error, null);
+});
+
+test("checkNow calls the current Comote repository release API", async () => {
+  const fetchImpl = makeFetch(jsonResponse({ tag_name: "v0.2.0", html_url: "x" }));
+  const checker = new VersionChecker({ currentVersion: "0.2.0", fetchImpl, now: () => 1 });
+
+  await checker.checkNow();
+
+  assert.equal(fetchImpl.calls[0].url, "https://api.github.com/repos/GavinYangAI/Comote/releases/latest");
+});
+
+test("selectDownloadUrl picks the platform asset before falling back to the release page", () => {
+  const assets = [
+    {
+      name: "Comote-0.3.0-setup.exe",
+      browser_download_url: "https://github.com/GavinYangAI/Comote/releases/download/v0.3.0/Comote-0.3.0-setup.exe",
+    },
+    {
+      name: "Comote-0.3.0.dmg",
+      browser_download_url: "https://github.com/GavinYangAI/Comote/releases/download/v0.3.0/Comote-0.3.0.dmg",
+    },
+  ];
+
+  assert.equal(
+    selectDownloadUrl(assets, { platform: "darwin", arch: "arm64", fallbackUrl: "release-page" }),
+    "https://github.com/GavinYangAI/Comote/releases/download/v0.3.0/Comote-0.3.0.dmg",
+  );
+  assert.equal(selectDownloadUrl([], { fallbackUrl: "release-page" }), "release-page");
 });
 
 test("checkNow reports no update when local matches the latest release", async () => {

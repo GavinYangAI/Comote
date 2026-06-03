@@ -1,6 +1,6 @@
 [package]
 name = "comote"
-version = "0.2.1"
+version = "0.2.4"
 description = "Comote local remote companion for Codex Desktop."
 authors = ["Comote"]
 edition = "2021"
@@ -10,5 +10,9 @@ tauri-build = { version = "2.5.1", features = [] }
 
 [dependencies]
 anyhow = "1.0.98"
-tauri = { version = "2.11.1", features = ["tray-icon"] }
+tauri = { version = "2.11.1", features = ["tray-icon", "webview-data-url"] }
 tauri-plugin-shell = "2.3.1"
+tauri-plugin-opener = "2.5.4"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"

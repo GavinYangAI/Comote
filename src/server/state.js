@@ -14,6 +14,8 @@ import { JsonFileStore } from "../core/persistence.js";
 import { OutboundQueue } from "../core/outbound-queue.js";
 import { WeChatIlinkDriver } from "../channels/wechat/ilink-driver.js";
 import { WeChatRuntimeService } from "../channels/wechat/runtime.js";
+import { stripMarkdown } from "../channels/wechat/markdown.js";
+import { saveInboundAttachment } from "../core/attachment-store.js";
 import { FeishuDriver } from "../channels/feishu/driver.js";
 import { FeishuRuntimeService } from "../channels/feishu/runtime.js";
 import { statusCard, textCard, approvalCard } from "../channels/feishu/cards.js";
@@ -30,6 +32,7 @@ export function createComoteState({
   desktop: desktopOverride = null,
   currentVersion = null,
   versionChecker = null,
+  attachmentsDir = ".comote/attachments",
 } = {}) {
   const authorization = new AuthorizationStore({ identities: persisted.identities ?? [] });
   for (const identity of persisted.detectedIdentities ?? []) {
@@ -80,6 +83,16 @@ export function createComoteState({
     commandRouter,
     onDetectedIdentity: (identity) => authorization.detectIdentity(identity),
     resolveDisplayName: (openId) => feishuRuntime?.driver?.resolveUserName?.(openId) ?? null,
+    downloadAttachment: ({ channel, messageId, conversationId, sender, attachment }) =>
+      downloadFeishuAttachment({
+        channel,
+        messageId,
+        conversationId,
+        sender,
+        attachment,
+        driver: feishuRuntime?.driver,
+        attachmentsDir,
+      }),
     sendReply: async (reply) => {
       outboundReplies.enqueue(reply);
       return { ok: true };
@@ -153,9 +166,11 @@ export function createComoteState({
         return this.getConfig();
       },
       getStatus() {
+        ensureFeishuRuntimeDriverMatchesConfig();
         return feishuRuntime.getStatus();
       },
       start() {
+        ensureFeishuRuntimeDriverMatchesConfig();
         return feishuRuntime.start();
       },
       stop() {
@@ -180,7 +195,14 @@ export function createComoteState({
             domain: result.domain ?? domain,
             linkedUserId: result.userId,
           });
-          feishuRuntime.configureDriver(createFeishuDriver(feishuConfig));
+          try {
+            feishuRuntime.configureDriver(createFeishuDriver(feishuConfig));
+          } catch (error) {
+            // Re-initialising the runtime must never abort the confirm: the new
+            // credentials are still saved + returned below so the page flips to
+            // "bound" and the user is detected; the runtime resyncs on next start.
+            feishuRuntime.lastError = error.message;
+          }
           let userName = null;
           try {
             userName = (await feishuRuntime.driver?.resolveUserName?.(result.userId)) ?? null;
@@ -189,10 +211,20 @@ export function createComoteState({
           }
           feishuConfig = normalizeFeishuConfig({ ...feishuConfig, linkedUserName: userName });
           result.userName = userName;
+          if (result.userId) {
+            authorization.detectIdentity({
+              channel: "feishu",
+              stableId: result.userId,
+              displayName: userName ?? result.userId,
+              role: "operator",
+            });
+          }
           await stateRef.persist?.();
-          await feishuRuntime.start().catch((error) => {
-            feishuRuntime.lastError = error.message;
-          });
+          if (autoStartFeishuRuntime) {
+            await feishuRuntime.start().catch((error) => {
+              feishuRuntime.lastError = error.message;
+            });
+          }
         }
         return result;
       },
@@ -203,10 +235,32 @@ export function createComoteState({
         feishuRuntime.configureDriver(testDriver);
       },
       deliverQueued() {
+        ensureFeishuRuntimeDriverMatchesConfig();
         return feishuRuntime.deliverQueued();
       },
     },
   };
+
+  function ensureFeishuRuntimeDriverMatchesConfig() {
+    const shouldHaveDriver = Boolean(feishuConfig.enabled && feishuConfig.appId && feishuConfig.appSecret);
+    const currentDriver = feishuRuntime.getStatus().driver;
+    const currentAppId = currentDriver?.appId ?? null;
+    const currentDomain = currentDriver?.domain ?? "feishu";
+    if (!shouldHaveDriver) {
+      if (currentDriver) {
+        feishuRuntime.configureDriver(null);
+      }
+      return;
+    }
+    if (currentAppId === feishuConfig.appId && currentDomain === feishuConfig.domain) {
+      return;
+    }
+    feishuRuntime.configureDriver(createFeishuDriver(feishuConfig));
+    eventLog.warn("飞书运行时配置已重新同步", {
+      appId: feishuConfig.appId,
+      previousAppId: currentAppId,
+    });
+  }
 
   const stateRef = {
     authorization,
@@ -420,7 +474,9 @@ export function createComoteState({
         stateRef.persist?.();
         return;
       }
-      const chunks = chunkForChannel(event.text ?? "");
+      // WeChat does not render Markdown — strip it so the reply reads cleanly.
+      const replyText = binding.channel === "wechat" ? stripMarkdown(event.text ?? "") : event.text ?? "";
+      const chunks = chunkForChannel(replyText);
       chunks.forEach((chunk, index) => {
         outboundReplies.enqueue({
           channel: binding.channel,
@@ -538,7 +594,39 @@ export async function createPersistentComoteState({ filePath = ".comote/state.js
     await versionChecker.loadCache();
     versionChecker.start();
   }
-  return createComoteState({ persisted, stateStore, currentVersion, versionChecker });
+  return createComoteState({
+    persisted,
+    stateStore,
+    currentVersion,
+    versionChecker,
+    attachmentsDir: join(dirname(filePath), "attachments"),
+  });
+}
+
+// Downloads an inbound Feishu image/file and persists it (with a manifest) under
+// attachmentsDir via the attachment store. Returns the saved local path, or null
+// when no driver is available; throws are left to the adapter (which treats a
+// failure as a dropped attachment).
+async function downloadFeishuAttachment({ channel, messageId, conversationId, sender, attachment, driver, attachmentsDir }) {
+  if (!driver?.downloadResource) {
+    return null;
+  }
+  const type = attachment.kind === "image" ? "image" : "file";
+  const { buffer, contentType } = await driver.downloadResource({
+    messageId,
+    fileKey: attachment.feishuKey,
+    type,
+  });
+  return saveInboundAttachment({
+    attachmentsDir,
+    channel,
+    messageId,
+    conversationId,
+    sender,
+    attachment,
+    buffer,
+    contentType,
+  });
 }
 
 async function readPackageVersion() {
