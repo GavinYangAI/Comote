@@ -12,3 +12,8 @@ tauri-build = { version = "2.5.1", features = [] }
 anyhow = "1.0.98"
 tauri = { version = "2.11.1", features = ["tray-icon"] }
 tauri-plugin-shell = "2.3.1"
+
+# graceful_stop sends SIGTERM and polls liveness via kill(pid, 0) before a
+# SIGKILL backstop, and adopted (PID-only) daemons are stopped the same way.
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"

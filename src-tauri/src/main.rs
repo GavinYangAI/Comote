@@ -5,6 +5,7 @@ use std::{
     io::{Read, Write},
     net::TcpStream,
     path::{Path, PathBuf},
+    process::Child as SystemChild,
     sync::Mutex,
     thread,
     time::{Duration, Instant},
@@ -20,10 +21,130 @@ use tauri_plugin_shell::{
     ShellExt,
 };
 
-struct ComoteSidecar(Mutex<Option<CommandChild>>);
+struct ComoteSidecar(Mutex<Option<ComoteChild>>);
+
+// A handle to the Comote daemon, in one of three forms:
+//   - Shell:  the Tauri-managed sidecar (the normal macOS/Linux path).
+//   - System: a daemon we spawned ourselves via std::process (B3c Windows
+//             manual sidecar and the cross-OS fallback).
+//   - Pid:    a daemon from a previous keep-alive session that we adopted by
+//             pid only — no Child handle, but still stoppable.
+enum ComoteChild {
+    Shell(CommandChild),
+    // Constructed by the B3c Windows manual sidecar / cross-OS fallback.
+    #[allow(dead_code)]
+    System(SystemChild),
+    Pid(u32),
+}
+
+impl ComoteChild {
+    fn pid(&self) -> Option<u32> {
+        match self {
+            ComoteChild::Shell(child) => Some(child.pid()),
+            ComoteChild::System(child) => Some(child.id()),
+            ComoteChild::Pid(pid) => Some(*pid),
+        }
+    }
+
+    fn kill(self) {
+        match self {
+            ComoteChild::Shell(child) => {
+                let _ = child.kill();
+            }
+            ComoteChild::System(mut child) => {
+                let _ = child.kill();
+            }
+            ComoteChild::Pid(pid) => {
+                #[cfg(unix)]
+                unsafe {
+                    libc::kill(pid as libc::pid_t, libc::SIGKILL);
+                }
+                #[cfg(target_os = "windows")]
+                {
+                    let _ = std::process::Command::new("taskkill")
+                        .args(["/F", "/PID", &pid.to_string()])
+                        .output();
+                }
+                #[cfg(not(any(unix, target_os = "windows")))]
+                let _ = pid;
+            }
+        }
+    }
+
+    // Asks the Node daemon to shut down cleanly (SIGTERM triggers its graceful
+    // server.close path), then SIGKILLs as a backstop if it overstays the grace
+    // window. The daemon force-exits itself after ~2s, so 2.5s is generous.
+    #[cfg(unix)]
+    fn graceful_stop(self) {
+        let Some(pid) = self.pid() else {
+            self.kill();
+            return;
+        };
+        let outcome = graceful_stop_unix(
+            pid,
+            Duration::from_millis(2500),
+            Duration::from_millis(100),
+            |pid| unsafe { libc::kill(pid as libc::pid_t, libc::SIGTERM) == 0 },
+            |pid| unsafe { libc::kill(pid as libc::pid_t, 0) == 0 },
+            |dur| thread::sleep(dur),
+        );
+        if matches!(outcome, GracefulStop::TimedOutNeedsKill) {
+            self.kill();
+        }
+    }
+
+    #[cfg(not(unix))]
+    fn graceful_stop(self) {
+        // Node has no SIGTERM semantics on Windows; a plain kill is the norm.
+        self.kill();
+    }
+}
+
+// Outcome of the graceful-stop state machine, factored out of the syscalls so it
+// can be unit-tested without sending real signals.
+#[derive(Debug, PartialEq, Eq)]
+enum GracefulStop {
+    // The process exited within the grace window (no SIGKILL needed).
+    Exited,
+    // The grace window elapsed while the process was still alive — caller must
+    // SIGKILL.
+    TimedOutNeedsKill,
+}
+
+// Pure-ish driver for graceful stop: send SIGTERM, then poll liveness until the
+// process exits or the deadline passes. `sigterm` returns whether the signal was
+// delivered; `is_alive` probes liveness; `sleep` advances the (test or real)
+// clock. Time is measured with Instant so tests can use a fast poll/grace ratio.
+#[cfg(unix)]
+fn graceful_stop_unix(
+    pid: u32,
+    grace: Duration,
+    poll: Duration,
+    sigterm: impl Fn(u32) -> bool,
+    is_alive: impl Fn(u32) -> bool,
+    sleep: impl Fn(Duration),
+) -> GracefulStop {
+    sigterm(pid);
+    let deadline = Instant::now() + grace;
+    while Instant::now() < deadline {
+        if !is_alive(pid) {
+            return GracefulStop::Exited;
+        }
+        sleep(poll);
+    }
+    if is_alive(pid) {
+        GracefulStop::TimedOutNeedsKill
+    } else {
+        GracefulStop::Exited
+    }
+}
 
 const COMOTE_VERSION: &str = env!("CARGO_PKG_VERSION");
 const PORT: u16 = 16208;
+// Default: do NOT keep the daemon alive after quit, matching the pre-keep-alive
+// behavior. Persisted in desktop-settings.json under the app data dir.
+const DEFAULT_KEEP_DAEMON_ALIVE: bool = false;
+const DESKTOP_SETTINGS_FILE: &str = "desktop-settings.json";
 
 // Result of probing 127.0.0.1:PORT for an already-running Comote daemon.
 enum ExistingService {
@@ -97,7 +218,9 @@ fn main() {
                             pid.map(|p| p.to_string()).unwrap_or_else(|| "unknown".into())
                         ),
                     );
-                    None
+                    // Adopt the daemon by pid so a quit with keep-alive OFF can
+                    // still stop it. With no pid we can only leave it running.
+                    pid.map(ComoteChild::Pid)
                 }
                 ExistingService::None => match start_comote_sidecar(app, PORT, &log_path) {
                     Ok(child) => Some(child),
@@ -162,11 +285,31 @@ fn main() {
         .expect("error while building Comote");
 
     app.run(|app_handle, event| {
-        // The sidecar is killed only on a real quit, never on window close.
-        if let RunEvent::ExitRequested { .. } = event {
-            stop_comote_sidecar(app_handle);
+        // Window close only hides (see on_window_event), so the daemon is dealt
+        // with on actual termination. ExitRequested does not fire on every quit
+        // path (e.g. an Apple-Event quit), so handle the final RunEvent::Exit
+        // too; the stop/release helpers are idempotent (they take the handle).
+        match event {
+            RunEvent::ExitRequested { .. } | RunEvent::Exit => handle_app_exit(app_handle),
+            _ => {}
         }
     });
+}
+
+// On quit, honor the keep-alive preference: leave the daemon running (release
+// our handle so its Drop won't kill it) when keep-alive is ON, otherwise stop it
+// gracefully (SIGTERM → poll → SIGKILL).
+fn handle_app_exit(app_handle: &AppHandle) {
+    let keep_alive = app_handle
+        .path()
+        .app_data_dir()
+        .map(|dir| load_keep_daemon_alive_from_dir(&dir))
+        .unwrap_or(DEFAULT_KEEP_DAEMON_ALIVE);
+    if keep_alive {
+        release_comote_sidecar(app_handle);
+    } else {
+        stop_comote_sidecar(app_handle);
+    }
 }
 
 fn show_main_window(app: &AppHandle) {
@@ -180,8 +323,18 @@ fn stop_comote_sidecar(app: &AppHandle) {
     if let Some(state) = app.try_state::<ComoteSidecar>() {
         if let Ok(mut child) = state.0.lock() {
             if let Some(child) = child.take() {
-                let _ = child.kill();
+                child.graceful_stop();
             }
+        }
+    }
+}
+
+// Detaches the daemon without stopping it: take the handle so its Drop does not
+// terminate the child, leaving it alive after the app quits (keep-alive ON).
+fn release_comote_sidecar(app: &AppHandle) {
+    if let Some(state) = app.try_state::<ComoteSidecar>() {
+        if let Ok(mut child) = state.0.lock() {
+            let _ = child.take();
         }
     }
 }
@@ -190,7 +343,7 @@ fn start_comote_sidecar(
     app: &tauri::App,
     port: u16,
     log_path: &Path,
-) -> tauri::Result<CommandChild> {
+) -> tauri::Result<ComoteChild> {
     let resource_dir = app.path().resource_dir()?;
     let app_data_dir = app.path().app_data_dir()?;
     fs::create_dir_all(&app_data_dir)?;
@@ -245,7 +398,7 @@ fn start_comote_sidecar(
         }
     });
 
-    Ok(child)
+    Ok(ComoteChild::Shell(child))
 }
 
 fn navigate_to_service(window: &WebviewWindow, port: u16) {
@@ -346,6 +499,34 @@ fn path_to_string(path: PathBuf) -> String {
     path.to_string_lossy().into_owned()
 }
 
+// --- keep-alive preference persistence (read on quit, written by B3e commands) ---
+
+fn desktop_settings_path(app_data_dir: &Path) -> PathBuf {
+    app_data_dir.join(DESKTOP_SETTINGS_FILE)
+}
+
+fn load_keep_daemon_alive_from_dir(app_data_dir: &Path) -> bool {
+    match fs::read_to_string(desktop_settings_path(app_data_dir)) {
+        Ok(body) => keep_daemon_alive_from_settings_body(&body),
+        Err(_) => DEFAULT_KEEP_DAEMON_ALIVE,
+    }
+}
+
+#[allow(dead_code)] // wired to the set_keep_daemon_alive command in B3e
+fn save_keep_daemon_alive_to_dir(app_data_dir: &Path, enabled: bool) -> std::io::Result<()> {
+    fs::write(
+        desktop_settings_path(app_data_dir),
+        format!("{{\"keepDaemonAlive\":{enabled}}}\n"),
+    )
+}
+
+// Tolerant of formatting/whitespace and missing keys; only an explicit
+// "keepDaemonAlive":true enables it.
+fn keep_daemon_alive_from_settings_body(body: &str) -> bool {
+    let compact: String = body.chars().filter(|c| !c.is_whitespace()).collect();
+    compact.contains("\"keepDaemonAlive\":true")
+}
+
 fn log_line(log_path: &Path, message: &str) {
     if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(log_path) {
         let _ = writeln!(file, "{message}");
@@ -399,5 +580,61 @@ mod tests {
         assert!(can_reuse_existing_service(Some("0.2.1"), "0.2.1"));
         assert!(!can_reuse_existing_service(Some("0.2.0"), "0.2.1"));
         assert!(!can_reuse_existing_service(None, "0.2.1"));
+    }
+
+    #[test]
+    fn keep_daemon_alive_defaults_to_false_and_reads_true() {
+        assert_eq!(keep_daemon_alive_from_settings_body(""), false);
+        assert_eq!(keep_daemon_alive_from_settings_body("{}"), false);
+        assert_eq!(
+            keep_daemon_alive_from_settings_body(r#"{"keepDaemonAlive":false}"#),
+            false
+        );
+        assert_eq!(
+            keep_daemon_alive_from_settings_body(r#"{ "keepDaemonAlive" : true }"#),
+            true
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn graceful_stop_returns_exited_when_process_dies_in_grace() {
+        use std::cell::Cell;
+        let alive = Cell::new(true);
+        let sent = Cell::new(false);
+        let outcome = graceful_stop_unix(
+            123,
+            Duration::from_millis(2500),
+            Duration::from_millis(1),
+            |_| {
+                sent.set(true);
+                true
+            },
+            // Alive for the first probe, then the SIGTERM "takes effect".
+            |_| {
+                let was = alive.get();
+                alive.set(false);
+                was
+            },
+            |_| {},
+        );
+        assert!(sent.get(), "SIGTERM must be sent first");
+        assert_eq!(outcome, GracefulStop::Exited);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn graceful_stop_requests_kill_when_process_outlives_grace() {
+        // Process never dies → after the (tiny) grace window the caller is told
+        // to SIGKILL it.
+        let outcome = graceful_stop_unix(
+            123,
+            Duration::from_millis(2),
+            Duration::from_millis(1),
+            |_| true,
+            |_| true,
+            |dur| std::thread::sleep(dur),
+        );
+        assert_eq!(outcome, GracefulStop::TimedOutNeedsKill);
     }
 }
