@@ -40,6 +40,9 @@ export class CodexDesktopConnector {
     // Assumption: one active turn per connection at a time.
     this.changedPathsByThread = new Map();
     this._activeThreadId = null;
+    // `${threadId}:${itemId}` -> accumulated agent text for Codex 0.136+
+    // delta notifications, which only carry the newest text chunk.
+    this.agentMessageTextByItem = new Map();
     this.client = this.createClient();
   }
 
@@ -66,6 +69,9 @@ export class CodexDesktopConnector {
     // next turn on the same thread after reconnect. Drop all accumulation —
     // the app-server re-drives state once the connection is re-established.
     this.changedPathsByThread.clear();
+    // A mid-stream drop never delivers item/completed, so the per-item delta
+    // text would otherwise accumulate forever. Drop it alongside the paths.
+    this.agentMessageTextByItem.clear();
     this._activeThreadId = null;
     this.#emit({ type: "connectionLost" });
     this.scheduleReconnect(1);
@@ -161,6 +167,18 @@ export class CodexDesktopConnector {
       this.#accumulateChangedPaths(params.threadId, params.changes);
       return;
     }
+    if (method === "item/agentMessage/delta" && params.itemId) {
+      const key = agentMessageKey(params.threadId, params.itemId);
+      const text = `${this.agentMessageTextByItem.get(key) ?? ""}${params.delta ?? ""}`;
+      this.agentMessageTextByItem.set(key, text);
+      this.#emit({
+        type: "agentMessageDelta",
+        threadId: params.threadId ?? null,
+        itemId: params.itemId ?? null,
+        text,
+      });
+      return;
+    }
     if (method === "item/updated" && params.item?.type === "agentMessage") {
       this.#emit({
         type: "agentMessageDelta",
@@ -176,6 +194,11 @@ export class CodexDesktopConnector {
       // do NOT clear them — turn/completed remains the one that clears.
       const threadId = params.threadId ?? this._activeThreadId ?? null;
       const set = threadId != null ? this.changedPathsByThread.get(threadId) : null;
+      // The agent message is final: drop its accumulated delta text so the map
+      // does not leak across turns (Codex 0.136+ delta accumulation).
+      if (params.item.id) {
+        this.agentMessageTextByItem.delete(agentMessageKey(params.threadId, params.item.id));
+      }
       this.#emit({
         type: "agentMessage",
         threadId: params.threadId ?? null,
@@ -361,13 +384,15 @@ export class CodexDesktopConnector {
     return this.client.request("thread/start", {
       cwd,
       approvalsReviewer: "user",
-      experimentalRawEvents: false,
-      persistExtendedHistory: false,
     });
   }
 
-  async resumeThread({ threadId }) {
-    return this.client.request("thread/resume", { threadId });
+  async resumeThread({ threadId, cwd = null }) {
+    const params = { threadId };
+    if (cwd) {
+      params.cwd = cwd;
+    }
+    return this.client.request("thread/resume", params);
   }
 
   async startTurn({ threadId, text, cwd = null }) {
@@ -385,8 +410,7 @@ export class CodexDesktopConnector {
   // recognizable is found, with `_rawSample` populated so callers can log
   // the actual response shape and we can refine.
   async listRecentMessages({ threadId, limit = 5 }) {
-    const response = await this.client.request("thread/turns/list", { threadId });
-    const turns = normalizeTurnList(response);
+    const turns = await this.listThreadTurns({ threadId });
     const messages = [];
     for (const turn of turns) {
       messages.push(...extractTurnMessages(turn));
@@ -399,12 +423,25 @@ export class CodexDesktopConnector {
   }
 
   async cancelTurn({ threadId }) {
-    const turns = await this.client.request("thread/turns/list", { threadId });
-    const activeTurn = normalizeTurnList(turns).find((turn) => isActiveTurn(turn));
+    const turns = await this.listThreadTurns({ threadId });
+    const activeTurn = turns.find((turn) => isActiveTurn(turn));
     if (!activeTurn) {
       throw new Error(`no active turn for thread: ${threadId}`);
     }
     return this.client.request("turn/interrupt", { threadId, turnId: activeTurn.id });
+  }
+
+  async listThreadTurns({ threadId }) {
+    try {
+      const response = await this.client.request("thread/read", { threadId, includeTurns: true });
+      return normalizeTurnList(response);
+    } catch (error) {
+      if (!isMethodMissingError(error)) {
+        throw error;
+      }
+    }
+    const response = await this.client.request("thread/turns/list", { threadId });
+    return normalizeTurnList(response);
   }
 
   listPendingApprovals() {
@@ -496,7 +533,7 @@ function normalizeThreadList(response) {
 }
 
 function normalizeTurnList(response) {
-  return response.data ?? response.turns ?? [];
+  return response.data ?? response.turns ?? response.thread?.turns ?? [];
 }
 
 // Walks a turn and pulls out user / assistant messages. The user prompt
@@ -525,10 +562,7 @@ function extractTurnMessages(turn) {
     if (!Array.isArray(list)) continue;
     for (const item of list) {
       const type = item?.type ?? item?.payload?.type ?? null;
-      const text =
-        item?.text ??
-        item?.payload?.text ??
-        (typeof item?.content === "string" ? item.content : null);
+      const text = textFromThreadItem(item);
       if (!text) continue;
       if (type === "user_message" || type === "userMessage") {
         out.push({ role: "user", text });
@@ -541,6 +575,43 @@ function extractTurnMessages(turn) {
     }
   }
   return out;
+}
+
+function textFromThreadItem(item) {
+  return item?.text ?? item?.payload?.text ?? textFromContent(item?.content) ?? null;
+}
+
+function textFromContent(content) {
+  if (typeof content === "string") {
+    return content;
+  }
+  if (!Array.isArray(content)) {
+    return null;
+  }
+  const parts = [];
+  for (const part of content) {
+    const text = typeof part === "string" ? part : part?.text;
+    if (text) {
+      parts.push(text);
+    }
+  }
+  return parts.length > 0 ? parts.join("\n") : null;
+}
+
+function agentMessageKey(threadId, itemId) {
+  return `${threadId ?? ""}:${itemId ?? ""}`;
+}
+
+function isMethodMissingError(error) {
+  // The JSON-RPC standard "Method not found" code is the reliable signal; the
+  // message regex is the fallback for servers that drop it. Kept narrow so a
+  // "thread not found", timeout, or auth error still rethrows.
+  if (error?.code === -32601) {
+    return true;
+  }
+  return /method not found|unknown method|no such method|unsupported method|not found.*method/i.test(
+    error?.message ?? String(error),
+  );
 }
 
 function basename(path) {

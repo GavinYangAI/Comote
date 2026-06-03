@@ -324,7 +324,7 @@ test("plain messages continue the active Codex Desktop thread", async () => {
   assert.deepEqual(calls, [{ threadId: "thread_1", text: "continue implementing", cwd: "/repo" }]);
 });
 
-test("plain messages resume not-loaded Codex Desktop threads before retrying", async () => {
+test("plain messages resume the active Codex Desktop thread before starting a turn", async () => {
   const authorization = new AuthorizationStore();
   const projects = new ProjectStore();
   const sessions = new SessionStore();
@@ -332,15 +332,12 @@ test("plain messages resume not-loaded Codex Desktop threads before retrying", a
   const calls = [];
   const codexDesktop = {
     getStatus: () => ({ state: "connected" }),
-    resumeThread: async ({ threadId }) => {
-      calls.push(["resumeThread", threadId]);
+    resumeThread: async ({ threadId, cwd }) => {
+      calls.push(["resumeThread", threadId, cwd]);
       return { thread: { id: threadId, preview: "Existing thread" } };
     },
     startTurn: async ({ threadId, text, cwd }) => {
       calls.push(["startTurn", threadId, text, cwd]);
-      if (calls.filter(([method]) => method === "startTurn").length === 1) {
-        throw new Error(`thread not found: ${threadId}`);
-      }
       return { turnId: "turn_2" };
     },
   };
@@ -355,8 +352,7 @@ test("plain messages resume not-loaded Codex Desktop threads before retrying", a
 
   assert.match(reply.text, /已发送给 Codex Desktop/);
   assert.deepEqual(calls, [
-    ["startTurn", "thread_1", "continue implementing", "/repo"],
-    ["resumeThread", "thread_1"],
+    ["resumeThread", "thread_1", "/repo"],
     ["startTurn", "thread_1", "continue implementing", "/repo"],
   ]);
 });

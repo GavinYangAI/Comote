@@ -157,10 +157,10 @@ test("desktop connector lists and starts Codex threads", async () => {
   const startPromise = connector.startThread({ cwd: "/repo" });
   await flushAsyncWork();
   assert.equal(transport.sent[1].method, "thread/start");
-  assert.equal(transport.sent[1].params.cwd, "/repo");
-  assert.equal(transport.sent[1].params.approvalsReviewer, "user");
-  assert.equal(transport.sent[1].params.experimentalRawEvents, false);
-  assert.equal(transport.sent[1].params.persistExtendedHistory, false);
+  assert.deepEqual(transport.sent[1].params, {
+    cwd: "/repo",
+    approvalsReviewer: "user",
+  });
   transport.receive({
     jsonrpc: "2.0",
     id: 2,
@@ -385,6 +385,61 @@ test("desktop connector resumes existing Codex Desktop threads", async () => {
   assert.deepEqual(await resumePromise, { thread: { id: "thread_1", preview: "Existing thread" } });
 });
 
+test("desktop connector reads recent messages with thread/read", async () => {
+  const transport = new MemoryTransport();
+  const connector = new CodexDesktopConnector({ transport });
+
+  const recentPromise = connector.listRecentMessages({ threadId: "thread_1", limit: 2 });
+  await flushAsyncWork();
+
+  assert.deepEqual(transport.sent[0], {
+    jsonrpc: "2.0",
+    id: 1,
+    method: "thread/read",
+    params: { threadId: "thread_1", includeTurns: true },
+  });
+  transport.receive({
+    jsonrpc: "2.0",
+    id: 1,
+    result: {
+      thread: {
+        turns: [
+          {
+            id: "turn_1",
+            items: [
+              {
+                type: "userMessage",
+                id: "item_user",
+                content: [{ type: "text", text: "continue from Feishu", text_elements: [] }],
+              },
+              { type: "agentMessage", id: "item_agent", text: "done" },
+            ],
+          },
+        ],
+      },
+    },
+  });
+
+  assert.deepEqual(await recentPromise, {
+    messages: [
+      { role: "user", text: "continue from Feishu" },
+      { role: "assistant", text: "done" },
+    ],
+    _rawSample: {
+      id: "turn_1",
+      items: [
+        {
+          type: "userMessage",
+          id: "item_user",
+          content: [{ type: "text", text: "continue from Feishu", text_elements: [] }],
+        },
+        { type: "agentMessage", id: "item_agent", text: "done" },
+      ],
+    },
+    _turnCount: 1,
+  });
+});
+
 test("desktop connector interrupts the active turn when cancelling", async () => {
   const transport = new MemoryTransport();
   const connector = new CodexDesktopConnector({ transport });
@@ -394,17 +449,19 @@ test("desktop connector interrupts the active turn when cancelling", async () =>
   assert.deepEqual(transport.sent[0], {
     jsonrpc: "2.0",
     id: 1,
-    method: "thread/turns/list",
-    params: { threadId: "thread_1" },
+    method: "thread/read",
+    params: { threadId: "thread_1", includeTurns: true },
   });
   transport.receive({
     jsonrpc: "2.0",
     id: 1,
     result: {
-      data: [
-        { id: "turn_done", status: "completed" },
-        { id: "turn_active", status: "inProgress" },
-      ],
+      thread: {
+        turns: [
+          { id: "turn_done", status: "completed" },
+          { id: "turn_active", status: "inProgress" },
+        ],
+      },
     },
   });
   await flushAsyncWork();
@@ -623,6 +680,156 @@ test("handleDisconnect drops mid-turn accumulation so it does not bleed into the
 
   const completed = events.filter((e) => e.type === "turnCompleted").at(-1);
   assert.deepEqual(completed.changedPaths, ["/fresh/y.ts"]);
+});
+
+test("desktop connector accumulates Codex 0.136 agentMessage deltas", async () => {
+  const transport = new MemoryTransport();
+  const connector = new CodexDesktopConnector({ transport });
+  await connector.client.connect();
+  const events = [];
+  connector.onEvent = (event) => events.push(event);
+
+  transport.receive({
+    jsonrpc: "2.0",
+    method: "item/agentMessage/delta",
+    params: { threadId: "thread_7", turnId: "turn_1", itemId: "item_9", delta: "partial " },
+  });
+  transport.receive({
+    jsonrpc: "2.0",
+    method: "item/agentMessage/delta",
+    params: { threadId: "thread_7", turnId: "turn_1", itemId: "item_9", delta: "answer" },
+  });
+
+  assert.deepEqual(events, [
+    {
+      type: "agentMessageDelta",
+      threadId: "thread_7",
+      itemId: "item_9",
+      text: "partial ",
+    },
+    {
+      type: "agentMessageDelta",
+      threadId: "thread_7",
+      itemId: "item_9",
+      text: "partial answer",
+    },
+  ]);
+});
+
+test("item/completed clears the accumulated delta text so it does not leak across turns", async () => {
+  const transport = new MemoryTransport();
+  const connector = new CodexDesktopConnector({ transport });
+  await connector.client.connect();
+  const events = [];
+  connector.onEvent = (event) => events.push(event);
+
+  // First message streams in via deltas, then completes.
+  transport.receive({
+    jsonrpc: "2.0",
+    method: "item/agentMessage/delta",
+    params: { threadId: "thread_7", itemId: "item_9", delta: "first message" },
+  });
+  connector.handleNotification({
+    method: "item/completed",
+    params: { threadId: "thread_7", item: { type: "agentMessage", id: "item_9", text: "first message" } },
+  });
+
+  // A later delta reusing the same itemId must NOT include the pre-completed
+  // text — completion reset the accumulation.
+  transport.receive({
+    jsonrpc: "2.0",
+    method: "item/agentMessage/delta",
+    params: { threadId: "thread_7", itemId: "item_9", delta: "second" },
+  });
+
+  const lastDelta = events.filter((e) => e.type === "agentMessageDelta").at(-1);
+  assert.equal(lastDelta.text, "second");
+});
+
+test("listThreadTurns falls back to thread/turns/list when thread/read is missing", async () => {
+  const turns = [{ id: "turn_1", status: "completed" }];
+  let firstCall = true;
+  const fakeClient = {
+    request(method) {
+      if (method === "thread/read") {
+        assert.ok(firstCall, "thread/read is attempted first");
+        firstCall = false;
+        const error = new Error("method not found: thread/read");
+        error.code = -32601;
+        return Promise.reject(error);
+      }
+      if (method === "thread/turns/list") {
+        return Promise.resolve({ turns });
+      }
+      throw new Error(`unexpected method: ${method}`);
+    },
+  };
+  const connector = new CodexDesktopConnector({ transport: new MemoryTransport() });
+  connector.client = fakeClient;
+
+  const result = await connector.listThreadTurns({ threadId: "thread_1" });
+  assert.deepEqual(result, turns);
+});
+
+test("listThreadTurns rethrows a non-method-missing thread/read error (no fallback)", async () => {
+  let turnsListCalled = false;
+  const fakeClient = {
+    request(method) {
+      if (method === "thread/read") {
+        return Promise.reject(new Error("thread not found"));
+      }
+      if (method === "thread/turns/list") {
+        turnsListCalled = true;
+        return Promise.resolve({ turns: [] });
+      }
+      throw new Error(`unexpected method: ${method}`);
+    },
+  };
+  const connector = new CodexDesktopConnector({ transport: new MemoryTransport() });
+  connector.client = fakeClient;
+
+  await assert.rejects(
+    () => connector.listThreadTurns({ threadId: "thread_1" }),
+    /thread not found/,
+  );
+  assert.equal(turnsListCalled, false, "must not fall back on a non-method-missing error");
+});
+
+test("listThreadTurns falls back on a message-only method-missing error (code dropped)", async () => {
+  const turns = [{ id: "turn_1", status: "inProgress" }];
+  const fakeClient = {
+    request(method) {
+      if (method === "thread/read") {
+        // No .code preserved — only the message signals the missing method.
+        return Promise.reject(new Error("Method not found"));
+      }
+      if (method === "thread/turns/list") {
+        return Promise.resolve({ data: turns });
+      }
+      throw new Error(`unexpected method: ${method}`);
+    },
+  };
+  const connector = new CodexDesktopConnector({ transport: new MemoryTransport() });
+  connector.client = fakeClient;
+
+  const result = await connector.listThreadTurns({ threadId: "thread_1" });
+  assert.deepEqual(result, turns);
+});
+
+test("handleDisconnect clears the agentMessage delta map", async () => {
+  const transport = new MemoryTransport();
+  const connector = new CodexDesktopConnector({ transport });
+  await connector.client.connect();
+
+  transport.receive({
+    jsonrpc: "2.0",
+    method: "item/agentMessage/delta",
+    params: { threadId: "thread_7", itemId: "item_9", delta: "leaked" },
+  });
+  assert.ok(connector.agentMessageTextByItem.size > 0, "delta accumulated before disconnect");
+
+  connector.handleDisconnect();
+  assert.equal(connector.agentMessageTextByItem.size, 0, "delta map cleared on disconnect");
 });
 
 test("cli connector is explicitly fallback", () => {

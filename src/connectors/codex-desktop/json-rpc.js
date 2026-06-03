@@ -79,7 +79,14 @@ export class JsonRpcClient {
     if (Object.hasOwn(payload, "id") && (Object.hasOwn(payload, "result") || Object.hasOwn(payload, "error"))) {
       this.#settle(payload.id, (pending) => {
         if (payload.error) {
-          pending.reject(new Error(payload.error.message ?? "Codex app-server request failed"));
+          const err = new Error(payload.error.message ?? "Codex app-server request failed");
+          // Preserve the JSON-RPC numeric error code so callers can branch on
+          // it (e.g. -32601 "Method not found") without string-matching the
+          // message. Purely additive — message and behavior are unchanged.
+          if (payload.error.code !== undefined) {
+            err.code = payload.error.code;
+          }
+          pending.reject(err);
         } else {
           pending.resolve(payload.result);
         }
