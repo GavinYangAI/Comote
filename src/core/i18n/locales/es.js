@@ -20,7 +20,7 @@ export default {
   "card.approval.rejectedBody": "Solicitud rechazada.",
   "card.picker.project": "Elegir un proyecto",
   "card.picker.conversation": "Elegir una conversación",
-  "card.steps.running": "**{steps}** paso(s) hechos…",
+  "card.steps.running": "**{steps}** paso(s) realizados…",
   "card.steps.starting": "Iniciando…",
   "feishu.media.missing": "⚠️ Archivo no encontrado, no se puede enviar: {path}",
   "feishu.media.tooLarge": "⚠️ El archivo supera los 20 MB, no se envió: {name} ({size} MB). Puedes verlo localmente: {path}",
