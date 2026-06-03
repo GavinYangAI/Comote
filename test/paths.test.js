@@ -46,6 +46,12 @@ test("sanitizeUploadName removes newlines and prompt-marker brackets", () => {
   assert.ok(!result.includes("["), "no opening bracket in result");
 });
 
+test("sanitizeUploadName strips commas so the codex --image comma-join is not corrupted", () => {
+  const result = sanitizeUploadName("a,b,c.png");
+  assert.ok(!result.includes(","), "no comma in result");
+  assert.equal(result, "a_b_c.png");
+});
+
 test("sanitizeUploadName falls back on an empty name", () => {
   assert.equal(sanitizeUploadName(""), "attachment");
   assert.equal(sanitizeUploadName("   "), "attachment");

@@ -23,6 +23,10 @@ export function sanitizeUploadName(fileName, fallback = "attachment") {
   name = name.replace(/[\x00-\x1f\x7f]/g, "");
   // Strip bracket characters that could otherwise break the prompt marker.
   name = name.replace(/[[\]]/g, "");
+  // Replace commas: the codex-cli passes multiple uploads as a single
+  // `--image a,b,c` comma-joined argument, so a comma in a filename would
+  // split one upload into two bogus paths.
+  name = name.replace(/,/g, "_");
   name = name.trim();
   if (name === "" || name === "." || name === "..") {
     return fallback;
