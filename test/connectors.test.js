@@ -157,10 +157,10 @@ test("desktop connector lists and starts Codex threads", async () => {
   const startPromise = connector.startThread({ cwd: "/repo" });
   await flushAsyncWork();
   assert.equal(transport.sent[1].method, "thread/start");
-  assert.equal(transport.sent[1].params.cwd, "/repo");
-  assert.equal(transport.sent[1].params.approvalsReviewer, "user");
-  assert.equal(transport.sent[1].params.experimentalRawEvents, false);
-  assert.equal(transport.sent[1].params.persistExtendedHistory, false);
+  assert.deepEqual(transport.sent[1].params, {
+    cwd: "/repo",
+    approvalsReviewer: "user",
+  });
   transport.receive({
     jsonrpc: "2.0",
     id: 2,
@@ -385,6 +385,61 @@ test("desktop connector resumes existing Codex Desktop threads", async () => {
   assert.deepEqual(await resumePromise, { thread: { id: "thread_1", preview: "Existing thread" } });
 });
 
+test("desktop connector reads recent messages with thread/read", async () => {
+  const transport = new MemoryTransport();
+  const connector = new CodexDesktopConnector({ transport });
+
+  const recentPromise = connector.listRecentMessages({ threadId: "thread_1", limit: 2 });
+  await flushAsyncWork();
+
+  assert.deepEqual(transport.sent[0], {
+    jsonrpc: "2.0",
+    id: 1,
+    method: "thread/read",
+    params: { threadId: "thread_1", includeTurns: true },
+  });
+  transport.receive({
+    jsonrpc: "2.0",
+    id: 1,
+    result: {
+      thread: {
+        turns: [
+          {
+            id: "turn_1",
+            items: [
+              {
+                type: "userMessage",
+                id: "item_user",
+                content: [{ type: "text", text: "continue from Feishu", text_elements: [] }],
+              },
+              { type: "agentMessage", id: "item_agent", text: "done" },
+            ],
+          },
+        ],
+      },
+    },
+  });
+
+  assert.deepEqual(await recentPromise, {
+    messages: [
+      { role: "user", text: "continue from Feishu" },
+      { role: "assistant", text: "done" },
+    ],
+    _rawSample: {
+      id: "turn_1",
+      items: [
+        {
+          type: "userMessage",
+          id: "item_user",
+          content: [{ type: "text", text: "continue from Feishu", text_elements: [] }],
+        },
+        { type: "agentMessage", id: "item_agent", text: "done" },
+      ],
+    },
+    _turnCount: 1,
+  });
+});
+
 test("desktop connector interrupts the active turn when cancelling", async () => {
   const transport = new MemoryTransport();
   const connector = new CodexDesktopConnector({ transport });
@@ -394,17 +449,19 @@ test("desktop connector interrupts the active turn when cancelling", async () =>
   assert.deepEqual(transport.sent[0], {
     jsonrpc: "2.0",
     id: 1,
-    method: "thread/turns/list",
-    params: { threadId: "thread_1" },
+    method: "thread/read",
+    params: { threadId: "thread_1", includeTurns: true },
   });
   transport.receive({
     jsonrpc: "2.0",
     id: 1,
     result: {
-      data: [
-        { id: "turn_done", status: "completed" },
-        { id: "turn_active", status: "inProgress" },
-      ],
+      thread: {
+        turns: [
+          { id: "turn_done", status: "completed" },
+          { id: "turn_active", status: "inProgress" },
+        ],
+      },
     },
   });
   await flushAsyncWork();
@@ -490,6 +547,40 @@ test("desktop connector emits agentMessageDelta on item/updated", async () => {
     itemId: "item_9",
     text: "partial answer",
   });
+});
+
+test("desktop connector accumulates Codex 0.136 agentMessage deltas", async () => {
+  const transport = new MemoryTransport();
+  const connector = new CodexDesktopConnector({ transport });
+  await connector.client.connect();
+  const events = [];
+  connector.onEvent = (event) => events.push(event);
+
+  transport.receive({
+    jsonrpc: "2.0",
+    method: "item/agentMessage/delta",
+    params: { threadId: "thread_7", turnId: "turn_1", itemId: "item_9", delta: "partial " },
+  });
+  transport.receive({
+    jsonrpc: "2.0",
+    method: "item/agentMessage/delta",
+    params: { threadId: "thread_7", turnId: "turn_1", itemId: "item_9", delta: "answer" },
+  });
+
+  assert.deepEqual(events, [
+    {
+      type: "agentMessageDelta",
+      threadId: "thread_7",
+      itemId: "item_9",
+      text: "partial ",
+    },
+    {
+      type: "agentMessageDelta",
+      threadId: "thread_7",
+      itemId: "item_9",
+      text: "partial answer",
+    },
+  ]);
 });
 
 test("cli connector is explicitly fallback", () => {

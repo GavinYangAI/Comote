@@ -486,7 +486,7 @@ export class CommandRouter {
       const threads = response.data ?? response.threads ?? [];
       const thread = threads[Number(selector) - 1] ?? threads.find((candidate) => candidate.id === selector);
       if (thread) {
-        const resumed = await this.resumeDesktopThread(thread.id);
+        const resumed = await this.resumeDesktopThread(thread.id, projectPath);
         const activeThread = resumed?.thread ?? thread;
         const title = this.threadTitle(activeThread, thread);
         const threadId = activeThread.id ?? thread.id;
@@ -608,6 +608,7 @@ export class CommandRouter {
     }
     this.enforceTurnRate(identity);
     this.bindThreadForIdentity(identity, activeSession.id);
+    await this.resumeDesktopThread(activeSession.id, projectPath);
     this.transcript?.record(activeSession.id, "user", text);
     try {
       await this.codexDesktop.startTurn({ threadId: activeSession.id, text, cwd: projectPath });
@@ -615,17 +616,17 @@ export class CommandRouter {
       if (!isThreadNotFoundError(error)) {
         throw error;
       }
-      await this.resumeDesktopThread(activeSession.id);
+      await this.resumeDesktopThread(activeSession.id, projectPath);
       await this.codexDesktop.startTurn({ threadId: activeSession.id, text, cwd: projectPath });
     }
     return `已发送给 Codex Desktop，正在处理…\n${activeSession.id}`;
   }
 
-  async resumeDesktopThread(threadId) {
+  async resumeDesktopThread(threadId, cwd = null) {
     if (!this.codexDesktop?.resumeThread) {
       return null;
     }
-    return this.codexDesktop.resumeThread({ threadId });
+    return this.codexDesktop.resumeThread({ threadId, cwd });
   }
 
   async resolveApproval(selector, decision) {
