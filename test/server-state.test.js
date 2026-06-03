@@ -38,8 +38,9 @@ test("stores WeChat login results when token and account id are present", () => 
   );
 });
 
-test("auto-starts WeChat runtime when a saved login token exists", () => {
+test("auto-starts WeChat runtime when a saved login token exists", async () => {
   const state = createComoteState({
+    autoStartDelayMs: 0,
     persisted: {
       channelConfigs: {
         wechat: {
@@ -53,6 +54,7 @@ test("auto-starts WeChat runtime when a saved login token exists", () => {
     },
   });
 
+  await tick();
   assert.equal(state.runtime.wechat.getStatus().state, "running");
   state.runtime.wechat.stop();
 });
@@ -134,3 +136,7 @@ test("Feishu runtime status reconciles a stale driver with the saved app config"
   assert.equal(status.driver.appId, "cli_current");
   assert.equal(status.driver.domain, "feishu");
 });
+
+function tick() {
+  return new Promise((resolve) => setTimeout(resolve, 0));
+}

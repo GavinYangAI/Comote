@@ -36,6 +36,9 @@ export class CodexDesktopConnector {
     this.lastRateLimits = null;
     // itemId -> file changes, so a file-change approval can show the diff.
     this.fileChangesByItem = new Map();
+    // `${threadId}:${itemId}` -> accumulated agent text for Codex 0.136+
+    // delta notifications, which only carry the newest text chunk.
+    this.agentMessageTextByItem = new Map();
     this.client = this.createClient();
   }
 
@@ -149,6 +152,18 @@ export class CodexDesktopConnector {
       this.fileChangesByItem.set(params.itemId, params.changes ?? []);
       return;
     }
+    if (method === "item/agentMessage/delta" && params.itemId) {
+      const key = agentMessageKey(params.threadId, params.itemId);
+      const text = `${this.agentMessageTextByItem.get(key) ?? ""}${params.delta ?? ""}`;
+      this.agentMessageTextByItem.set(key, text);
+      this.#emit({
+        type: "agentMessageDelta",
+        threadId: params.threadId ?? null,
+        itemId: params.itemId ?? null,
+        text,
+      });
+      return;
+    }
     if (method === "item/updated" && params.item?.type === "agentMessage") {
       this.#emit({
         type: "agentMessageDelta",
@@ -159,6 +174,9 @@ export class CodexDesktopConnector {
       return;
     }
     if (method === "item/completed" && params.item?.type === "agentMessage") {
+      if (params.item.id) {
+        this.agentMessageTextByItem.delete(agentMessageKey(params.threadId, params.item.id));
+      }
       this.#emit({
         type: "agentMessage",
         threadId: params.threadId ?? null,
@@ -306,13 +324,15 @@ export class CodexDesktopConnector {
     return this.client.request("thread/start", {
       cwd,
       approvalsReviewer: "user",
-      experimentalRawEvents: false,
-      persistExtendedHistory: false,
     });
   }
 
-  async resumeThread({ threadId }) {
-    return this.client.request("thread/resume", { threadId });
+  async resumeThread({ threadId, cwd = null }) {
+    const params = { threadId };
+    if (cwd) {
+      params.cwd = cwd;
+    }
+    return this.client.request("thread/resume", params);
   }
 
   async startTurn({ threadId, text, cwd = null, images = [] }) {
@@ -337,8 +357,7 @@ export class CodexDesktopConnector {
   // recognizable is found, with `_rawSample` populated so callers can log
   // the actual response shape and we can refine.
   async listRecentMessages({ threadId, limit = 5 }) {
-    const response = await this.client.request("thread/turns/list", { threadId });
-    const turns = normalizeTurnList(response);
+    const turns = await this.listThreadTurns({ threadId });
     const messages = [];
     for (const turn of turns) {
       messages.push(...extractTurnMessages(turn));
@@ -355,8 +374,7 @@ export class CodexDesktopConnector {
   // the HTTP route and frontend can treat both sources identically:
   // messages are newest-first, sliced by offset/limit.
   async getThreadTranscript({ threadId, limit = 20, offset = 0 }) {
-    const response = await this.client.request("thread/turns/list", { threadId });
-    const turns = normalizeTurnList(response);
+    const turns = await this.listThreadTurns({ threadId });
     const all = [];
     for (const turn of turns) {
       all.push(...extractTurnMessages(turn));
@@ -372,12 +390,25 @@ export class CodexDesktopConnector {
   }
 
   async cancelTurn({ threadId }) {
-    const turns = await this.client.request("thread/turns/list", { threadId });
-    const activeTurn = normalizeTurnList(turns).find((turn) => isActiveTurn(turn));
+    const turns = await this.listThreadTurns({ threadId });
+    const activeTurn = turns.find((turn) => isActiveTurn(turn));
     if (!activeTurn) {
       throw new Error(`no active turn for thread: ${threadId}`);
     }
     return this.client.request("turn/interrupt", { threadId, turnId: activeTurn.id });
+  }
+
+  async listThreadTurns({ threadId }) {
+    try {
+      const response = await this.client.request("thread/read", { threadId, includeTurns: true });
+      return normalizeTurnList(response);
+    } catch (error) {
+      if (!isMethodMissingError(error)) {
+        throw error;
+      }
+    }
+    const response = await this.client.request("thread/turns/list", { threadId });
+    return normalizeTurnList(response);
   }
 
   listPendingApprovals() {
@@ -517,7 +548,7 @@ function normalizeThreadList(response) {
 }
 
 function normalizeTurnList(response) {
-  return response.data ?? response.turns ?? [];
+  return response.data ?? response.turns ?? response.thread?.turns ?? [];
 }
 
 // Walks a turn and pulls out user / assistant messages. The user prompt
@@ -620,6 +651,14 @@ function textFromMessageValue(value) {
     );
   }
   return "";
+}
+
+function agentMessageKey(threadId, itemId) {
+  return `${threadId ?? ""}:${itemId ?? ""}`;
+}
+
+function isMethodMissingError(error) {
+  return /method not found|unknown method|not found.*method/i.test(error?.message ?? String(error));
 }
 
 function basename(path) {

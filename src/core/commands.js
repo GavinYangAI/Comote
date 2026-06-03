@@ -558,7 +558,7 @@ export class CommandRouter {
       const threads = response.data ?? response.threads ?? [];
       const thread = threads[Number(selector) - 1] ?? threads.find((candidate) => candidate.id === selector);
       if (thread) {
-        const resumed = await this.resumeDesktopThread(thread.id);
+        const resumed = await this.resumeDesktopThread(thread.id, projectPath);
         const activeThread = resumed?.thread ?? thread;
         const title = this.threadTitle(activeThread, thread);
         const threadId = activeThread.id ?? thread.id;
@@ -684,6 +684,9 @@ export class CommandRouter {
     // by local path in the prompt so Codex reads them with its file tools.
     const images = mediaPaths(attachments, "image");
     const turnText = buildTurnText(text, attachments);
+    // Proactively resume the thread (with cwd) so Codex 0.136 has the session
+    // loaded before the turn starts.
+    await this.resumeDesktopThread(activeSession.id, projectPath);
     // The local conversation view records a human-readable line with attachment
     // placeholders (e.g. "[PNG图片] shot.png"); Codex still receives turnText.
     this.transcript?.record(activeSession.id, "user", buildDisplayText(text, attachments));
@@ -693,17 +696,17 @@ export class CommandRouter {
       if (!isThreadNotFoundError(error)) {
         throw error;
       }
-      await this.resumeDesktopThread(activeSession.id);
+      await this.resumeDesktopThread(activeSession.id, projectPath);
       await this.codexDesktop.startTurn({ threadId: activeSession.id, text: turnText, cwd: projectPath, images });
     }
     return `已发送给 Codex Desktop，正在处理…\n${activeSession.id}`;
   }
 
-  async resumeDesktopThread(threadId) {
+  async resumeDesktopThread(threadId, cwd = null) {
     if (!this.codexDesktop?.resumeThread) {
       return null;
     }
-    return this.codexDesktop.resumeThread({ threadId });
+    return this.codexDesktop.resumeThread({ threadId, cwd });
   }
 
   async resolveApproval(selector, decision) {
