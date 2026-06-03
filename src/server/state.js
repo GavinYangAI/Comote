@@ -12,6 +12,7 @@ import { CodexDesktopConnector } from "../connectors/codex-desktop/index.js";
 import { CodexCliConnector } from "../connectors/codex-cli/index.js";
 import feishuPlugin from "../channels/feishu/index.js";
 import wechatPlugin from "../channels/wechat/index.js";
+import dingtalkPlugin from "../channels/dingtalk/index.js";
 import { createRegistry } from "../channels/registry.js";
 import { JsonFileStore } from "../core/persistence.js";
 import { OutboundQueue } from "../core/outbound-queue.js";
@@ -26,6 +27,7 @@ export function createComoteState({
   stateStore = null,
   autoStartWeChatRuntime = true,
   autoStartFeishuRuntime = true,
+  autoStartDingTalkRuntime = true,
   desktop: desktopOverride = null,
   currentVersion = null,
   versionChecker = null,
@@ -60,7 +62,7 @@ export function createComoteState({
     persisted: persisted.router ?? {},
     transcript,
   });
-  const registry = createRegistry([feishuPlugin, wechatPlugin]);
+  const registry = createRegistry([feishuPlugin, wechatPlugin, dingtalkPlugin]);
 
   // Per-channel seed configs (env-var defaults), keyed by plugin id. Normalized
   // through each plugin's normalizeConfig below.
@@ -76,6 +78,14 @@ export function createComoteState({
       verificationToken: process.env.COMOTE_FEISHU_VERIFICATION_TOKEN ?? null,
       encryptKey: process.env.COMOTE_FEISHU_ENCRYPT_KEY ?? null,
       domain: process.env.COMOTE_FEISHU_DOMAIN ?? "feishu",
+    },
+    dingtalk: persisted.channelConfigs?.dingtalk ?? {
+      enabled: Boolean(process.env.COMOTE_DINGTALK_APP_KEY && process.env.COMOTE_DINGTALK_APP_SECRET),
+      appKey: process.env.COMOTE_DINGTALK_APP_KEY ?? null,
+      appSecret: process.env.COMOTE_DINGTALK_APP_SECRET ?? null,
+      approvalTemplateId: process.env.COMOTE_DINGTALK_APPROVAL_TEMPLATE ?? null,
+      statusTemplateId: process.env.COMOTE_DINGTALK_STATUS_TEMPLATE ?? null,
+      pickerTemplateId: process.env.COMOTE_DINGTALK_PICKER_TEMPLATE ?? null,
     },
   };
 
@@ -233,6 +243,41 @@ export function createComoteState({
         return { ...result, ...stack.plugin.normalizeLoginStatus(result) };
       },
     },
+    dingtalk: {
+      buildAdapterOpts: (stack) => ({
+        commandRouter,
+        onDetectedIdentity: (identity) => authorization.detectIdentity(identity),
+        downloadAttachment: async ({ attachment, identity }) => {
+          const projectPath = commandRouter.currentProjectByIdentity.get(commandRouter.identityKey(identity));
+          if (!projectPath) {
+            throw new Error("NO_PROJECT");
+          }
+          const { join } = await import("node:path");
+          const safeName = sanitizeUploadName(attachment.fileName);
+          const destPath = join(projectPath, ".comote", "uploads", safeName);
+          if (!resolveWithinProject(projectPath, destPath)) {
+            throw new Error("UNSAFE_ATTACHMENT_PATH");
+          }
+          await stack.runtime.driver.downloadMessageResource({
+            downloadCode: attachment.downloadCode,
+            destPath,
+          });
+          return { relativePath: join(".comote", "uploads", safeName) };
+        },
+        sendReply: async (reply) => {
+          outboundReplies.enqueue(reply);
+          return { ok: true };
+        },
+      }),
+      buildRuntimeOpts: (stack) => ({
+        adapter: stack.adapter,
+        outboundQueue: outboundReplies,
+        renderer: stack.renderer,
+        driver: stack.driver,
+        persist: async () => stateRef.persist?.(),
+        eventLog,
+      }),
+    },
   };
 
   // Build each channel stack off the registry + plugin factories. The adapter is
@@ -245,7 +290,7 @@ export function createComoteState({
     const stack = {
       plugin,
       config: plugin.normalizeConfig(channelSeeds[id]),
-      renderer: plugin.createRenderer(),
+      renderer: plugin.createRenderer(plugin.normalizeConfig(channelSeeds[id])),
       adapter: null,
       runtime: null,
       driver: null,
@@ -274,7 +319,22 @@ export function createComoteState({
       async configure(config) {
         const patch = plugin.normalizeSecretPatch ? plugin.normalizeSecretPatch(config) : config;
         stack.config = plugin.normalizeConfig({ ...stack.config, ...patch });
-        stack.runtime.configureDriver(plugin.createDriver(stack.config));
+        // Rebuild the renderer so newly-saved template ids (dingtalk) take effect.
+        stack.renderer = plugin.createRenderer(stack.config);
+        stack.runtime.renderer = stack.renderer;
+        const driver = plugin.createDriver(stack.config);
+        stack.driver = driver; // keep the stack handle in sync (downloadAttachment / gating)
+        stack.runtime.configureDriver(driver);
+        // Credentials/token channels have no login flow that starts the runtime;
+        // saving valid credentials IS the bind, so start here when configured.
+        // (configureDriver only auto-restarts if it was ALREADY running; the first
+        // bind has wasRunning=false, so start explicitly.) qr channels are gated
+        // out — their runtime starts in the login flow.
+        if (plugin.meta.binding !== "qr" && plugin.publicConfig(stack.config).configured && !stack.runtime.running) {
+          await stack.runtime.start().catch((error) => {
+            stack.runtime.lastError = error.message;
+          });
+        }
         return this.getConfig();
       },
       getStatus() {
@@ -667,6 +727,16 @@ export function createComoteState({
       (error) => {
         feishuRuntime.lastError = error.message;
         eventLog.error("飞书运行时启动失败", { error: error.message });
+      },
+    );
+  }
+  const dingtalkConfig = channelStacks.get("dingtalk").config;
+  if (autoStartDingTalkRuntime && dingtalkConfig.enabled && dingtalkConfig.appKey && dingtalkConfig.appSecret) {
+    channelStacks.get("dingtalk").runtime.start().then(
+      () => eventLog.info("钉钉运行时已自动启动", { appKey: dingtalkConfig.appKey }),
+      (error) => {
+        channelStacks.get("dingtalk").runtime.lastError = error.message;
+        eventLog.error("钉钉运行时启动失败", { error: error.message });
       },
     );
   }
