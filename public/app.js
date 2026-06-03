@@ -1271,7 +1271,7 @@ async function refreshVersionStatus() {
       if (latestEl) latestEl.textContent = data.latest;
       if (currentEl) currentEl.textContent = current ?? tWeb("web.version.unknown");
       if (linkEl) {
-        linkEl.href = data.releaseUrl ?? "https://github.com/GavinYangAI/comote/releases";
+        linkEl.href = data.downloadUrl ?? data.releaseUrl ?? "https://github.com/GavinYangAI/comote/releases";
       }
     } else {
       banner.hidden = true;

@@ -5,7 +5,7 @@ import { readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { VersionChecker, compareSemver } from "../src/core/version-check.js";
+import { VersionChecker, compareSemver, selectDownloadUrl } from "../src/core/version-check.js";
 
 function makeFetch(responses) {
   const calls = [];
@@ -32,6 +32,59 @@ function jsonResponse(body, { status = 200 } = {}) {
     json: async () => body,
   };
 }
+
+test("selectDownloadUrl picks platform+arch asset with fallback", () => {
+  const assets = [
+    { name: "Comote-0.2.1-arm64.dmg", browser_download_url: "u-dmg-arm" },
+    { name: "Comote-Setup-0.2.1-x64.exe", browser_download_url: "u-exe" },
+  ];
+  assert.equal(selectDownloadUrl(assets, { platform: "darwin", arch: "arm64", releasesUrl: "R" }), "u-dmg-arm");
+  assert.equal(selectDownloadUrl(assets, { platform: "win32", arch: "x64", releasesUrl: "R" }), "u-exe");
+  assert.equal(selectDownloadUrl([], { platform: "linux", arch: "x64", releasesUrl: "R" }), "R"); // fallback
+});
+
+test("checkNow exposes a platform-specific downloadUrl from release assets", async () => {
+  const fetchImpl = makeFetch(
+    jsonResponse({
+      tag_name: "v0.3.0",
+      html_url: "https://github.com/GavinYangAI/comote/releases/tag/v0.3.0",
+      assets: [
+        { name: "Comote-0.3.0-arm64.dmg", browser_download_url: "u-dmg-arm" },
+        { name: "Comote-Setup-0.3.0-x64.exe", browser_download_url: "u-exe" },
+      ],
+    }),
+  );
+  const checker = new VersionChecker({
+    currentVersion: "0.2.0",
+    fetchImpl,
+    now: () => 1000,
+    platform: "darwin",
+    arch: "arm64",
+  });
+
+  const result = await checker.checkNow();
+
+  assert.equal(result.downloadUrl, "u-dmg-arm");
+});
+
+test("checkNow falls back to the release page when no assets match", async () => {
+  const fetchImpl = makeFetch(
+    jsonResponse({
+      tag_name: "v0.3.0",
+      html_url: "https://example.com/release",
+      assets: [],
+    }),
+  );
+  const checker = new VersionChecker({
+    currentVersion: "0.2.0",
+    fetchImpl,
+    now: () => 1000,
+  });
+
+  const result = await checker.checkNow();
+
+  assert.equal(result.downloadUrl, "https://example.com/release");
+});
 
 test("compareSemver orders semantic versions numerically", () => {
   assert.equal(compareSemver("1.0.0", "1.0.0"), 0);
