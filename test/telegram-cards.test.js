@@ -28,6 +28,10 @@ test("pick callback carries kind + index; cancel carries threadId", () => {
     { action: "cancel", threadId: "t-9" });
 });
 
+test("callback refs containing ':' round-trip without truncation", () => {
+  assert.deepEqual(decodeCallback(encodeCallback({ action: "cancel", threadId: "a:b:c" })), { action: "cancel", threadId: "a:b:c" });
+});
+
 test("decodeCallback returns null for unknown/garbage", () => {
   assert.equal(decodeCallback("zzz"), null);
   assert.equal(decodeCallback(""), null);

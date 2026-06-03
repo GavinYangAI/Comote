@@ -30,12 +30,19 @@ export function encodeCallback({ action, code, pickKind, index, threadId }) {
 
 // callback_data string → action object, or null if unrecognized.
 export function decodeCallback(data) {
-  if (typeof data !== "string" || !data.includes(":")) return null;
-  const [op, a, b] = data.split(":");
-  if (op === "ap") return { action: "approve", code: a };
-  if (op === "rj") return { action: "reject", code: a };
-  if (op === "pk") return { action: "pick", pickKind: PICK_KIND_NAME[a] ?? "project", index: b };
-  if (op === "ck") return { action: "cancel", threadId: a };
+  if (typeof data !== "string") return null;
+  const firstColon = data.indexOf(":");
+  if (firstColon === -1) return null;
+  const op = data.slice(0, firstColon);
+  const rest = data.slice(firstColon + 1);
+  if (op === "ap") return { action: "approve", code: rest };
+  if (op === "rj") return { action: "reject", code: rest };
+  if (op === "ck") return { action: "cancel", threadId: rest };
+  if (op === "pk") {
+    const sep = rest.indexOf(":");
+    if (sep === -1) return null;
+    return { action: "pick", pickKind: PICK_KIND_NAME[rest.slice(0, sep)] ?? "project", index: rest.slice(sep + 1) };
+  }
   return null;
 }
 
