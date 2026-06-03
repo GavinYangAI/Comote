@@ -215,10 +215,37 @@ test("normalizeInbound keeps text and empty attachments for a text message", () 
   assert.deepEqual(msg.attachments, []);
 });
 
-test("normalizeInbound keeps text for non-text, non-media types (e.g. post)", () => {
+test("readFeishuText returns empty (not raw JSON) for unrecognized content", () => {
   const adapter = new FeishuChannelAdapter({ commandRouter: { handleMessageAsync: async () => ({}) } });
 
-  const content = JSON.stringify({ title: "t", text: "hello" });
+  // An unrecognized message_type whose content has no `text` field must not
+  // leak the raw resource-key JSON into the routable text.
+  const content = JSON.stringify({ image_key: "img_secret", file_key: "file_secret" });
+  const msg = adapter.normalizeInbound({
+    event: {
+      sender: { sender_id: { open_id: "u1" }, name: "A" },
+      message: {
+        message_id: "m1",
+        chat_id: "c1",
+        chat_type: "p2p",
+        message_type: "sticker",
+        content,
+      },
+    },
+  });
+  assert.equal(msg.text, "");
+  assert.ok(!msg.text.includes("image_key"));
+  assert.ok(!msg.text.includes("file_key"));
+  assert.deepEqual(msg.attachments, []);
+});
+
+test("post (rich-text) inbound yields text + image attachment", () => {
+  const adapter = new FeishuChannelAdapter({ commandRouter: { handleMessageAsync: async () => ({}) } });
+
+  const content = JSON.stringify({
+    title: "",
+    content: [[{ tag: "text", text: "看这个" }, { tag: "img", image_key: "img_x" }]],
+  });
   const msg = adapter.normalizeInbound({
     event: {
       sender: { sender_id: { open_id: "u1" }, name: "A" },
@@ -231,9 +258,10 @@ test("normalizeInbound keeps text for non-text, non-media types (e.g. post)", ()
       },
     },
   });
-  assert.equal(msg.text, "hello");
-  assert.notEqual(msg.text, "");
-  assert.deepEqual(msg.attachments, []);
+  assert.ok(msg.text.includes("看这个"));
+  assert.equal(msg.attachments.length, 1);
+  assert.equal(msg.attachments[0].type, "image");
+  assert.equal(msg.attachments[0].fileKey, "img_x");
 });
 
 test("normalizeInbound returns no attachments for malformed image content", () => {
