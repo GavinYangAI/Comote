@@ -12,3 +12,4 @@ src-tauri/gen/
 npm-debug.log*
 .gstack/
 build-assets/runtime-deps/
+.superpowers/

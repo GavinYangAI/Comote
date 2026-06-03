@@ -82,6 +82,7 @@ const dingtalkPlugin = {
       { labelKey: "web.channel.dingtalk.row.app", source: "config", field: "appKey", fallbackKey: "web.channel.dingtalk.row.app.unset" },
     ],
     boundWhen: { source: "config", field: "configured" },
+    setup: { stepsKey: "web.channel.dingtalk.setup.steps", link: { url: "https://open-dev.dingtalk.com", labelKey: "web.channel.dingtalk.setup.link" } },
   },
   normalizeConfig: (raw) => normalizeDingTalkConfig(raw),
   normalizeSecretPatch: (raw) => normalizeDingTalkSecretPatch(raw),

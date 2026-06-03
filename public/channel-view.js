@@ -12,6 +12,12 @@ export function channelBadge(channel, t) {
       return { text: t(flag.badgeKey), tone: flag.tone };
     }
   }
+  // Configured but not yet bound → pending-binding badge (token: 待配对, qr: 待扫码).
+  // Only telegram reaches this today (configured !== bound); others have configured≡bound.
+  if (isConnected(channel) && !isBound(channel)) {
+    const key = channel.binding === "qr" ? "web.channel.state.pendingScan" : "web.channel.state.pendingPair";
+    return { text: t(key), tone: "warning" };
+  }
   const state = channel.runtime?.state ?? "not_configured";
   const def = channel.states?.[state] ?? channel.states?.not_configured ?? { labelKey: state, tone: "neutral" };
   return { text: t(def.labelKey), tone: def.tone };
@@ -51,7 +57,7 @@ export function channelFormSpec(channel, t) {
     }));
 }
 
-function isBound(channel) {
+export function isBound(channel) {
   const bw = channel.boundWhen;
   return bw ? Boolean(pick(channel, bw.source, bw.field)) : false;
 }
@@ -100,4 +106,50 @@ export function readinessFromChannels(channels) {
     bound: channels.some((c) => isBound(c)),
     running: channels.some((c) => c.runtime?.state === "running"),
   };
+}
+
+// A channel is "connected" (vs available-to-add) once it is bound or has saved
+// operational config. Only telegram is ever connected-but-not-bound (待配对);
+// feishu/dingtalk have configured≡bound, wechat uses loggedIn (== bound).
+export function isConnected(channel) {
+  return isBound(channel) || Boolean(channel.config?.configured);
+}
+
+export function partitionChannels(channels) {
+  const connected = [];
+  const available = [];
+  for (const c of channels) (isConnected(c) ? connected : available).push(c);
+  return { connected, available };
+}
+
+// Collapsed-row subtitle: account name when bound; a pending hint when configured
+// but not bound; empty when unconfigured (available tile shows binding hint instead).
+export function channelSummaryLine(channel, t) {
+  if (isBound(channel)) {
+    return channel.config?.linkedUserName ?? channel.config?.linkedChatId ?? channel.config?.linkedUserId ?? "";
+  }
+  if (isConnected(channel)) {
+    return channel.binding === "qr" ? t("web.channel.summary.pendingScan") : t("web.channel.summary.pendingPair");
+  }
+  return "";
+}
+
+// Expanded-state binding credential to surface, ONLY when configured-but-not-bound.
+// token → the pairing code (from config); qr → the QR login area marker. null when
+// bound or unconfigured. This is what fixes #3: pairing code never shows otherwise.
+export function bindingAffordance(channel) {
+  if (isBound(channel) || !isConnected(channel)) return null;
+  if (channel.binding === "token") return { kind: "pairingCode", code: channel.config?.pairingCode ?? null };
+  if (channel.binding === "qr") return { kind: "qr" };
+  return null;
+}
+
+// Per-channel setup help from meta.setup: { stepsKey, link:{url,labelKey} }.
+// steps i18n value is a single string with \n between steps. null when no meta.setup.
+export function channelSetup(channel, t) {
+  const s = channel.setup;
+  if (!s) return null;
+  const steps = String(t(s.stepsKey) ?? "").split("\n").map((x) => x.trim()).filter(Boolean);
+  const link = s.link ? { url: s.link.url, label: t(s.link.labelKey) } : null;
+  return { steps, link };
 }

@@ -11,7 +11,7 @@ test("setup flow starts with phone channels instead of asking users to connect C
   // container that app.js fills from the registry-driven GET /api/channels, so
   // the cards (incl. 微信/飞书 headings, login areas, domain select, bind buttons)
   // are now rendered client-side rather than present in the static HTML.
-  assert.match(setupFlow, /<div class="channel-grid" id="channelCards"><\/div>/);
+  assert.match(setupFlow, /<div id="channelCards"><\/div>/);
   assert.doesNotMatch(setupFlow, /<h2[^>]*>连接 Codex Desktop<\/h2>/);
   assert.doesNotMatch(setupFlow, /id="autoConnectDesktop"/);
   assert.doesNotMatch(setupFlow, /id="connectDesktop"/);
