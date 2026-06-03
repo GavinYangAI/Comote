@@ -29,10 +29,41 @@ function emptyResult(currentVersion) {
     latest: null,
     hasUpdate: false,
     releaseUrl: null,
+    downloadUrl: null,
     releaseNotes: null,
     checkedAt: null,
     error: null,
   };
+}
+
+export function selectDownloadUrl(assets, { platform = process.platform, arch = process.arch, releasesUrl = null } = {}) {
+  if (!Array.isArray(assets) || assets.length === 0) {
+    return releasesUrl;
+  }
+  const candidates = assets
+    .filter((asset) => asset?.browser_download_url && asset?.name)
+    .map((asset) => ({
+      name: String(asset.name).toLowerCase(),
+      url: asset.browser_download_url,
+    }));
+  const platformMatchers =
+    platform === "darwin"
+      ? [/\.dmg$/, /mac|darwin|apple/]
+      : platform === "win32"
+        ? [/(setup|installer).*\.exe$/, /\.msi$/, /\.exe$/]
+        : [/\.appimage$/, /\.deb$/, /\.rpm$/, /linux|gnu|musl|\.tar\.gz$|\.tgz$/];
+  const archMatchers =
+    arch === "arm64"
+      ? [/arm64|aarch64|universal|apple|mac|darwin|\.dmg$/]
+      : arch === "x64"
+        ? [/x64|x86_64|amd64|universal|\.dmg$|\.exe$|\.msi$/]
+        : [];
+  return (
+    candidates.find((asset) => platformMatchers.some((matcher) => matcher.test(asset.name)) && archMatchers.some((matcher) => matcher.test(asset.name)))?.url ??
+    candidates.find((asset) => platformMatchers.some((matcher) => matcher.test(asset.name)))?.url ??
+    candidates[0]?.url ??
+    releasesUrl
+  );
 }
 
 export class VersionChecker {
@@ -44,6 +75,8 @@ export class VersionChecker {
     intervalMs = DEFAULT_INTERVAL_MS,
     initialDelayMs = DEFAULT_INITIAL_DELAY_MS,
     now = () => Date.now(),
+    platform = process.platform,
+    arch = process.arch,
   } = {}) {
     if (!currentVersion) {
       throw new Error("VersionChecker requires currentVersion");
@@ -58,6 +91,8 @@ export class VersionChecker {
     this.intervalMs = intervalMs;
     this.initialDelayMs = initialDelayMs;
     this.now = now;
+    this.platform = platform;
+    this.arch = arch;
     this.lastResult = emptyResult(currentVersion);
     this._initialTimer = null;
     this._timer = null;
@@ -110,6 +145,11 @@ export class VersionChecker {
           latest,
           hasUpdate,
           releaseUrl: data.html_url ?? null,
+          downloadUrl: selectDownloadUrl(data.assets, {
+            platform: this.platform,
+            arch: this.arch,
+            releasesUrl: data.html_url ?? `https://github.com/${this.repo}/releases`,
+          }),
           releaseNotes: data.body ?? null,
           checkedAt: this.now(),
           error: null,
