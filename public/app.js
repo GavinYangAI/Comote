@@ -578,30 +578,116 @@ function paintConversation() {
 }
 
 
+// Thread-list paint state. The list is refreshed every 5s; without these
+// caches each repaint would `innerHTML =` the whole list and wipe any
+// expanded conversation (its loaded transcript + scroll position). We keep
+// the set of expanded thread ids, a per-thread cache of the loaded detail
+// panel, and a signature of the last painted list so an unchanged list is
+// skipped entirely.
+const expandedThreadIds = new Set();
+const threadDetailCache = new Map(); // threadId -> { html, offset, loaded }
+let lastThreadSignature = null;
+
+function defaultThreadDetailState() {
+  return { html: "", offset: "0", loaded: "" };
+}
+
+// Snapshot the currently rendered detail panels back into the cache so the
+// next repaint can restore them verbatim (transcript html + pagination state).
+function syncExpandedThreadStates(target) {
+  for (const row of target.querySelectorAll("li[data-thread-id]")) {
+    const threadId = row.dataset.threadId;
+    const panel = row.querySelector(".thread-detail");
+    if (!threadId || !panel) {
+      continue;
+    }
+    if (panel.hidden) {
+      expandedThreadIds.delete(threadId);
+      continue;
+    }
+    expandedThreadIds.add(threadId);
+    threadDetailCache.set(threadId, {
+      html: panel.innerHTML,
+      offset: panel.dataset.offset ?? "0",
+      loaded: panel.dataset.loaded ?? "",
+    });
+  }
+}
+
+// Drop cached state for threads that are no longer in the list.
+function pruneThreadDetailState(threadList) {
+  const visibleIds = new Set(threadList.map((thread) => String(thread.id ?? "")));
+  for (const threadId of [...expandedThreadIds]) {
+    if (!visibleIds.has(threadId)) {
+      expandedThreadIds.delete(threadId);
+    }
+  }
+  for (const threadId of [...threadDetailCache.keys()]) {
+    if (!visibleIds.has(threadId)) {
+      threadDetailCache.delete(threadId);
+    }
+  }
+}
+
+// Repaints the thread list, restoring any expanded detail panels from cache.
+// Skips the repaint entirely when the list (and expansion set) is unchanged,
+// so the periodic refresh never clobbers an open conversation.
+function paintThreads(threadList, primaryProject) {
+  const target = document.querySelector("#threads");
+
+  if (threadList.length === 0) {
+    expandedThreadIds.clear();
+    threadDetailCache.clear();
+    lastThreadSignature = null;
+    target.innerHTML = `<li>${tWeb("web.threads.empty", { name: escapeHtml(primaryProject.name) })}</li>`;
+    return;
+  }
+
+  const signature = JSON.stringify({
+    ids: threadList.map((thread) => String(thread.id ?? "")),
+    expanded: [...expandedThreadIds].sort(),
+  });
+  if (signature === lastThreadSignature) {
+    return;
+  }
+
+  // Capture live panel state before we blow away the DOM.
+  syncExpandedThreadStates(target);
+  pruneThreadDetailState(threadList);
+
+  target.innerHTML = threadList
+    .map((thread, index) => {
+      const threadId = String(thread.id ?? "");
+      const title = thread.title ?? thread.name ?? thread.preview ?? threadId;
+      const cwd = thread.cwd ?? primaryProject.path;
+      const expanded = expandedThreadIds.has(threadId);
+      const state = threadDetailCache.get(threadId) ?? defaultThreadDetailState();
+      return `<li class="thread-row" data-thread-id="${escapeAttr(threadId)}"><div class="thread-row-summary"><strong>${index + 1}. ${escapeHtml(title)}</strong><div class="meta">${escapeHtml(threadId)}</div><div class="meta">${escapeHtml(cwd)}</div></div><div class="thread-detail"${expanded ? "" : " hidden"} data-offset="${escapeAttr(state.offset)}" data-loaded="${escapeAttr(state.loaded)}">${expanded ? state.html : ""}</div></li>`;
+    })
+    .join("");
+
+  lastThreadSignature = signature;
+}
+
 async function renderThreads(status, projectsValue) {
   const target = document.querySelector("#threads");
   const projects = Array.isArray(projectsValue) ? projectsValue : [];
   const primaryProject = projects[0];
   if (status.connectors.desktop.state !== "connected" || !primaryProject) {
+    expandedThreadIds.clear();
+    threadDetailCache.clear();
+    lastThreadSignature = null;
     target.innerHTML = `<li><strong>${tWeb("web.threads.disconnected.title")}</strong><div class="meta">${tWeb("web.threads.disconnected.hint")}</div></li>`;
     return;
   }
   const result = await safeGet(`/api/codex/threads?cwd=${encodeURIComponent(primaryProject.path)}`, null);
   if (!result.ok) {
+    lastThreadSignature = null;
     target.innerHTML = sectionError(tWeb("web.connectors.error.threads"));
     return;
   }
   const threadList = result.value?.data ?? result.value?.threads ?? [];
-  target.innerHTML =
-    threadList.length === 0
-      ? `<li>${tWeb("web.threads.empty", { name: escapeHtml(primaryProject.name) })}</li>`
-      : threadList
-          .map((thread, index) => {
-            const title = thread.title ?? thread.name ?? thread.preview ?? thread.id;
-            const cwd = thread.cwd ?? primaryProject.path;
-            return `<li class="thread-row" data-thread-id="${escapeAttr(thread.id)}"><div class="thread-row-summary"><strong>${index + 1}. ${escapeHtml(title)}</strong><div class="meta">${escapeHtml(thread.id)}</div><div class="meta">${escapeHtml(cwd)}</div></div><div class="thread-detail" hidden data-offset="0"></div></li>`;
-          })
-          .join("");
+  paintThreads(threadList, primaryProject);
 }
 
 function setBridgeStatus(label) {
@@ -1018,7 +1104,7 @@ function setupNavigation() {
     for (const item of navItems) {
       item.classList.toggle("active", item.getAttribute("href") === `#${sectionId}`);
     }
-    if (NAV_LABEL_KEYS[sectionId]) {
+    if (eyebrow && NAV_LABEL_KEYS[sectionId]) {
       eyebrow.textContent = tWeb(NAV_LABEL_KEYS[sectionId]);
     }
   }
@@ -1061,6 +1147,27 @@ function renderThreadMessages(messages) {
     .join("");
 }
 
+// Persist a panel's current state into the module caches so a subsequent 5s
+// repaint restores it. Invalidates the paint signature so the change is not
+// skipped on the next render.
+function rememberThreadDetail(row, panel) {
+  const threadId = row?.dataset?.threadId;
+  if (!threadId || !panel) {
+    return;
+  }
+  if (panel.hidden) {
+    expandedThreadIds.delete(threadId);
+  } else {
+    expandedThreadIds.add(threadId);
+    threadDetailCache.set(threadId, {
+      html: panel.innerHTML,
+      offset: panel.dataset.offset ?? "0",
+      loaded: panel.dataset.loaded ?? "",
+    });
+  }
+  lastThreadSignature = null;
+}
+
 document.querySelector("#threads").addEventListener("click", async (event) => {
   const row = event.target.closest("li[data-thread-id]");
   if (!row) {
@@ -1098,6 +1205,7 @@ document.querySelector("#threads").addEventListener("click", async (event) => {
       frag.appendChild(moreLi.firstChild);
     }
     panel.appendChild(frag);
+    rememberThreadDetail(row, panel);
     return;
   }
 
@@ -1108,10 +1216,12 @@ document.querySelector("#threads").addEventListener("click", async (event) => {
   const isExpanded = !panel.hidden;
   panel.hidden = isExpanded;
   if (isExpanded) {
+    rememberThreadDetail(row, panel);
     return;
   }
   // First expand — check if already loaded
   if (panel.dataset.loaded === "1") {
+    rememberThreadDetail(row, panel);
     return;
   }
   panel.dataset.loaded = "1";
@@ -1123,6 +1233,7 @@ document.querySelector("#threads").addEventListener("click", async (event) => {
   );
   if (!firstResult.ok || !firstResult.value) {
     panel.innerHTML = `<div class="meta">${tWeb("web.threads.loadError")}</div>`;
+    rememberThreadDetail(row, panel);
     return;
   }
   const messages = (firstResult.value.messages ?? []).slice().reverse();
@@ -1130,6 +1241,7 @@ document.querySelector("#threads").addEventListener("click", async (event) => {
   panel.dataset.offset = String(messages.length);
   if (messages.length === 0) {
     panel.innerHTML = `<div class="meta">${tWeb("web.threads.noLocal")}</div>`;
+    rememberThreadDetail(row, panel);
     return;
   }
   let html = renderThreadMessages(messages);
@@ -1137,6 +1249,7 @@ document.querySelector("#threads").addEventListener("click", async (event) => {
     html += `<button class="secondary-button thread-load-more-btn">${tWeb("web.threads.loadMore")}</button>`;
   }
   panel.innerHTML = html;
+  rememberThreadDetail(row, panel);
 });
 
 document.querySelector("#logList").addEventListener("click", async (event) => {
