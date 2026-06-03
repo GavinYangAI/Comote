@@ -2,7 +2,7 @@
 
 use std::{
     fs::{self, OpenOptions},
-    io::Write,
+    io::{Read, Write},
     net::TcpStream,
     path::{Path, PathBuf},
     sync::Mutex,
@@ -22,7 +22,21 @@ use tauri_plugin_shell::{
 
 struct ComoteSidecar(Mutex<Option<CommandChild>>);
 
+const COMOTE_VERSION: &str = env!("CARGO_PKG_VERSION");
 const PORT: u16 = 16208;
+
+// Result of probing 127.0.0.1:PORT for an already-running Comote daemon.
+enum ExistingService {
+    // Nothing is listening — start our own bundled daemon.
+    None,
+    // A daemon whose version matches ours is up; reuse it as-is. Carries the
+    // daemon's pid (when reported) so a future quit path can adopt and stop it.
+    Reusable(Option<u32>),
+    // A daemon is up but its version differs (or could not be read). Reusing it
+    // would point the new UI at a stale service, so refuse. Carries the found
+    // version (when known) for the launch log.
+    Mismatched(Option<String>),
+}
 // Windows first-run can be slow: Defender real-time scanning of a freshly
 // extracted node.exe plus Node loading the bundled deps can take well over the
 // old 12s budget. Give it generous headroom before declaring failure.
@@ -52,19 +66,47 @@ fn main() {
                     .build()?;
             let _ = window.set_focus();
 
-            // Start the sidecar unless a service is already listening.
-            let child = if is_service_running(PORT) {
-                log_line(&log_path, "Existing service detected; not starting sidecar");
-                None
-            } else {
-                match start_comote_sidecar(app, PORT, &log_path) {
+            // Inspect any already-listening daemon before starting our own. We
+            // only reuse a daemon whose /api/version matches ours; a mismatched
+            // (older) daemon must NOT be reused, or the new UI would talk to a
+            // stale service. We also never start a second daemon on the port.
+            let existing = inspect_existing_service(PORT, COMOTE_VERSION);
+
+            let child = match existing {
+                ExistingService::Mismatched(found_version) => {
+                    log_line(
+                        &log_path,
+                        &format!(
+                            "Existing daemon version {} does not match app version {}; refusing to reuse",
+                            found_version.as_deref().unwrap_or("unknown"),
+                            COMOTE_VERSION
+                        ),
+                    );
+                    // Reuse our error surface: the boot page flips to its error
+                    // state and points at the log, which now explains the version
+                    // conflict and how to recover (quit the old Comote).
+                    show_launch_error(&window, &log_path);
+                    app.manage(ComoteSidecar(Mutex::new(None)));
+                    return Ok(());
+                }
+                ExistingService::Reusable(pid) => {
+                    log_line(
+                        &log_path,
+                        &format!(
+                            "Existing service matches app version (pid {}); reusing without starting sidecar",
+                            pid.map(|p| p.to_string()).unwrap_or_else(|| "unknown".into())
+                        ),
+                    );
+                    None
+                }
+                ExistingService::None => match start_comote_sidecar(app, PORT, &log_path) {
                     Ok(child) => Some(child),
                     Err(error) => {
                         log_line(&log_path, &format!("Failed to start sidecar: {error}"));
                         show_launch_error(&window, &log_path);
                         None
                     }
-                }
+                },
             };
             app.manage(ComoteSidecar(Mutex::new(child)));
 
@@ -233,8 +275,71 @@ fn wait_for_service(port: u16, timeout: Duration) -> bool {
     false
 }
 
-fn is_service_running(port: u16) -> bool {
-    TcpStream::connect(("127.0.0.1", port)).is_ok()
+// Probes the port for an existing daemon and classifies it for reuse. A daemon
+// is reusable only when its reported version equals ours.
+fn inspect_existing_service(port: u16, expected_version: &str) -> ExistingService {
+    let Some((version, pid)) = fetch_service_version(port) else {
+        return ExistingService::None;
+    };
+    match version {
+        None => ExistingService::Mismatched(None),
+        Some(version) if can_reuse_existing_service(Some(&version), expected_version) => {
+            ExistingService::Reusable(pid)
+        }
+        Some(version) => ExistingService::Mismatched(Some(version)),
+    }
+}
+
+// Speaks just enough HTTP/1.1 to GET /api/version and read the JSON body. Kept
+// dependency-free (raw TCP) because the only consumer is this one probe and we
+// don't want an HTTP client crate in the desktop shell.
+fn fetch_service_version(port: u16) -> Option<(Option<String>, Option<u32>)> {
+    let mut stream = TcpStream::connect(("127.0.0.1", port)).ok()?;
+    let timeout = Some(Duration::from_millis(600));
+    let _ = stream.set_read_timeout(timeout);
+    let _ = stream.set_write_timeout(timeout);
+    let request = "GET /api/version HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n";
+    stream.write_all(request.as_bytes()).ok()?;
+    let mut response = String::new();
+    stream.read_to_string(&mut response).ok()?;
+    let body = response
+        .split("\r\n\r\n")
+        .nth(1)
+        .unwrap_or(response.as_str());
+    Some((
+        service_version_from_status_body(body),
+        service_pid_from_body(body),
+    ))
+}
+
+fn can_reuse_existing_service(found_version: Option<&str>, expected_version: &str) -> bool {
+    found_version == Some(expected_version)
+}
+
+// Extracts the "version" string from the /api/version JSON body.
+fn service_version_from_status_body(body: &str) -> Option<String> {
+    let marker = "\"version\"";
+    let after_key = body.split(marker).nth(1)?;
+    let after_colon = after_key.split_once(':')?.1.trim_start();
+    let after_quote = after_colon.strip_prefix('"')?;
+    let version = after_quote.split('"').next()?;
+    if version.is_empty() {
+        None
+    } else {
+        Some(version.to_string())
+    }
+}
+
+// Extracts the daemon's process id ("pid":12345) from the /api/version JSON so a
+// reused daemon can later be adopted as a killable handle.
+fn service_pid_from_body(body: &str) -> Option<u32> {
+    let after_key = body.split("\"pid\"").nth(1)?;
+    let after_colon = after_key.split_once(':')?.1.trim_start();
+    let digits: String = after_colon
+        .chars()
+        .take_while(|c| c.is_ascii_digit())
+        .collect();
+    digits.parse().ok()
 }
 
 fn path_to_string(path: PathBuf) -> String {
@@ -252,5 +357,47 @@ fn log_bytes(log_path: &Path, stream: &str, bytes: &[u8]) {
     let trimmed = text.trim_end();
     if !trimmed.is_empty() {
         log_line(log_path, &format!("[{stream}] {trimmed}"));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn extracts_daemon_version_from_api_version_body() {
+        assert_eq!(
+            service_version_from_status_body(r#"{"version":"0.2.1","pid":42,"latest":"0.2.1"}"#),
+            Some("0.2.1".to_string())
+        );
+    }
+
+    #[test]
+    fn missing_daemon_version_is_not_parsed() {
+        assert_eq!(
+            service_version_from_status_body(r#"{"latest":"0.2.1","pid":42}"#),
+            None
+        );
+        // An explicit empty version string is treated as unknown, not reusable.
+        assert_eq!(
+            service_version_from_status_body(r#"{"version":"","pid":42}"#),
+            None
+        );
+    }
+
+    #[test]
+    fn extracts_daemon_pid_from_api_version_body() {
+        assert_eq!(
+            service_pid_from_body(r#"{"version":"0.2.1","pid":91632,"latest":null}"#),
+            Some(91632)
+        );
+        assert_eq!(service_pid_from_body(r#"{"version":"0.2.1"}"#), None);
+    }
+
+    #[test]
+    fn rejects_reusing_mismatched_daemon_versions() {
+        assert!(can_reuse_existing_service(Some("0.2.1"), "0.2.1"));
+        assert!(!can_reuse_existing_service(Some("0.2.0"), "0.2.1"));
+        assert!(!can_reuse_existing_service(None, "0.2.1"));
     }
 }
