@@ -11,7 +11,7 @@ import { toParamMap } from "./cards.js";
 // approvals resolve + update the card in-frame; picks dispatch async (the callback
 // has a tight ack window). Live thread-card methods are added in Part B.
 export class DingTalkRuntimeService extends BaseChannelRuntime {
-  constructor({ adapter, outboundQueue, renderer, driver = null, persist = null, eventLog = null }) {
+  constructor({ adapter, outboundQueue, renderer, driver = null, persist = null, eventLog = null, cardUpdateIntervalMs = 700 }) {
     if (!adapter) throw new Error("adapter is required");
     if (!outboundQueue) throw new Error("outboundQueue is required");
     super({
@@ -25,9 +25,82 @@ export class DingTalkRuntimeService extends BaseChannelRuntime {
       eventLog,
       dedupMax: 500,
     });
+    this.cardUpdateIntervalMs = cardUpdateIntervalMs;
+    // threadId -> { outTrackId, conversationId, lastSentAt, pendingCard, timer }
+    this.cardSessions = new Map();
     // Card-action callbacks arrive through the driver onAction hook; the base
     // start() wires this into driver.startEventStream.
     this.onAction = (action) => this.handleCardAction(action);
+  }
+
+  // Status cards are built by the renderer so callers share one shape.
+  buildStatusCard(status) {
+    return this.renderer.buildStatusCard(status);
+  }
+
+  hasThreadCard(threadId) {
+    return this.cardSessions.has(threadId);
+  }
+
+  // card = cardParamMap from buildStatusCard. No status template configured →
+  // degrade silently (return false); the final agent reply still arrives as text.
+  async openThreadCard({ threadId, conversationId, card }) {
+    if (!this.renderer.templates?.status) return false;
+    const outTrackId = `status:${threadId}:${Date.now()}`;
+    await this.driver.createCard({
+      cardTemplateId: this.renderer.templates.status,
+      outTrackId,
+      receiveId: conversationId,
+      cardParamMap: card,
+    });
+    this.cardSessions.set(threadId, { outTrackId, conversationId, lastSentAt: Date.now(), pendingCard: null, timer: null });
+    return true;
+  }
+
+  updateThreadCard(threadId, card) {
+    const session = this.cardSessions.get(threadId);
+    if (!session) return false;
+    session.pendingCard = card;
+    if (session.timer) return true;
+    const wait = Math.max(0, this.cardUpdateIntervalMs - (Date.now() - session.lastSentAt));
+    session.timer = setTimeout(() => {
+      session.timer = null;
+      this.flushThreadCard(threadId);
+    }, wait);
+    session.timer.unref?.();
+    return true;
+  }
+
+  async flushThreadCard(threadId) {
+    const session = this.cardSessions.get(threadId);
+    if (!session || !session.pendingCard) return false;
+    const card = session.pendingCard;
+    session.pendingCard = null;
+    session.lastSentAt = Date.now();
+    try {
+      await this.driver.updateCard({ outTrackId: session.outTrackId, cardParamMap: card });
+      return true;
+    } catch (error) {
+      this.lastError = error.message;
+      return false;
+    }
+  }
+
+  async finishThreadCard(threadId, card) {
+    const session = this.cardSessions.get(threadId);
+    if (!session) return false;
+    if (session.timer) {
+      clearTimeout(session.timer);
+      session.timer = null;
+    }
+    this.cardSessions.delete(threadId);
+    try {
+      await this.driver.updateCard({ outTrackId: session.outTrackId, cardParamMap: card });
+      return true;
+    } catch (error) {
+      this.lastError = error.message;
+      return false;
+    }
   }
 
   // Handles a DingTalk TOPIC_CARD callback payload. Returns an in-frame card-update
