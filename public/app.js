@@ -54,6 +54,7 @@ async function safeGet(path, fallback) {
 const activeLogin = {};
 let expandedChannelId = null; // accordion: at most one channel expanded at a time
 let lastChannels = []; // latest fetched list, so toggle handlers can re-render
+let accordionUserDecided = false; // once the user toggles any channel, stop auto-expanding pending
 // Latest channel list from GET /api/channels, kept so event handlers
 // (bind/save) can look a channel's meta up by id without re-fetching.
 let channelsById = {};
@@ -265,7 +266,7 @@ function renderChannels(channels) {
   const { connected, available } = partitionChannels(channels);
   // Default: if nothing explicitly expanded yet, expand a pending channel (待配对/待扫码) so
   // the pairing code/QR is visible without a click; else keep collapsed.
-  if (expandedChannelId === null) {
+  if (expandedChannelId === null && !accordionUserDecided) {
     const pending = connected.find((c) => isConnected(c) && !isBound(c));
     if (pending) expandedChannelId = pending.id;
   }
@@ -292,6 +293,7 @@ function setupChannelCards() {
     const toggleBtn = event.target.closest("[data-toggle]");
     if (toggleBtn) {
       const id = toggleBtn.dataset.toggle;
+      accordionUserDecided = true;
       expandedChannelId = expandedChannelId === id ? null : id;
       renderChannels(lastChannels); // re-render from the last fetched list
       return;
