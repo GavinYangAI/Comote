@@ -79,6 +79,22 @@ export function normalizedLoginView(status, t) {
   };
 }
 
+// Resting (no-login-in-flight) view for a qr channel: a bound summary when the
+// channel reports bound, otherwise the empty scan hint. Mirrors the normalized
+// login view shape ({ phase, qrUrl, accountLine, message }).
+export function restingLoginView(channel, t) {
+  if (!isBound(channel)) {
+    return { phase: "empty", qrUrl: null, accountLine: null, message: null };
+  }
+  const account = channel.config?.linkedUserName ?? channel.config?.linkedUserId ?? null;
+  return {
+    phase: "confirmed",
+    qrUrl: null,
+    accountLine: account ? t("web.channel.row.account") + "：" + account : null,
+    message: null,
+  };
+}
+
 export function readinessFromChannels(channels) {
   return {
     bound: channels.some((c) => isBound(c)),

@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   channelBadge, channelRows, channelFormSpec,
-  channelBoundButton, normalizedLoginView, readinessFromChannels,
+  channelBoundButton, normalizedLoginView, restingLoginView, readinessFromChannels,
 } from "../public/channel-view.js";
 
 const t = (k) => k; // echo key
@@ -59,6 +59,26 @@ test("normalizedLoginView maps {state} to a phase + lines", () => {
   assert.equal(normalizedLoginView({ state: "confirmed", account: { name: "Bob" } }, t).phase, "confirmed");
   assert.equal(normalizedLoginView({ state: "expired" }, t).phase, "expired");
   assert.equal(normalizedLoginView({ state: "failed", message: "nope" }, t).message, "nope");
+});
+test("restingLoginView: bound channel → confirmed with account line", () => {
+  const view = restingLoginView(feishu, t);
+  assert.equal(view.phase, "confirmed");
+  assert.equal(view.qrUrl, null);
+  assert.equal(view.accountLine, "web.channel.row.account：Alice");
+  assert.equal(view.message, null);
+});
+test("restingLoginView: bound channel without name falls back to linkedUserId", () => {
+  const f = { ...feishu, config: { configured: true, linkedUserId: "uid7" } };
+  assert.equal(restingLoginView(f, t).accountLine, "web.channel.row.account：uid7");
+});
+test("restingLoginView: bound channel with no account → null account line", () => {
+  const f = { ...feishu, config: { configured: true } };
+  assert.equal(restingLoginView(f, t).accountLine, null);
+});
+test("restingLoginView: unbound channel → empty scan-hint view", () => {
+  assert.deepEqual(restingLoginView(wechat, t), {
+    phase: "empty", qrUrl: null, accountLine: null, message: null,
+  });
 });
 test("readinessFromChannels: bound + running derived across channels", () => {
   assert.equal(readinessFromChannels([feishu, wechat]).bound, true);

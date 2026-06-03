@@ -5,6 +5,7 @@ import {
   channelFormSpec,
   channelBoundButton,
   normalizedLoginView,
+  restingLoginView,
   readinessFromChannels,
 } from "./channel-view.js";
 import {
@@ -17,6 +18,7 @@ import {
 } from "./i18n.js";
 
 const REFRESH_MS = 5000;
+const QR_POLL_MS = 2500;
 
 async function getJson(path, options = {}) {
   const token = localStorage.getItem("comoteApiToken");
@@ -254,7 +256,41 @@ function renderChannels(channels) {
     return;
   }
   container.innerHTML = channels.map(channelCardHtml).join("");
-  channels.forEach(wireChannelCard);
+  // Bind/save are handled by ONE delegated listener on #channelCards (wired once
+  // in setupChannelCards); here we only repaint each card's resting QR state.
+  channels.forEach(paintChannelCardResting);
+}
+
+// One delegated click listener for every channel card's bind / save-config
+// button. Set up once against the stable #channelCards container so re-renders
+// (which replace the cards' innerHTML) never re-bind or double-bind handlers.
+function setupChannelCards() {
+  const container = document.querySelector("#channelCards");
+  if (!container) {
+    return;
+  }
+  container.addEventListener("click", async (event) => {
+    const bindBtn = event.target.closest("[data-bind]");
+    if (bindBtn) {
+      const ch = channelsById[bindBtn.dataset.bind];
+      if (ch) {
+        await startQrLogin(ch);
+      }
+      return;
+    }
+    const saveBtn = event.target.closest("[data-save-config]");
+    if (saveBtn) {
+      const id = saveBtn.dataset.saveConfig;
+      await guardedAction(() =>
+        getJson(`/api/channels/${encodeURIComponent(id)}/config`, {
+          method: "PUT",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(readChannelForm(id)),
+        }),
+      );
+      await render();
+    }
+  });
 }
 
 // Advanced "manual add user" channel dropdown, populated from the registry list
@@ -349,32 +385,12 @@ function channelConfigFormHtml(ch) {
   return `<form class="stack-form channel-config-form" data-config-form="${escapeAttr(ch.id)}">${fields}</form>`;
 }
 
-function wireChannelCard(ch) {
-  const card = document.querySelector(`#channelCards article[data-channel="${cssEscapeId(ch.id)}"]`);
-  if (!card) {
-    return;
-  }
-  const bindBtn = card.querySelector("[data-bind]");
-  if (bindBtn) {
-    bindBtn.addEventListener("click", () => startQrLogin(ch));
-  }
-  const saveBtn = card.querySelector("[data-save-config]");
-  if (saveBtn) {
-    saveBtn.addEventListener("click", async () => {
-      await guardedAction(() =>
-        getJson(`/api/channels/${encodeURIComponent(ch.id)}/config`, {
-          method: "PUT",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify(readChannelForm(ch.id)),
-        }),
-      );
-      await render();
-    });
-  }
-  // While no login is in flight, repaint the QR area to its resting state
-  // (bound account summary, or the empty scan hint) from current config.
+// While no login is in flight, repaint a qr card's QR area to its resting state
+// (bound account summary, or the empty scan hint) from current config. Bind/save
+// clicks are handled by the delegated listener in setupChannelCards.
+function paintChannelCardResting(ch) {
   if (ch.binding === "qr" && !activeLogin[ch.id]) {
-    renderQrInto(`${ch.id}LoginResult`, restingLoginView(ch));
+    renderQrInto(`${ch.id}LoginResult`, restingLoginView(ch, tWeb));
   }
 }
 
@@ -679,8 +695,9 @@ document.querySelector("#approvalsList").addEventListener("click", async (event)
   await render();
 });
 
-// Channel bind/save buttons are wired per-card in wireChannelCard() now that the
-// cards are generated from registry meta — no per-channel listeners here.
+// Channel bind/save buttons are handled by ONE delegated listener on the stable
+// #channelCards container (setupChannelCards), wired once in init() — no
+// per-card or per-channel listeners here.
 
 // Surfaces write failures to the user instead of leaving the UI silently stale.
 async function guardedAction(action) {
@@ -774,10 +791,10 @@ function pollQrLogin(ch, startCtx) {
         phase: "pending",
         qrUrl: startCtx.qrUrl ?? null,
         accountLine: null,
-        message: tWeb("web.feishu.qr.checkFailed", { message: error.message }),
+        message: tWeb("web.channel.qr.checkFailed", { message: error.message }),
       });
     }
-  }, 2500);
+  }, QR_POLL_MS);
 }
 
 // Renders a normalized login view ({ phase, qrUrl, accountLine, message }) into a
@@ -827,24 +844,6 @@ function renderQrInto(elId, view) {
   if (view.message) {
     target.append(createTextLine(view.message));
   }
-}
-
-// Resting (no-login-in-flight) view for a qr channel: a bound summary when the
-// channel reports bound, otherwise the empty scan hint.
-function restingLoginView(ch) {
-  const bw = ch.boundWhen;
-  const bag = bw?.source === "runtime" ? ch.runtime : bw?.source === "status" ? ch.status : ch.config;
-  const bound = bw ? Boolean(bag?.[bw.field]) : false;
-  if (!bound) {
-    return { phase: "empty", qrUrl: null, accountLine: null, message: null };
-  }
-  const account = ch.config?.linkedUserName ?? ch.config?.linkedUserId ?? null;
-  return {
-    phase: "confirmed",
-    qrUrl: null,
-    accountLine: account ? tWeb("web.channel.row.account") + "：" + account : null,
-    message: null,
-  };
 }
 
 function createStrongLine(text) {
@@ -1153,6 +1152,7 @@ async function onLangChange(event) {
 
 async function init() {
   setupNavigation();
+  setupChannelCards();
   setBridgeStatus(tWeb("web.status.starting"));
   const settings = await safeGet("/api/settings", { locale: "zh", supported: ["zh"] });
   setWebLocale(settings.value?.locale ?? "zh");
