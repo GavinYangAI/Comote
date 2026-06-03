@@ -132,7 +132,8 @@ export class TelegramRuntimeService extends BaseChannelRuntime {
       return;
     }
     const normalized = typeof reply === "string" ? { kind: "text", text: reply } : reply;
+    const dedupeKey = `telegram:pick:${identity.stableId}:${pickKind}:${selector}:${Date.now()}`;
     const semantic = routerReplyToSemantic(normalized, { channel: "telegram", conversationId });
-    if (semantic) { await this.adapter.sendReply(semantic).catch(() => {}); await this.deliverQueued().catch(() => {}); }
+    if (semantic) { await this.adapter.sendReply({ ...semantic, dedupeKey }).catch(() => {}); await this.deliverQueued().catch(() => {}); }
   }
 }

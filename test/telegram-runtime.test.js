@@ -53,6 +53,29 @@ test("unknown callback data is answered but does nothing", async () => {
   assert.equal(calls.answer.length, 1);
 });
 
+test("dispatchPickAsync routes project→chooseProject and session→useSessionAsync, with a unique dedupeKey", async () => {
+  const sent = [];
+  const router = {
+    resolveApproval: async () => {}, cancelThread: async () => {},
+    chooseProject: async () => "picked project", useSessionAsync: async () => "picked session",
+  };
+  const rt = new TelegramRuntimeService({
+    adapter: { commandRouter: router, sendReply: async (r) => { sent.push(r); return { ok: true }; } },
+    outboundQueue: { list: () => [], markDelivered() {}, markFailed() {} },
+    renderer: createTelegramRenderer(),
+    driver: { async answerCallbackQuery() {}, async editMessageText() {}, async sendMessage() { return { message_id: 1 }; } },
+    ensurePairingCode: async () => {},
+  });
+  await rt.dispatchPickAsync({ identity: { channel: "telegram", stableId: "9" }, selector: "2", pickKind: "project", conversationId: "9" });
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].text, "picked project");
+  assert.match(sent[0].dedupeKey, /^telegram:pick:9:project:2:/);
+  await rt.dispatchPickAsync({ identity: { channel: "telegram", stableId: "9" }, selector: "1", pickKind: "session", conversationId: "9" });
+  assert.equal(sent.length, 2);
+  assert.equal(sent[1].text, "picked session");
+  assert.match(sent[1].dedupeKey, /^telegram:pick:9:session:1:/);
+});
+
 test("start() calls ensurePairingCode before starting", async () => {
   const order = [];
   const { rt } = makeRuntime({ ensurePairingCode: async () => { order.push("pair"); } });
