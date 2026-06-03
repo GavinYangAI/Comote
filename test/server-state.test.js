@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 
 import { createComoteState } from "../src/server/state.js";
 import wechatPlugin from "../src/channels/wechat/index.js";
+import { DingTalkDriver } from "../src/channels/dingtalk/driver.js";
 
 test("stores WeChat login results when token and account id are present", () => {
   assert.equal(
@@ -106,4 +107,61 @@ test("can keep WeChat runtime stopped for tests and diagnostics", () => {
   });
 
   assert.equal(state.runtime.wechat.getStatus().state, "configured");
+});
+
+test("routeDesktopEvent drives a dingtalk live status card", async (t) => {
+  // De-flake: configure() builds a REAL DingTalkDriver and start()s it, whose
+  // startEventStream late-imports dingtalk-stream and opens a live socket. Patch
+  // it to a clean no-op so configure() touches no network. We then swap in a fake
+  // driver (after configure) that records createCard/updateCard.
+  const original = DingTalkDriver.prototype.startEventStream;
+  DingTalkDriver.prototype.startEventStream = async function startEventStream() {
+    return { ok: true };
+  };
+  t.after(() => {
+    DingTalkDriver.prototype.startEventStream = original;
+  });
+
+  const events = [];
+  const desktop = { onEvent: null, async listProjects() { return []; } };
+  const state = createComoteState({ desktop, stateStore: null, persisted: {} });
+
+  // Configure dingtalk with a status template so live cards are enabled. configure()
+  // runs the real (patched) driver's start(); the channel is running afterwards.
+  await state.runtime.dingtalk.configure({
+    enabled: true,
+    appKey: "ak",
+    appSecret: "as",
+    statusTemplateId: "st.schema",
+  });
+
+  // Swap in a fake driver that records card calls. configureDriver restarts the
+  // (already-running) push runtime through this fake's startEventStream — no socket.
+  state.runtime.dingtalk.__setTestDriver({
+    startEventStream: async () => ({ ok: true }),
+    stopEventStream() {},
+    getStatus: () => ({ state: "configured" }),
+    async createCard(a) { events.push(["create", a]); return { outTrackId: a.outTrackId }; },
+    async updateCard(a) { events.push(["update", a]); },
+  });
+
+  // Bind a thread to dingtalk. getThreadBinding(threadId) reads threadBindings, the
+  // same map bindThreadForIdentity writes — there is no public bindThread, so seed
+  // the binding directly (the read source) to set up the precondition.
+  state.commandRouter.threadBindings.set("thread-1", {
+    channel: "dingtalk",
+    conversationId: "staff-9",
+    projectPath: null,
+  });
+
+  // turnStarted on a dingtalk-bound thread must open a live status card.
+  desktop.onEvent({ type: "turnStarted", threadId: "thread-1" });
+  await new Promise((r) => setTimeout(r, 5));
+
+  assert.ok(
+    events.some((e) => e[0] === "create"),
+    "a dingtalk status card was created on turnStarted",
+  );
+
+  state.runtime.dingtalk.stop();
 });

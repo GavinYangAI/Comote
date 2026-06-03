@@ -306,6 +306,31 @@ export function createComoteState({
   const feishuRuntime = channelStacks.get("feishu").runtime;
   const wechatRuntime = channelStacks.get("wechat").runtime;
 
+  // Returns the runtime for a channel IF it supports live status cards (the
+  // liveUpdates capability + the open/update/finish/buildStatusCard methods).
+  // Drives routeDesktopEvent's live-card path channel-agnostically. feishu and
+  // dingtalk qualify; wechat does not. liveCardRuntime("feishu") === feishuRuntime,
+  // so every feishu live-card path behaves exactly as it did when hardcoded.
+  function liveCardRuntime(channel) {
+    const stack = channelStacks.get(channel);
+    if (!stack) return null;
+    if (!stack.plugin.meta.capabilities?.liveUpdates) return null;
+    const rt = stack.runtime;
+    return typeof rt.openThreadCard === "function" ? rt : null;
+  }
+
+  // push channels have no poll loop, so a freshly enqueued reply must be drained
+  // explicitly. poll channels (wechat) drain via their own loop. Equivalent to the
+  // old deliverIfFeishu: feishu is push → drains; wechat is poll → no-op.
+  function deliverIfPush(channel) {
+    const stack = channelStacks.get(channel);
+    if (stack?.plugin.meta.inboundMode === "push") {
+      stack.runtime.deliverQueued().catch((error) => {
+        stack.runtime.lastError = error.message;
+      });
+    }
+  }
+
   // Build a runtime WRAPPER per channel from its stack. Common methods (getConfig
   // → publicConfig, configure, getStatus, start, stop) are generic; channel-
   // specific methods are exposed conditionally based on the plugin meta.
@@ -451,15 +476,16 @@ export function createComoteState({
           .sendTyping({ conversationId: startedBinding.conversationId })
           .catch(() => {});
       }
-      if (startedBinding?.channel === "feishu") {
-        feishuRuntime
+      const startedLive = liveCardRuntime(startedBinding?.channel);
+      if (startedLive) {
+        startedLive
           .openThreadCard({
             threadId: event.threadId,
             conversationId: startedBinding.conversationId,
-            card: feishuRuntime.buildStatusCard({ phase: "started", threadId: event.threadId }),
+            card: startedLive.buildStatusCard({ phase: "started", threadId: event.threadId }),
           })
           .catch((error) => {
-            feishuRuntime.lastError = error.message;
+            startedLive.lastError = error.message;
           });
       }
       eventLog.info("Codex 开始处理请求", { threadId: event.threadId });
@@ -467,12 +493,14 @@ export function createComoteState({
     }
     if (event.type === "turnCompleted") {
       progressByThread.delete(event.threadId);
-      if (feishuRuntime.hasThreadCard(event.threadId)) {
+      const completedBinding = commandRouter.getThreadBinding(event.threadId);
+      const completedLive = liveCardRuntime(completedBinding?.channel);
+      if (completedLive && completedLive.hasThreadCard(event.threadId)) {
         const tail = streamTextByThread.get(event.threadId) ?? t("state.completed.fallback");
-        feishuRuntime
+        completedLive
           .finishThreadCard(
             event.threadId,
-            feishuRuntime.buildStatusCard({
+            completedLive.buildStatusCard({
               phase: "completed",
               threadId: event.threadId,
               text: tail,
@@ -511,11 +539,12 @@ export function createComoteState({
       const entry = progressByThread.get(event.threadId) ?? { count: 0, lastSentAt: 0 };
       entry.count += 1;
       const progressBinding = commandRouter.getThreadBinding(event.threadId);
-      if (progressBinding?.channel === "feishu") {
+      const progressLive = liveCardRuntime(progressBinding?.channel);
+      if (progressLive) {
         progressByThread.set(event.threadId, entry);
-        feishuRuntime.updateThreadCard(
+        progressLive.updateThreadCard(
           event.threadId,
-          feishuRuntime.buildStatusCard({
+          progressLive.buildStatusCard({
             phase: "progress",
             threadId: event.threadId,
             steps: entry.count,
@@ -538,7 +567,7 @@ export function createComoteState({
             text: t("state.progress.reply", { steps: entry.count }),
             dedupeKey: `progress:${event.threadId}:${now}`,
           });
-          deliverIfFeishu(binding.channel);
+          deliverIfPush(binding.channel);
         }
       }
       progressByThread.set(event.threadId, entry);
@@ -547,13 +576,14 @@ export function createComoteState({
 
     if (event.type === "agentMessageDelta") {
       const binding = commandRouter.getThreadBinding(event.threadId);
-      if (binding?.channel !== "feishu") {
+      const deltaLive = liveCardRuntime(binding?.channel);
+      if (!deltaLive) {
         return;
       }
       streamTextByThread.set(event.threadId, event.text ?? "");
-      feishuRuntime.updateThreadCard(
+      deltaLive.updateThreadCard(
         event.threadId,
-        feishuRuntime.buildStatusCard({
+        deltaLive.buildStatusCard({
           phase: "streaming",
           threadId: event.threadId,
           text: event.text ?? "",
@@ -574,12 +604,13 @@ export function createComoteState({
         eventLog.warn("收到 Codex 输出但找不到对应会话，未转发", { threadId: event.threadId });
         return;
       }
-      if (binding.channel === "feishu") {
+      const msgLive = liveCardRuntime(binding.channel);
+      if (msgLive) {
         streamTextByThread.delete(event.threadId);
-        feishuRuntime
+        msgLive
           .finishThreadCard(
             event.threadId,
-            feishuRuntime.buildStatusCard({
+            msgLive.buildStatusCard({
               phase: "completed",
               threadId: event.threadId,
               text: event.text ?? "",
@@ -591,17 +622,17 @@ export function createComoteState({
             if (!updated) {
               // No live card (e.g. the daemon restarted mid-turn) — send fresh.
               outboundReplies.enqueue({
-                channel: "feishu",
+                channel: binding.channel,
                 conversationId: binding.conversationId,
                 kind: "text",
                 text: event.text ?? "",
                 dedupeKey: `agent:${event.itemId ?? event.threadId}`,
               });
-              deliverIfFeishu("feishu");
+              deliverIfPush(binding.channel);
             }
           })
           .catch((error) => {
-            feishuRuntime.lastError = error.message;
+            msgLive.lastError = error.message;
           });
         stateRef.persist?.();
         return;
@@ -615,7 +646,7 @@ export function createComoteState({
         text: event.text ?? "",
         dedupeKey: `agent:${event.itemId ?? event.threadId}`,
       });
-      deliverIfFeishu(binding.channel);
+      deliverIfPush(binding.channel);
       stateRef.persist?.();
       return;
     }
@@ -643,18 +674,19 @@ export function createComoteState({
         approval: event.approval,
         dedupeKey: `approval:${event.approval.id}`,
       });
-      deliverIfFeishu(binding.channel);
+      deliverIfPush(binding.channel);
       stateRef.persist?.();
       return;
     }
 
     if (event.type === "error") {
       const binding = commandRouter.getThreadBinding(event.threadId);
-      if (binding?.channel === "feishu" && feishuRuntime.hasThreadCard(event.threadId)) {
-        feishuRuntime
+      const errLive = liveCardRuntime(binding?.channel);
+      if (errLive && errLive.hasThreadCard(event.threadId)) {
+        errLive
           .finishThreadCard(
             event.threadId,
-            feishuRuntime.buildStatusCard({
+            errLive.buildStatusCard({
               phase: "error",
               text: t("state.error.card", { message: event.message }),
               done: true,
@@ -681,7 +713,7 @@ export function createComoteState({
         text: t("state.error.reply", { message: event.message }),
         dedupeKey: `error:${event.threadId ?? ""}:${Date.now()}`,
       });
-      deliverIfFeishu(binding.channel);
+      deliverIfPush(binding.channel);
       stateRef.persist?.();
       return;
     }
@@ -703,15 +735,6 @@ export function createComoteState({
       files.push({ path: p, name: basename(p) || p });
     }
     return files;
-  }
-
-  // WeChat drains via its 2.5s poll loop; Feishu has no poll loop, push now.
-  function deliverIfFeishu(channel) {
-    if (channel === "feishu") {
-      feishuRuntime.deliverQueued().catch((error) => {
-        feishuRuntime.lastError = error.message;
-      });
-    }
   }
 
   // point-in-time config snapshot, used only for auto-start enabled-gating
