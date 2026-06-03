@@ -59,7 +59,7 @@ const wechatPlugin = {
     descriptionKey: "web.channel.wechat.desc",
     icon: "微",
     configFields: [
-      { name: "enabled", type: "checkbox", labelKey: "web.channel.wechat.enabledLabel", default: true },
+      { name: "enabled", type: "checkbox", labelKey: "web.channel.wechat.enabledLabel", default: true, hidden: true },
       { name: "accountId", type: "text", labelKey: "web.channel.wechat.accountLabel", default: "default", hidden: true },
     ],
     states: {

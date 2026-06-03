@@ -135,7 +135,8 @@ test("GET /api/channels lists channel meta + status", async () => {
   assert.equal(byId.wechat.inboundMode, "poll");
   assert.equal(byId.feishu.binding, "qr");
   // status + runtime + config attached:
-  assert.equal(typeof byId.feishu.status, "string"); // adapter state
+  assert.equal(typeof byId.feishu.status, "object"); // full adapter status object
+  assert.equal(typeof byId.feishu.status.state, "string"); // adapter state conveyed via .state
   assert.ok(byId.feishu.runtime); // runtime status object
   assert.ok(byId.wechat.config !== undefined); // public config (or {})
   // config must be the REDACTED public config — never a raw secret.
