@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { mkdtemp, mkdir, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import { createComoteState } from "../src/server/state.js";
 import { CodexDesktopConnector } from "../src/connectors/codex-desktop/index.js";
@@ -172,6 +175,17 @@ test("completed card includes push buttons for changed files", async () => {
   const { transport, desktop, state } = buildState();
   await desktop.client.connect();
 
+  // A real temp project root with an in-project image (becomes a button) and a
+  // sibling dir OUTSIDE the root that shares the root's string prefix.
+  const root = await mkdtemp(join(tmpdir(), "comote-proj-"));
+  const evil = `${root}-evil`;
+  await mkdir(join(root, "out"), { recursive: true });
+  await mkdir(evil, { recursive: true });
+  const inProjectPng = join(root, "out", "a.png");
+  const evilPng = join(evil, "x.png");
+  await writeFile(inProjectPng, Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+  await writeFile(evilPng, Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+
   // Bind a Codex thread to a Feishu conversation with a known project root.
   state.commandRouter.conversationByIdentity.set("feishu:ou_owner", {
     channel: "feishu",
@@ -180,7 +194,7 @@ test("completed card includes push buttons for changed files", async () => {
   state.commandRouter.bindThreadForIdentity(
     { channel: "feishu", stableId: "ou_owner" },
     "thread_f",
-    "/home/proj",
+    root,
   );
 
   // finishThreadCard sends the final card through driver.updateCard — capture it.
@@ -212,7 +226,7 @@ test("completed card includes push buttons for changed files", async () => {
       item: {
         type: "fileChange",
         id: "fc1",
-        changes: [{ path: "/home/proj/out/a.png" }, { path: "/home/proj-evil/x.png" }],
+        changes: [{ path: inProjectPng }, { path: evilPng }],
       },
     },
   });
@@ -245,10 +259,10 @@ test("completed card includes push buttons for changed files", async () => {
     .flatMap((el) => el.actions);
   const pushButtons = buttons.filter((b) => b.value?.kind === "pushfile");
   assert.equal(pushButtons.length, 1, "only the in-project file renders a pushfile button");
-  assert.equal(pushButtons[0].value.path, "/home/proj/out/a.png");
+  assert.equal(pushButtons[0].value.path, inProjectPng);
   // The out-of-project sibling path must NOT produce a button.
   assert.ok(
-    !pushButtons.some((b) => b.value.path === "/home/proj-evil/x.png"),
+    !pushButtons.some((b) => b.value.path === evilPng),
     "out-of-project path must be excluded",
   );
 });

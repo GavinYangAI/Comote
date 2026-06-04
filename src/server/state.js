@@ -3,6 +3,7 @@ import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { isWithinDir, resolveWithinProject, sanitizeUploadName } from "../core/paths.js";
+import { planChangedFileDelivery } from "../core/changed-files-delivery.js";
 
 import { AuthorizationStore } from "../core/authorization.js";
 import { CommandRouter } from "../core/commands.js";
@@ -666,33 +667,14 @@ export function createComoteState({
       const msgLive = liveCardRuntime(binding.channel);
       if (msgLive) {
         streamTextByThread.delete(event.threadId);
-        msgLive
-          .finishThreadCard(
-            event.threadId,
-            msgLive.buildStatusCard({
-              phase: "completed",
-              threadId: event.threadId,
-              text: event.text ?? "",
-              done: true,
-              files: buildChangedFiles(event.threadId, event.changedPaths),
-            }),
-          )
-          .then((updated) => {
-            if (!updated) {
-              // No live card (e.g. the daemon restarted mid-turn) — send fresh.
-              outboundReplies.enqueue({
-                channel: binding.channel,
-                conversationId: binding.conversationId,
-                kind: "text",
-                text: event.text ?? "",
-                dedupeKey: `agent:${event.itemId ?? event.threadId}`,
-              });
-              deliverIfPush(binding.channel);
-            }
-          })
-          .catch((error) => {
-            msgLive.lastError = error.message;
-          });
+        // Claim the live card SYNCHRONOUSLY now, before the async file work below.
+        // agentMessage is the live-card completion path; detaching here means a
+        // racing turnCompleted sees no card (hasThreadCard=false) and skips, so the
+        // turn's files are delivered exactly once (here), never doubled.
+        const claimedSession = msgLive.detachThreadCard(event.threadId);
+        void deliverChangedFilesAndFinish(msgLive, binding, event, claimedSession).catch((error) => {
+          msgLive.lastError = error.message;
+        });
         stateRef.persist?.();
         return;
       }
@@ -776,6 +758,53 @@ export function createComoteState({
       stateRef.persist?.();
       return;
     }
+  }
+
+  // Splits a completed turn's changed files (Task 3) and delivers them: small
+  // text inlines + the rest become card buttons (fileButtons channels) or
+  // auto-sent attachments. Finishes the live card with the button files. Used
+  // fire-and-forget from the agentMessage handler so routeDesktopEvent stays sync.
+  async function deliverChangedFilesAndFinish(live, binding, event, claimedSession) {
+    const channel = binding.channel;
+    const supportsButtons = Boolean(channelStacks.get(channel)?.plugin.meta.capabilities?.fileButtons);
+    const plan = await planChangedFileDelivery(
+      buildChangedFiles(event.threadId, event.changedPaths),
+      { supportsButtons },
+    );
+    const stamp = Date.now();
+    [...plan.inlineReplies, ...plan.attachmentReplies].forEach((reply, i) => {
+      outboundReplies.enqueue({
+        channel,
+        conversationId: binding.conversationId,
+        ...(binding.accountId ? { accountId: binding.accountId } : {}),
+        ...reply,
+        dedupeKey: `changedfiles:${binding.conversationId}:${event.threadId}:${stamp}:${i}`,
+      });
+    });
+    const completedCard = live.buildStatusCard({
+      phase: "completed",
+      threadId: event.threadId,
+      text: event.text ?? "",
+      done: true,
+      files: plan.buttonFiles,
+    });
+    // The session was claimed synchronously in the agentMessage branch; send the
+    // final card to it. No claimed session means the daemon restarted mid-turn —
+    // fall through to the fresh-text fallback below.
+    const updated = claimedSession
+      ? await live.sendDetachedThreadCard(claimedSession, completedCard)
+      : false;
+    if (!updated) {
+      // No live card (e.g. the daemon restarted mid-turn) — send fresh.
+      outboundReplies.enqueue({
+        channel,
+        conversationId: binding.conversationId,
+        kind: "text",
+        text: event.text ?? "",
+        dedupeKey: `agent:${event.itemId ?? event.threadId}`,
+      });
+    }
+    deliverIfPush(channel);
   }
 
   // Maps a turn's absolute changedPaths to the {path, name} entries the
