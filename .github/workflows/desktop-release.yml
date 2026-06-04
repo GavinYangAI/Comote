@@ -22,7 +22,7 @@ jobs:
       - run: npm ci
       - run: npm test
       - run: npm run dist:mac
-      - uses: actions/upload-artifact@v5
+      - uses: actions/upload-artifact@v7
         with:
           name: Comote-arm64-dmg
           path: release/Comote-*-arm64.dmg
@@ -40,7 +40,7 @@ jobs:
       - run: npm ci
       - run: npm test
       - run: npm run dist:win
-      - uses: actions/upload-artifact@v5
+      - uses: actions/upload-artifact@v7
         with:
           name: Comote-win-x64-setup
           path: release/Comote-Setup-*-x64.exe
@@ -52,11 +52,11 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/download-artifact@v5
+      - uses: actions/download-artifact@v8
         with:
           name: Comote-arm64-dmg
           path: release-artifacts
-      - uses: actions/download-artifact@v5
+      - uses: actions/download-artifact@v8
         with:
           name: Comote-win-x64-setup
           path: release-artifacts
