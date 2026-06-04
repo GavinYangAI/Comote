@@ -87,6 +87,15 @@ test("media reply degrades to a paperclip filename line", async () => {
   assert.match(driver.sent[0].text, /report\.pdf/);
 });
 
+test("wechat media degrades to a local-path notice with the path", async () => {
+  const r = createWeChatRenderer();
+  const driver = stubDriver();
+  await r.render({ kind: "media", conversationId: "dm_x", mediaKind: "file", path: "/repo/out/a.png", fileName: "a.png" }, { driver });
+  const joined = driver.sent.map((m) => m.text).join("\n");
+  assert.match(joined, /a\.png/);
+  assert.match(joined, /\/repo\/out\/a\.png/);
+});
+
 test("render forwards a chunk-indexed dedupeKey when reply.dedupeKey is present", async () => {
   const r = createWeChatRenderer();
   const driver = stubDriver();
