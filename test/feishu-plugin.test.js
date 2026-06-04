@@ -8,7 +8,7 @@ test("feishu plugin exposes meta + factories", () => {
   assert.equal(feishuPlugin.meta.id, "feishu");
   assert.equal(feishuPlugin.meta.inboundMode, "push");
   assert.equal(feishuPlugin.meta.binding, "qr");
-  assert.deepEqual(feishuPlugin.meta.capabilities, { cards: 1, media: 1, liveUpdates: 1, typing: 0 });
+  assert.deepEqual(feishuPlugin.meta.capabilities, { cards: 1, media: 1, liveUpdates: 1, typing: 0, fileButtons: 1 });
   for (const fn of ["createDriver", "createAdapter", "createRuntime", "createRenderer", "normalizeConfig", "publicConfig"]) {
     assert.equal(typeof feishuPlugin[fn], "function");
   }
