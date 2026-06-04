@@ -39,9 +39,18 @@ function buildState() {
   return { transport, desktop, state };
 }
 
-// Lets queued microtasks (the async card + delivery calls) settle.
-function tick() {
-  return new Promise((resolve) => setTimeout(resolve, 10));
+// Polls until a condition holds. The completion path is fire-and-forget
+// (`void deliverChangedFilesAndFinish(...)`) and does real disk IO (stat +
+// readFile per changed file) plus async card sends, so a fixed timeout races on
+// slow/CI machines (this was the source of an intermittent failure). Waiting on
+// the actual post-condition makes the test deterministic.
+async function waitFor(predicate, { timeout = 5000, interval = 5 } = {}) {
+  const start = Date.now();
+  for (;;) {
+    if (await predicate()) return;
+    if (Date.now() - start >= timeout) throw new Error("waitFor: condition not met within timeout");
+    await new Promise((resolve) => setTimeout(resolve, interval));
+  }
 }
 
 // Creates a temp project root with a small text file and a binary image file,
@@ -88,11 +97,12 @@ test("feishu (fileButtons): small .md inlines as text, .png becomes a card butto
   });
   state.commandRouter.bindThreadForIdentity({ channel: "feishu", stableId: "ou_owner" }, "thread_f", root);
 
-  const calls = { updated: [] };
+  const calls = { opened: [], updated: [] };
   state.runtime.feishu.__setTestDriver({
     getStatus: () => ({ state: "configured" }),
     verifyEvent: () => true,
     async sendCard() {
+      calls.opened.push(true);
       return { messageId: "om_live" };
     },
     async updateCard(message) {
@@ -102,10 +112,10 @@ test("feishu (fileButtons): small .md inlines as text, .png becomes a card butto
   });
 
   transport.receive({ jsonrpc: "2.0", method: "turn/started", params: { threadId: "thread_f" } });
-  await tick();
+  await waitFor(() => calls.opened.length >= 1);
 
   fireTurn(transport, "thread_f", [mdPath, pngPath], "all done");
-  await tick();
+  await waitFor(() => calls.updated.length >= 1);
 
   // The md inlines as one text reply (carries the file name).
   const replies = state.outboundReplies.list({ channel: "feishu", pendingOnly: false });
@@ -167,11 +177,11 @@ test("dingtalk (no fileButtons): .md inlines as text, .png auto-sends as media; 
   });
 
   transport.receive({ jsonrpc: "2.0", method: "turn/started", params: { threadId: "thread_d" } });
-  await tick();
+  await waitFor(() => calls.created.length === 1);
   assert.equal(calls.created.length, 1, "turn start opened the status card");
 
   fireTurn(transport, "thread_d", [mdPath, pngPath], "all done");
-  await tick();
+  await waitFor(() => calls.updated.length >= 1);
 
   const replies = state.outboundReplies.list({ channel: "dingtalk", pendingOnly: false });
   const textReplies = replies.filter((r) => r.kind === "text");
@@ -216,11 +226,11 @@ test("telegram (fileButtons): .md inlines as text, .png becomes a card button (n
   });
 
   transport.receive({ jsonrpc: "2.0", method: "turn/started", params: { threadId: "thread_t" } });
-  await tick();
+  await waitFor(() => calls.sent.length === 1);
   assert.equal(calls.sent.length, 1, "turn start opened the live thread card");
 
   fireTurn(transport, "thread_t", [mdPath, pngPath], "all done");
-  await tick();
+  await waitFor(() => calls.edited.length >= 1);
 
   const replies = state.outboundReplies.list({ channel: "telegram", pendingOnly: false });
   const textReplies = replies.filter((r) => r.kind === "text");
