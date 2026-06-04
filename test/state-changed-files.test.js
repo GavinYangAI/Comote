@@ -187,3 +187,51 @@ test("dingtalk (no fileButtons): .md inlines as text, .png auto-sends as media; 
   const serialized = JSON.stringify(finalParamMap);
   assert.ok(!serialized.includes("pushfile"), "dingtalk card has no pushfile buttons");
 });
+
+test("telegram (no fileButtons): agentMessage completion doesn't throw; .md inlines, .png auto-sends as media", async () => {
+  const { transport, desktop, state } = buildState();
+  await desktop.client.connect();
+  const { root, mdPath, pngPath } = await makeProject();
+
+  state.commandRouter.conversationByIdentity.set("telegram:9001", {
+    channel: "telegram",
+    conversationId: "9001",
+  });
+  state.commandRouter.bindThreadForIdentity({ channel: "telegram", stableId: "9001" }, "thread_t", root);
+
+  // Telegram is a single-token channel: a fake driver supplies the live-card
+  // primitives (sendMessage opens, editMessageText updates/finishes). No
+  // configure() step — __setTestDriver makes the runtime "configured".
+  const calls = { sent: [], edited: [] };
+  state.runtime.telegram.__setTestDriver({
+    getStatus: () => ({ state: "configured" }),
+    async sendMessage(a) {
+      calls.sent.push(a);
+      return { message_id: 77 };
+    },
+    async editMessageText(a) {
+      calls.edited.push(a);
+    },
+  });
+
+  transport.receive({ jsonrpc: "2.0", method: "turn/started", params: { threadId: "thread_t" } });
+  await tick();
+  assert.equal(calls.sent.length, 1, "turn start opened the live thread card");
+
+  // Before the fix, msgLive.detachThreadCard is undefined → the agentMessage
+  // completion path throws TypeError. This must NOT throw.
+  fireTurn(transport, "thread_t", [mdPath, pngPath], "all done");
+  await tick();
+
+  const replies = state.outboundReplies.list({ channel: "telegram", pendingOnly: false });
+  const textReplies = replies.filter((r) => r.kind === "text");
+  const mediaReplies = replies.filter((r) => r.kind === "media");
+  assert.equal(textReplies.length, 1, "one inline text reply for the small .md");
+  assert.ok(textReplies[0].text.includes("notes.md"), "inline text carries the md file name");
+  assert.equal(mediaReplies.length, 1, "the png is auto-sent as a media attachment (fileButtons=0)");
+  assert.equal(mediaReplies[0].path, pngPath);
+
+  // The final card was edited onto the claimed session (not re-sent fresh).
+  assert.ok(calls.edited.length >= 1, "the completion card was edited onto the live message");
+  assert.equal(calls.edited.at(-1).messageId, 77);
+});

@@ -73,13 +73,25 @@ export class TelegramRuntimeService extends BaseChannelRuntime {
     return true;
   }
 
-  async finishThreadCard(threadId, card) {
+  // Claims the session synchronously (clears the throttle timer, drops it from
+  // the map) so a racing completion path can't double-deliver. Mirrors feishu /
+  // dingtalk so state.js's agentMessage completion path works for telegram too.
+  detachThreadCard(threadId) {
     const session = this.cardSessions.get(threadId);
-    if (!session) return false;
+    if (!session) return null;
     if (session.timer) { clearTimeout(session.timer); session.timer = null; }
     this.cardSessions.delete(threadId);
-    await this._edit(session, card);
-    return true;
+    return session;
+  }
+
+  async sendDetachedThreadCard(session, card) {
+    return this._edit(session, card);
+  }
+
+  async finishThreadCard(threadId, card) {
+    const session = this.detachThreadCard(threadId);
+    if (!session) return false;
+    return this.sendDetachedThreadCard(session, card);
   }
 
   async _edit(session, card) {
