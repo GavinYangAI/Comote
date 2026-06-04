@@ -556,6 +556,11 @@ export function createComoteState({
       const completedBinding = commandRouter.getThreadBinding(event.threadId);
       const completedLive = liveCardRuntime(completedBinding?.channel);
       if (completedLive && completedLive.hasThreadCard(event.threadId)) {
+        // Reached only for the rare turn with NO agentMessage (codex normally
+        // emits agentMessage first, which claims the card and runs the B/C split
+        // in deliverChangedFilesAndFinish). Here the card just renders all files
+        // as buttons — no inline-text split, no dingtalk auto-attach, no tooMany
+        // cap. Acceptable for this edge case; files stay reachable via /file.
         const tail = streamTextByThread.get(event.threadId) ?? t("state.completed.fallback");
         completedLive
           .finishThreadCard(
