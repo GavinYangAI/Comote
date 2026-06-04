@@ -23,7 +23,7 @@ test("setLocale switches language; unknown falls back to default", () => {
 
 test("interpolates {vars}", () => {
   setLocale("zh");
-  assert.equal(t("cmd.file.sending", { name: "a.png" }), "正在发送：a.png");
+  assert.equal(t("file.delivery.missing", { path: "a.png" }), "⚠️ 文件不存在：a.png");
 });
 
 test("missing key falls back to zh then to the key itself", () => {
