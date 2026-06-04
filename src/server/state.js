@@ -799,6 +799,7 @@ export function createComoteState({
       outboundReplies.enqueue({
         channel,
         conversationId: binding.conversationId,
+        ...(binding.accountId ? { accountId: binding.accountId } : {}),
         kind: "text",
         text: event.text ?? "",
         dedupeKey: `agent:${event.itemId ?? event.threadId}`,
