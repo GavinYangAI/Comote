@@ -102,6 +102,8 @@ export default {
   "file.delivery.missing": "⚠️ ファイルが見つかりません：{path}",
   "file.delivery.readError": "⚠️ ファイルの読み込みに失敗しました：{path}",
   "file.delivery.truncated": "…（内容が長すぎるため省略しました。完全なファイルは下記の添付をご覧ください）",
+  "changedFiles.tooMany": "Codex が {count} 個のファイルを変更しました。多いため自動送信しません。`/file <パス>` で個別に取得してください：{names}",
+  "file.delivery.localPath": "📄 {name}（このチャネルは添付に未対応です。ローカルでご確認ください）：{path}",
   "cmd.project.needOpen": "まず /open <プロジェクト番号またはパス> でプロジェクトを選択してください。",
   "state.completed.fallback": "このタスクは完了しました。",
   "state.error.card": "Codex エラー：{message}",
