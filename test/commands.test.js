@@ -1,6 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { resolve } from "node:path";
+import { mkdtemp, writeFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import { AuthorizationStore } from "../src/core/authorization.js";
 import { ProjectStore } from "../src/core/projects.js";
@@ -484,4 +487,69 @@ test("cancelThread interrupts the thread via the desktop connector", async () =>
 
   await router.cancelThread("thread_x");
   assert.deepEqual(cancelled, ["thread_x"]);
+});
+
+test("/file on a non-feishu channel delivers (no feishuOnly rejection)", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "comote-cmd-"));
+  try {
+    const p = join(dir, "notes.md");
+    await writeFile(p, "# hi\nbody line\n");
+
+    const authorization = new AuthorizationStore();
+    const projects = new ProjectStore();
+    const sessions = new SessionStore();
+    const enqueued = [];
+    const outboundQueue = { enqueue: (r) => enqueued.push(r) };
+    const identity = { channel: "telegram", stableId: "tg_owner", displayName: "A" };
+    const router = new CommandRouter({ authorization, projects, sessions, outboundQueue });
+    authorization.confirmIdentity(identity);
+    projects.replaceProjects([{ name: "proj", path: dir, source: "codex-desktop", status: "available" }]);
+
+    router.handleMessage({ identity, text: "/open 1" });
+    await router.handleMessageAsync({ identity, text: "hi", conversation: { channel: "telegram", conversationId: "chat1" } });
+
+    enqueued.length = 0;
+    const reply = await router.handleMessageAsync({ identity, text: "/file notes.md", conversation: { channel: "telegram", conversationId: "chat1" } });
+
+    const textReplies = enqueued.filter((r) => r.kind === "text");
+    assert.equal(textReplies.length, 1);
+    assert.equal(textReplies[0].channel, "telegram");
+    assert.equal(textReplies[0].conversationId, "chat1");
+    assert.match(textReplies[0].text, /notes\.md/);
+    assert.match(textReplies[0].text, /body line/);
+    assert.ok(textReplies[0].dedupeKey, "dedupeKey set so repeats re-send");
+    assert.equal(reply.kind, "ignored");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("/file with a binary file enqueues a media reply on telegram", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "comote-cmd-"));
+  try {
+    const p = join(dir, "pic.png");
+    await writeFile(p, Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+    const authorization = new AuthorizationStore();
+    const projects = new ProjectStore();
+    const sessions = new SessionStore();
+    const enqueued = [];
+    const outboundQueue = { enqueue: (r) => enqueued.push(r) };
+    const identity = { channel: "telegram", stableId: "tg_owner2" };
+    const router = new CommandRouter({ authorization, projects, sessions, outboundQueue });
+    authorization.confirmIdentity(identity);
+    projects.replaceProjects([{ name: "proj", path: dir, source: "codex-desktop", status: "available" }]);
+    router.handleMessage({ identity, text: "/open 1" });
+    await router.handleMessageAsync({ identity, text: "hi", conversation: { channel: "telegram", conversationId: "chat2" } });
+
+    enqueued.length = 0;
+    await router.handleMessageAsync({ identity, text: "/file pic.png", conversation: { channel: "telegram", conversationId: "chat2" } });
+
+    const media = enqueued.filter((r) => r.kind === "media");
+    assert.equal(media.length, 1);
+    assert.equal(media[0].mediaKind, "image");
+    assert.equal(media[0].channel, "telegram");
+    assert.equal(media[0].path, p);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
 });

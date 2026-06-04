@@ -133,9 +133,11 @@ test("/file enqueues a media reply for an in-project file and rejects escape", a
   const { router, identity, outboundQueue } = createRouter();
   const conversation = { channel: "feishu", conversationId: "c1" };
   router.currentProjectByIdentity.set(router.identityKey(identity), dir);
+  // Consume the one-time welcome banner so the /file reply isn't replaced by it.
+  await router.handleMessageAsync({ identity, text: "hi", conversation });
 
   const ok = await router.handleMessageAsync({ identity, text: "/file report.pdf", conversation });
-  assert.match(ok.text ?? "", /report\.pdf/);
+  assert.equal(ok.kind, "ignored");
   assert.equal(
     outboundQueue.snapshot().some((entry) => entry.kind === "media" && entry.mediaKind === "file" && /report\.pdf$/.test(entry.path)),
     true,
@@ -147,17 +149,22 @@ test("/file enqueues a media reply for an in-project file and rejects escape", a
   assert.equal(outboundQueue.snapshot().length, before);
 });
 
-test("/file on a non-feishu (wechat) channel is rejected without enqueue", async () => {
+test("/file on a non-feishu (wechat) channel delivers without rejection", async () => {
   const dir = mkdtempSync(join(tmpdir(), "comote-file-"));
   writeFileSync(join(dir, "report.pdf"), "pdf");
 
   const { router, identity, outboundQueue } = createRouter();
   const conversation = { channel: "wechat", conversationId: "c1" };
   router.currentProjectByIdentity.set(router.identityKey(identity), dir);
+  // Consume the one-time welcome banner so the /file reply isn't replaced by it.
+  await router.handleMessageAsync({ identity, text: "hi", conversation });
 
   const reply = await router.handleMessageAsync({ identity, text: "/file report.pdf", conversation });
-  assert.match(reply.text ?? "", /飞书/);
-  assert.equal(outboundQueue.snapshot().length, 0);
+  assert.equal(reply.kind, "ignored");
+  assert.equal(
+    outboundQueue.snapshot().some((entry) => entry.channel === "wechat" && entry.kind === "media" && /report\.pdf$/.test(entry.path)),
+    true,
+  );
 });
 
 test("/file without a current project tells the user to /open first", async () => {
