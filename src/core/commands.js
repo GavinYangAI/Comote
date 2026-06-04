@@ -2,6 +2,7 @@ import { describeIdentity } from "./authorization.js";
 import { normalizeChannelMessage } from "./channel.js";
 import { t } from "./i18n/index.js";
 import { classifyMedia, resolveWithinProject } from "./paths.js";
+import { buildFileDeliveries } from "./file-delivery.js";
 
 function isAbsolutePath(value) {
   return typeof value === "string" && value.startsWith("/");
@@ -704,22 +705,23 @@ export class CommandRouter {
     if (!conversation) {
       return this.text(t("cmd.file.noConversation"));
     }
-    if (conversation.channel !== "feishu") {
-      return this.text(t("cmd.file.feishuOnly"));
-    }
     if (!this.outboundQueue) {
       return this.text(t("cmd.file.queueUnavailable"));
     }
-    this.outboundQueue.enqueue({
-      channel: conversation.channel,
-      conversationId: conversation.conversationId,
-      ...(conversation.accountId ? { accountId: conversation.accountId } : {}),
-      kind: "media",
-      mediaKind: classifyMedia(safePath),
-      path: safePath,
-      fileName: basename(safePath),
+    const deliveries = await buildFileDeliveries({ path: safePath, fileName: basename(safePath) });
+    // A fresh stamp makes each /file re-send even when the path repeats (the
+    // outbound queue dedupes media by path otherwise).
+    const stamp = Date.now();
+    deliveries.forEach((reply, i) => {
+      this.outboundQueue.enqueue({
+        channel: conversation.channel,
+        conversationId: conversation.conversationId,
+        ...(conversation.accountId ? { accountId: conversation.accountId } : {}),
+        ...reply,
+        dedupeKey: `file:${conversation.conversationId}:${safePath}:${stamp}:${i}`,
+      });
     });
-    return this.text(t("cmd.file.sending", { name: basename(safePath) }));
+    return { kind: "ignored" };
   }
 
   requireCurrentProject(identity) {

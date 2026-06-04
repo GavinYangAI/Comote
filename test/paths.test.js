@@ -1,13 +1,25 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { resolve } from "node:path";
-import { classifyMedia, isWithinDir, resolveWithinProject, sanitizeUploadName } from "../src/core/paths.js";
+import { classifyFile, classifyMedia, isWithinDir, resolveWithinProject, sanitizeUploadName } from "../src/core/paths.js";
 
 test("classifyMedia routes image extensions to image, else file", () => {
   assert.equal(classifyMedia("/a/b/photo.PNG"), "image");
   assert.equal(classifyMedia("chart.jpeg"), "image");
   assert.equal(classifyMedia("notes.txt"), "file");
   assert.equal(classifyMedia("archive"), "file");
+});
+
+test("classifyFile routes text, image, and binary by extension", () => {
+  assert.equal(classifyFile("/a/notes.md"), "text");
+  assert.equal(classifyFile("report.MD"), "text");
+  assert.equal(classifyFile("data.csv"), "text");
+  assert.equal(classifyFile("src/app.js"), "text");
+  assert.equal(classifyFile("/a/photo.PNG"), "image");
+  assert.equal(classifyFile("chart.jpeg"), "image");
+  assert.equal(classifyFile("archive.zip"), "file");
+  assert.equal(classifyFile("report.pdf"), "file");
+  assert.equal(classifyFile("noext"), "file");
 });
 
 test("isWithinDir blocks path escape", () => {
