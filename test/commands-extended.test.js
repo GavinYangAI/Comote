@@ -215,7 +215,7 @@ test("/help and /status localize to en", async () => {
   setLocale("zh");
 });
 
-test("/file needOpen and feishuOnly localize to en", async () => {
+test("/file needOpen localizes to en", async () => {
   setLocale("en");
   const { router, identity } = createRouter();
   const noProject = await router.handleMessageAsync({
