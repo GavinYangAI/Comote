@@ -35,9 +35,10 @@ export function createWeChatRenderer() {
           // message (matches current routeDesktopEvent, which only logs it).
           return "";
         case "media": {
-          // Media is feishu-gated; locale-neutral safety net if one slips through.
+          // WeChat can't send attachments; instead of a bare name the user can't
+          // act on, surface the host path so they can open the file locally.
           const name = reply.fileName ?? reply.path;
-          return name ? `📎 ${name}` : "";
+          return name ? t("file.delivery.localPath", { name, path: reply.path }) : "";
         }
         case "status":
         case "picker":

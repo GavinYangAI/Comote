@@ -222,17 +222,22 @@ export class FeishuRuntimeService extends BaseChannelRuntime {
     }
   }
 
-  // Sends the final card immediately and drops the session.
-  async finishThreadCard(threadId, card) {
+  // Synchronously removes (and returns) a thread's card session, cancelling any
+  // pending throttled flush. Lets a caller CLAIM the card before doing async work
+  // (e.g. reading changed files) so a racing turnCompleted sees no card and skips.
+  detachThreadCard(threadId) {
     const session = this.cardSessions.get(threadId);
-    if (!session) {
-      return false;
-    }
+    if (!session) return null;
     if (session.timer) {
       clearTimeout(session.timer);
       session.timer = null;
     }
     this.cardSessions.delete(threadId);
+    return session;
+  }
+
+  // Sends a final card to an ALREADY-detached session (from detachThreadCard).
+  async sendDetachedThreadCard(session, card) {
     try {
       await this.driver.updateCard({ messageId: session.messageId, card });
       return true;
@@ -240,6 +245,15 @@ export class FeishuRuntimeService extends BaseChannelRuntime {
       this.lastError = error.message;
       return false;
     }
+  }
+
+  // Sends the final card immediately and drops the session.
+  async finishThreadCard(threadId, card) {
+    const session = this.detachThreadCard(threadId);
+    if (!session) {
+      return false;
+    }
+    return this.sendDetachedThreadCard(session, card);
   }
 
   // Handles a Feishu `card.action.trigger` callback. Returns a toast payload.

@@ -102,6 +102,8 @@ export default {
   "file.delivery.missing": "⚠️ 文件不存在：{path}",
   "file.delivery.readError": "⚠️ 文件读取失败：{path}",
   "file.delivery.truncated": "…（内容过长，已截断；完整文件见下方附件）",
+  "changedFiles.tooMany": "Codex 改动了 {count} 个文件，较多未自动发送。用 `/file <路径>` 单独获取：{names}",
+  "file.delivery.localPath": "📄 {name}（本渠道不支持附件，可在本机查看）：{path}",
   "cmd.project.needOpen": "请先用 /open <项目编号或路径> 选择一个项目。",
   "state.completed.fallback": "本次任务已结束。",
   "state.error.card": "Codex 出错：{message}",

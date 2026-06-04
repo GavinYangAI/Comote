@@ -60,7 +60,7 @@ const dingtalkPlugin = {
     displayName: "钉钉 / DingTalk",
     inboundMode: "push",
     binding: "credentials",
-    capabilities: { cards: 1, media: 1, liveUpdates: 1, typing: 0 },
+    capabilities: { cards: 1, media: 1, liveUpdates: 1, typing: 0, fileButtons: 0 },
     descriptionKey: "web.channel.dingtalk.desc",
     icon: "钉",
     configFields: [

@@ -102,6 +102,8 @@ export default {
   "file.delivery.missing": "⚠️ File not found: {path}",
   "file.delivery.readError": "⚠️ Failed to read file: {path}",
   "file.delivery.truncated": "… (content too long, truncated; full file attached below)",
+  "changedFiles.tooMany": "Codex changed {count} files — too many to auto-send. Fetch individually with `/file <path>`: {names}",
+  "file.delivery.localPath": "📄 {name} (this channel can't send attachments; view it locally): {path}",
   "cmd.project.needOpen": "Use /open <project number or path> to select a project first.",
   "state.completed.fallback": "This task is finished.",
   "state.error.card": "Codex error: {message}",

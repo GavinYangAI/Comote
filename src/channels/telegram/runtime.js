@@ -3,6 +3,7 @@ import { BaseChannelRuntime } from "../base/runtime.js";
 import { routerReplyToSemantic } from "../base/messages.js";
 import { createTelegramRenderer } from "./renderer.js";
 import { decodeCallback } from "./cards.js";
+import { resolveWithinProject, classifyMedia } from "../../core/paths.js";
 
 // Telegram runtime. BaseChannelRuntime owns inbound (push), outbound delivery via the
 // renderer, status + driver wiring. This subclass adds: inline-keyboard callback
@@ -28,6 +29,9 @@ export class TelegramRuntimeService extends BaseChannelRuntime {
     this.cardUpdateIntervalMs = cardUpdateIntervalMs;
     // threadId -> { messageId, conversationId, lastSentAt, pendingCard, timer }
     this.cardSessions = new Map();
+    // threadId -> files[] remembered for pushfile callbacks after the card detaches.
+    this.threadFiles = new Map();
+    this._maxThreadFiles = 200;
     this.onAction = (cq) => this.handleCallbackQuery(cq);
   }
 
@@ -37,6 +41,12 @@ export class TelegramRuntimeService extends BaseChannelRuntime {
   }
 
   buildStatusCard(status) {
+    if (status.done && status.threadId && status.files?.length) {
+      this.threadFiles.set(status.threadId, status.files);
+      if (this.threadFiles.size > this._maxThreadFiles) {
+        this.threadFiles.delete(this.threadFiles.keys().next().value);
+      }
+    }
     return this.renderer.buildStatusCard(status);
   }
 
@@ -73,13 +83,25 @@ export class TelegramRuntimeService extends BaseChannelRuntime {
     return true;
   }
 
-  async finishThreadCard(threadId, card) {
+  // Claims the session synchronously (clears the throttle timer, drops it from
+  // the map) so a racing completion path can't double-deliver. Mirrors feishu /
+  // dingtalk so state.js's agentMessage completion path works for telegram too.
+  detachThreadCard(threadId) {
     const session = this.cardSessions.get(threadId);
-    if (!session) return false;
+    if (!session) return null;
     if (session.timer) { clearTimeout(session.timer); session.timer = null; }
     this.cardSessions.delete(threadId);
-    await this._edit(session, card);
-    return true;
+    return session;
+  }
+
+  async sendDetachedThreadCard(session, card) {
+    return this._edit(session, card);
+  }
+
+  async finishThreadCard(threadId, card) {
+    const session = this.detachThreadCard(threadId);
+    if (!session) return false;
+    return this.sendDetachedThreadCard(session, card);
   }
 
   async _edit(session, card) {
@@ -116,6 +138,24 @@ export class TelegramRuntimeService extends BaseChannelRuntime {
       if (!router || !conversationId) return;
       const identity = { channel: "telegram", stableId: conversationId };
       void this.dispatchPickAsync({ identity, selector: String(params.index), pickKind: params.pickKind, conversationId });
+      return;
+    }
+    if (params.action === "pushfile") {
+      const files = this.threadFiles.get(params.threadId);
+      const file = files?.[params.fileIndex];
+      const binding = router?.getThreadBinding?.(params.threadId);
+      const projectPath = binding?.projectPath ?? null;
+      const conv = binding?.conversationId ?? conversationId;
+      if (!file || !projectPath || !conv) return;
+      const safePath = resolveWithinProject(projectPath, file.path);
+      if (!safePath) { this.eventLog?.warn?.("telegram 推送文件：路径越界", { path: file.path }); return; }
+      const { basename } = await import("node:path");
+      this.outboundQueue.enqueue({
+        channel: "telegram", conversationId: conv, kind: "media",
+        mediaKind: classifyMedia(safePath), path: safePath, fileName: basename(safePath),
+        dedupeKey: `pushfile:${conv}:${safePath}:${Date.now()}`,
+      });
+      void this.deliverQueued().catch((err) => this.eventLog?.error?.("telegram 推送文件：发送失败", { error: err.message }));
     }
   }
 

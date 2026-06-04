@@ -102,6 +102,8 @@ export default {
   "file.delivery.missing": "⚠️ Archivo no encontrado: {path}",
   "file.delivery.readError": "⚠️ No se pudo leer el archivo: {path}",
   "file.delivery.truncated": "… (contenido demasiado largo, truncado; archivo completo adjunto abajo)",
+  "changedFiles.tooMany": "Codex cambió {count} archivos: demasiados para enviar automáticamente. Obtenlos con `/file <ruta>`: {names}",
+  "file.delivery.localPath": "📄 {name} (este canal no admite adjuntos; consúltalo en local): {path}",
   "cmd.project.needOpen": "Usa primero /open <número de proyecto o ruta> para seleccionar un proyecto.",
   "state.completed.fallback": "Esta tarea ha finalizado.",
   "state.error.card": "Error de Codex: {message}",

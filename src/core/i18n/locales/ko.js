@@ -102,6 +102,8 @@ export default {
   "file.delivery.missing": "⚠️ 파일을 찾을 수 없습니다: {path}",
   "file.delivery.readError": "⚠️ 파일을 읽지 못했습니다: {path}",
   "file.delivery.truncated": "… (내용이 너무 길어 잘렸습니다. 전체 파일은 아래 첨부를 확인하세요)",
+  "changedFiles.tooMany": "Codex가 파일 {count}개를 변경했습니다. 너무 많아 자동 전송하지 않습니다. `/file <경로>`로 개별 요청하세요: {names}",
+  "file.delivery.localPath": "📄 {name} (이 채널은 첨부를 지원하지 않습니다. 로컬에서 확인하세요): {path}",
   "cmd.project.needOpen": "먼저 /open <프로젝트 번호 또는 경로> 로 프로젝트를 선택하세요.",
   "state.completed.fallback": "이 작업이 완료되었습니다.",
   "state.error.card": "Codex 오류: {message}",

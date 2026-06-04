@@ -102,6 +102,8 @@ export default {
   "file.delivery.missing": "⚠️ Fichier introuvable : {path}",
   "file.delivery.readError": "⚠️ Échec de lecture du fichier : {path}",
   "file.delivery.truncated": "… (contenu trop long, tronqué ; fichier complet joint ci-dessous)",
+  "changedFiles.tooMany": "Codex a modifié {count} fichiers — trop pour un envoi auto. Récupérez-les via `/file <chemin>` : {names}",
+  "file.delivery.localPath": "📄 {name} (ce canal ne gère pas les pièces jointes ; consultez-le en local) : {path}",
   "cmd.project.needOpen": "Utilisez d'abord /open <numéro de projet ou chemin> pour sélectionner un projet.",
   "state.completed.fallback": "Cette tâche est terminée.",
   "state.error.card": "Erreur Codex : {message}",
