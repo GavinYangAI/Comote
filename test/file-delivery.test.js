@@ -21,9 +21,11 @@ test("text file is inlined as a single text reply, fenced", async () => {
     const replies = await buildFileDeliveries({ path: p, fileName: "report.md" });
     assert.equal(replies.length, 1);
     assert.equal(replies[0].kind, "text");
-    assert.match(replies[0].text, /report\.md/);
+    // Assert the actual inlined shape, not just substring presence: header line
+    // then an opening fence, content, closing fence.
+    assert.match(replies[0].text, /^📄 report\.md\n```\n/);
     assert.match(replies[0].text, /hello world/);
-    assert.match(replies[0].text, /```/);
+    assert.match(replies[0].text, /\n```$/);
   });
 });
 

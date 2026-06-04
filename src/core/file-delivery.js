@@ -51,6 +51,9 @@ function truncateText(content) {
   }
   const buf = Buffer.from(text, "utf8");
   if (buf.length > MAX_INLINE_BYTES) {
+    // A hard byte cut may split a trailing multibyte char into a U+FFFD; that's
+    // fine for a truncated preview, which is always followed by the full-file
+    // attachment, so boundary-aware slicing isn't worth the complexity.
     text = buf.subarray(0, MAX_INLINE_BYTES).toString("utf8");
     truncated = true;
   }
