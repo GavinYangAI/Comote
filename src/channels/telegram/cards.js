@@ -18,12 +18,13 @@ const PHASE_TITLE = {
 };
 
 // action → compact callback_data string.
-export function encodeCallback({ action, code, pickKind, index, threadId }) {
+export function encodeCallback({ action, code, pickKind, index, threadId, fileIndex }) {
   switch (action) {
     case "approve": return `ap:${code}`;
     case "reject": return `rj:${code}`;
     case "pick": return `pk:${PICK_KIND_CODE[pickKind] ?? "s"}:${index}`;
     case "cancel": return `ck:${threadId}`;
+    case "pushfile": return `pf:${threadId}:${fileIndex}`;
     default: throw new Error(`unknown callback action: ${action}`);
   }
 }
@@ -38,6 +39,11 @@ export function decodeCallback(data) {
   if (op === "ap") return { action: "approve", code: rest };
   if (op === "rj") return { action: "reject", code: rest };
   if (op === "ck") return { action: "cancel", threadId: rest };
+  if (op === "pf") {
+    const sep = rest.indexOf(":");
+    if (sep === -1) return null;
+    return { action: "pushfile", threadId: rest.slice(0, sep), fileIndex: Number(rest.slice(sep + 1)) };
+  }
   if (op === "pk") {
     const sep = rest.indexOf(":");
     if (sep === -1) return null;
@@ -61,6 +67,15 @@ export function pickerKeyboard(pickKind, items = []) {
       text: truncate(`${it.index}. ${it.label}`, 60),
       callback_data: encodeCallback({ action: "pick", pickKind, index: String(it.index) }),
     }]),
+  };
+}
+
+export function filesKeyboard(threadId, files) {
+  return {
+    inline_keyboard: files.slice(0, 8).map((file, i) => [
+      { text: `📎 ${String(file.name || file.path.split(/[/\\]/).pop() || "").slice(0, 36)}`,
+        callback_data: encodeCallback({ action: "pushfile", threadId, fileIndex: i }) },
+    ]),
   };
 }
 

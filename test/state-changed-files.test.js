@@ -6,6 +6,7 @@ import { join } from "node:path";
 
 import { createComoteState } from "../src/server/state.js";
 import { CodexDesktopConnector } from "../src/connectors/codex-desktop/index.js";
+import { decodeCallback } from "../src/channels/telegram/cards.js";
 
 class MemoryTransport {
   constructor() {
@@ -188,7 +189,7 @@ test("dingtalk (no fileButtons): .md inlines as text, .png auto-sends as media; 
   assert.ok(!serialized.includes("pushfile"), "dingtalk card has no pushfile buttons");
 });
 
-test("telegram (no fileButtons): agentMessage completion doesn't throw; .md inlines, .png auto-sends as media", async () => {
+test("telegram (fileButtons): .md inlines as text, .png becomes a card button (not a media reply)", async () => {
   const { transport, desktop, state } = buildState();
   await desktop.client.connect();
   const { root, mdPath, pngPath } = await makeProject();
@@ -218,8 +219,6 @@ test("telegram (no fileButtons): agentMessage completion doesn't throw; .md inli
   await tick();
   assert.equal(calls.sent.length, 1, "turn start opened the live thread card");
 
-  // Before the fix, msgLive.detachThreadCard is undefined → the agentMessage
-  // completion path throws TypeError. This must NOT throw.
   fireTurn(transport, "thread_t", [mdPath, pngPath], "all done");
   await tick();
 
@@ -228,10 +227,17 @@ test("telegram (no fileButtons): agentMessage completion doesn't throw; .md inli
   const mediaReplies = replies.filter((r) => r.kind === "media");
   assert.equal(textReplies.length, 1, "one inline text reply for the small .md");
   assert.ok(textReplies[0].text.includes("notes.md"), "inline text carries the md file name");
-  assert.equal(mediaReplies.length, 1, "the png is auto-sent as a media attachment (fileButtons=0)");
-  assert.equal(mediaReplies[0].path, pngPath);
+  assert.equal(mediaReplies.length, 0, "the png is NOT auto-sent as media (fileButtons=1)");
 
-  // The final card was edited onto the claimed session (not re-sent fresh).
+  // The final card was edited onto the claimed session (not re-sent fresh) and
+  // carries the png as an inline-keyboard pushfile button.
   assert.ok(calls.edited.length >= 1, "the completion card was edited onto the live message");
-  assert.equal(calls.edited.at(-1).messageId, 77);
+  const finalEdit = calls.edited.at(-1);
+  assert.equal(finalEdit.messageId, 77);
+  const buttons = (finalEdit.replyMarkup?.inline_keyboard ?? []).flat();
+  assert.equal(buttons.length, 1, "only the png renders one button");
+  assert.match(buttons[0].text, /shot\.png/, "the button carries the png file name");
+  const decoded = decodeCallback(buttons[0].callback_data);
+  assert.equal(decoded.action, "pushfile", "the button is a pushfile callback");
+  assert.equal(decoded.fileIndex, 0, "the png is at index 0 of the turn's button files");
 });

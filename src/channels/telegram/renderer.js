@@ -3,7 +3,7 @@ import { stat } from "node:fs/promises";
 import { basename } from "node:path";
 import { t } from "../../core/i18n/index.js";
 import { describeApprovalForChat } from "../base/approval-format.js";
-import { approvalKeyboard, pickerKeyboard, cancelKeyboard, statusText } from "./cards.js";
+import { approvalKeyboard, pickerKeyboard, cancelKeyboard, filesKeyboard, statusText } from "./cards.js";
 
 // Telegram: photos ≤10MB via sendPhoto, documents ≤50MB via sendDocument; degrade
 // past the ceiling. Telegram natively supports inline keyboards, so approval/picker
@@ -17,10 +17,11 @@ export function createTelegramRenderer() {
     // Used by routeDesktopEvent live status card via the runtime.
     buildStatusCard(status) {
       const cancellable = status.threadId && !status.done;
-      return {
-        text: statusText(status),
-        replyMarkup: cancellable ? cancelKeyboard(status.threadId) : null,
-      };
+      let replyMarkup = cancellable ? cancelKeyboard(status.threadId) : null;
+      if (status.done && status.threadId && status.files?.length) {
+        replyMarkup = filesKeyboard(status.threadId, status.files);
+      }
+      return { text: statusText(status), replyMarkup };
     },
 
     async render(reply, { driver }) {
