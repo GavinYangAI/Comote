@@ -9,7 +9,7 @@ import { createTelegramRenderer } from "../src/channels/telegram/renderer.js";
 import { encodeCallback } from "../src/channels/telegram/cards.js";
 
 function makeRuntime(overrides = {}) {
-  const router = { resolveApproval: async () => {}, cancelThread: async () => {}, chooseProject: async () => "chosen", useSessionAsync: async () => "used" };
+  const router = { authorization: { isAuthorized: () => true }, resolveApproval: async () => {}, cancelThread: async () => {}, chooseProject: async () => "chosen", useSessionAsync: async () => "used" };
   const calls = { resolve: [], cancel: [], answer: [] };
   router.resolveApproval = async (code, decision) => { calls.resolve.push([code, decision]); };
   router.cancelThread = async (tid) => { calls.cancel.push(tid); };
@@ -87,6 +87,7 @@ test("buildStatusCard remembers files (bounded) and pushfile click enqueues the 
 
   const enqueued = [];
   const router = {
+    authorization: { isAuthorized: () => true },
     resolveApproval: async () => {}, cancelThread: async () => {},
     getThreadBinding: (tid) => (tid === "t-9" ? { conversationId: "9", projectPath: root } : null),
   };
@@ -121,6 +122,7 @@ test("pushfile click outside the project fence is rejected (no enqueue)", async 
   const enqueued = [];
   const warns = [];
   const router = {
+    authorization: { isAuthorized: () => true },
     resolveApproval: async () => {}, cancelThread: async () => {},
     getThreadBinding: () => ({ conversationId: "9", projectPath: root }),
   };

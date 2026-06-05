@@ -28,6 +28,7 @@ export default {
   "feishu.toast.cancelRequested": "タスクの取消を要求しました",
   "feishu.toast.noProject": "プロジェクトを特定できません。セッションを開き直してください",
   "feishu.toast.pathDenied": "パスが範囲外のため拒否しました",
+  "feishu.toast.notAuthorized": "操作する権限がありません",
   "feishu.toast.pushing": "送信中…",
   "feishu.toast.noConversation": "会話を特定できません。番号で返信してください",
   "feishu.toast.processing": "処理中…",

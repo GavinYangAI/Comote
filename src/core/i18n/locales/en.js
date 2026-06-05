@@ -28,6 +28,7 @@ export default {
   "feishu.toast.cancelRequested": "Cancel requested",
   "feishu.toast.noProject": "Can't locate the project; reopen the session",
   "feishu.toast.pathDenied": "Path out of bounds, denied",
+  "feishu.toast.notAuthorized": "Not authorized",
   "feishu.toast.pushing": "Sending…",
   "feishu.toast.noConversation": "Can't locate the conversation; reply with the number",
   "feishu.toast.processing": "Working…",

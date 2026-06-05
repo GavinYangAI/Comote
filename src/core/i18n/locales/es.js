@@ -28,6 +28,7 @@ export default {
   "feishu.toast.cancelRequested": "Cancelación solicitada",
   "feishu.toast.noProject": "No se puede localizar el proyecto; reabre la sesión",
   "feishu.toast.pathDenied": "Ruta fuera de límites, denegada",
+  "feishu.toast.notAuthorized": "No autorizado",
   "feishu.toast.pushing": "Enviando…",
   "feishu.toast.noConversation": "No se puede localizar la conversación; responde con el número",
   "feishu.toast.processing": "Procesando…",

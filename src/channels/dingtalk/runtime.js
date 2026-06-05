@@ -124,6 +124,18 @@ export class DingTalkRuntimeService extends BaseChannelRuntime {
     if (!params?.action) return {};
     const router = this.adapter?.commandRouter ?? null;
 
+    // Authorize the REAL operator who clicked the button (their staffId), not the
+    // conversationId. A card button is a side-effecting command — anyone in a
+    // group, or any unconfirmed user, must not be able to approve/reject/cancel/
+    // pick. Resolve identity from the callback payload and gate on the router's
+    // authorization store; deny silently (no card update) otherwise.
+    const operatorStaffId = readOperatorStaffId(payload);
+    const identity = operatorStaffId ? { channel: "dingtalk", stableId: operatorStaffId } : null;
+    if (!router?.authorization?.isAuthorized?.(identity)) {
+      this.eventLog?.warn?.("钉钉卡片点击：未授权", { action: params.action, operator: operatorStaffId ?? null });
+      return {};
+    }
+
     if (params.action === "approve" || params.action === "reject") {
       const decision = params.action === "approve" ? "accept" : "decline";
       await router?.resolveApproval?.(params.code, decision);
@@ -134,11 +146,11 @@ export class DingTalkRuntimeService extends BaseChannelRuntime {
 
     if (params.action === "pick") {
       const conversationId = params.conv;
-      if (!router || !conversationId) return {};
+      if (!conversationId) return {};
       // The callback has a tight ack window; routing a pick involves a Codex RPC +
       // a follow-up card. Hand it off and ack immediately; the result lands as a
-      // fresh message when ready (mirrors feishu).
-      const identity = { channel: "dingtalk", stableId: conversationId };
+      // fresh message when ready (mirrors feishu). The pick runs under the
+      // authorized operator's identity (not the conversationId).
       void this.dispatchPickAsync({ identity, selector: String(params.index), pickKind: params.pickKind, conversationId });
       return {};
     }
@@ -168,12 +180,19 @@ export class DingTalkRuntimeService extends BaseChannelRuntime {
       }
       return;
     }
-    const normalized = typeof reply === "string" ? { kind: "text", text: reply } : reply;
-    const dedupeKey = `dingtalk:pick:${identity.stableId}:${pickKind}:${selector}:${Date.now()}`;
-    const semantic = routerReplyToSemantic(normalized, { channel: "dingtalk", conversationId });
-    if (semantic) {
-      await this.adapter.sendReply({ ...semantic, dedupeKey }).catch(() => {});
-      await this.deliverQueued().catch(() => {});
+    // The success tail is also fired-and-forgotten (void dispatchPickAsync), so a
+    // throw here (e.g. routerReplyToSemantic or a sync send error) would surface
+    // as an unhandled rejection. Catch + log so it never crashes the process.
+    try {
+      const normalized = typeof reply === "string" ? { kind: "text", text: reply } : reply;
+      const dedupeKey = `dingtalk:pick:${identity.stableId}:${pickKind}:${selector}:${Date.now()}`;
+      const semantic = routerReplyToSemantic(normalized, { channel: "dingtalk", conversationId });
+      if (semantic) {
+        await this.adapter.sendReply({ ...semantic, dedupeKey }).catch(() => {});
+        await this.deliverQueued().catch(() => {});
+      }
+    } catch (error) {
+      this.eventLog?.error?.("钉钉卡片点击：回复派发失败", { error: error.message });
     }
   }
 }
@@ -187,4 +206,14 @@ function readCallbackParams(payload) {
   } catch {
     return null;
   }
+}
+
+// Resolves the staffId of the user who clicked the card button. DingTalk's
+// TOPIC_CARD callback carries the operator's userId at the top level (the same
+// staffId namespace the adapter authorizes inbound messages under); fall back to
+// other known field names defensively across SDK shapes. Returns null when no
+// operator can be determined (caller denies).
+function readOperatorStaffId(payload) {
+  if (!payload || typeof payload !== "object") return null;
+  return payload.userId ?? payload.userid ?? payload.operatorUserId ?? payload.senderStaffId ?? null;
 }

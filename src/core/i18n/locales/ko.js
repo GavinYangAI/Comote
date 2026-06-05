@@ -28,6 +28,7 @@ export default {
   "feishu.toast.cancelRequested": "작업 취소를 요청했습니다",
   "feishu.toast.noProject": "프로젝트를 찾을 수 없습니다. 세션을 다시 여세요",
   "feishu.toast.pathDenied": "경로가 범위를 벗어나 거부됨",
+  "feishu.toast.notAuthorized": "작업 권한이 없습니다",
   "feishu.toast.pushing": "전송 중…",
   "feishu.toast.noConversation": "대화를 찾을 수 없습니다. 번호로 답장하세요",
   "feishu.toast.processing": "처리 중…",

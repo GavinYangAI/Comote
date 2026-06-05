@@ -1,3 +1,4 @@
+import { timingSafeEqual } from "node:crypto";
 import { createReadStream } from "node:fs";
 import { createServer as createHttpServer } from "node:http";
 import { extname, join, normalize } from "node:path";
@@ -492,5 +493,28 @@ function isAuthorizedApiRequest(request, apiToken) {
   }
   const header = request.headers["x-comote-token"];
   const auth = request.headers.authorization;
-  return header === apiToken || auth === `Bearer ${apiToken}`;
+  const bearer = typeof auth === "string" && auth.startsWith("Bearer ")
+    ? auth.slice("Bearer ".length)
+    : null;
+  return constantTimeEquals(header, apiToken) || constantTimeEquals(bearer, apiToken);
+}
+
+// Length-safe constant-time string comparison. timingSafeEqual throws on
+// unequal-length buffers, so we branch on length first (the token's length is
+// not the secret here) and, on the unequal branch, still run a same-length
+// timingSafeEqual so the work done doesn't vary; equal-length inputs compare in
+// constant time regardless of where the first differing byte is.
+function constantTimeEquals(a, b) {
+  if (typeof a !== "string" || typeof b !== "string") {
+    return false;
+  }
+  const aBuf = Buffer.from(a, "utf8");
+  const bBuf = Buffer.from(b, "utf8");
+  if (aBuf.length !== bBuf.length) {
+    // Still run a comparison against a same-length buffer so the work done does
+    // not vary with whether the lengths happened to match.
+    timingSafeEqual(aBuf, aBuf);
+    return false;
+  }
+  return timingSafeEqual(aBuf, bBuf);
 }

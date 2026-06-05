@@ -56,7 +56,7 @@ test("auto-starts WeChat runtime when a saved login token exists", async () => {
     },
   });
 
-  await tick();
+  await waitFor(() => state.runtime.wechat.getStatus().state === "running");
   assert.equal(state.runtime.wechat.getStatus().state, "running");
   state.runtime.wechat.stop();
 });
@@ -111,8 +111,16 @@ test("can keep WeChat runtime stopped for tests and diagnostics", () => {
   assert.equal(state.runtime.wechat.getStatus().state, "configured");
 });
 
-function tick() {
-  return new Promise((resolve) => setTimeout(resolve, 0));
+// Polls until a condition holds. Auto-start and the live-card open are
+// fire-and-forget, so a fixed timeout races on slow/CI machines. Waiting on the
+// actual post-condition makes the test deterministic.
+async function waitFor(predicate, { timeout = 5000, interval = 5 } = {}) {
+  const start = Date.now();
+  for (;;) {
+    if (await predicate()) return;
+    if (Date.now() - start >= timeout) throw new Error("waitFor: condition not met within timeout");
+    await new Promise((resolve) => setTimeout(resolve, interval));
+  }
 }
 
 test("routeDesktopEvent drives a dingtalk live status card", async (t) => {
@@ -162,7 +170,7 @@ test("routeDesktopEvent drives a dingtalk live status card", async (t) => {
 
   // turnStarted on a dingtalk-bound thread must open a live status card.
   desktop.onEvent({ type: "turnStarted", threadId: "thread-1" });
-  await new Promise((r) => setTimeout(r, 5));
+  await waitFor(() => events.some((e) => e[0] === "create"));
 
   assert.ok(
     events.some((e) => e[0] === "create"),

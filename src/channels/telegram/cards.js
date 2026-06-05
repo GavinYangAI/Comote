@@ -3,7 +3,14 @@
 // at 64 bytes, so we use short opcodes — the chat id + from come on the callback_query
 // itself, so only the action-specific ref needs encoding), inline keyboards, status
 // card text, and pairing-code generation. Config-free, no I/O.
+import { randomInt } from "node:crypto";
 import { t } from "../../core/i18n/index.js";
+
+// Telegram caps a text message at 4096 chars. Reserve room for a card title +
+// step line (and any "(i/n)" chunk prefix) so a split body never overflows once
+// those are prepended. Exported so the runtime/renderer share one source of truth.
+export const TELEGRAM_MESSAGE_LIMIT = 4096;
+export const STATUS_BODY_LIMIT = 3500;
 
 const PICK_KIND_CODE = { project: "p", session: "s" };
 const PICK_KIND_NAME = { p: "project", s: "session" };
@@ -86,14 +93,55 @@ export function cancelKeyboard(threadId) {
 export function statusText({ phase, steps = 0, text = "" }) {
   const title = t(PHASE_TITLE[phase] ?? PHASE_TITLE.progress);
   const stepLine = steps > 0 ? t("card.steps.running", { steps }) : t("card.steps.starting");
-  return [title, stepLine, String(text ?? "")].filter(Boolean).join("\n\n");
+  // Clamp the body so the assembled card stays under Telegram's 4096-char ceiling;
+  // a too-long editMessageText would 400 and strand the card mid-progress.
+  const body = clampStatusBody(String(text ?? ""));
+  return [title, stepLine, body].filter(Boolean).join("\n\n");
 }
 
-// 6 chars from a no-look-alike alphabet (no 0/O/1/I). rng() ∈ [0,1) injectable.
+// Trims the status body to STATUS_BODY_LIMIT, keeping the tail (the latest output
+// is what matters in a live card) and marking the head as elided.
+export function clampStatusBody(text, limit = STATUS_BODY_LIMIT) {
+  const value = String(text ?? "");
+  if (value.length <= limit) return value;
+  const ellipsis = t("state.chunk.truncated");
+  const keep = Math.max(0, limit - ellipsis.length - 1);
+  return `${ellipsis}\n${value.slice(value.length - keep)}`;
+}
+
+// Splits a long reply into Telegram-sized chunks at line boundaries where possible,
+// hard-splitting any single line longer than the limit. Mirrors the WeChat/Feishu
+// chunkers so a final answer that overflows editMessageText survives as fresh sends.
+export function chunkMessage(text, limit = TELEGRAM_MESSAGE_LIMIT) {
+  const value = String(text ?? "");
+  if (!value) return [];
+  if (value.length <= limit) return [value];
+  const chunks = [];
+  let current = "";
+  for (const rawLine of value.split("\n")) {
+    const pieces = rawLine.length > limit ? (rawLine.match(new RegExp(`[\\s\\S]{1,${limit}}`, "g")) ?? [rawLine]) : [rawLine];
+    for (const piece of pieces) {
+      const candidate = current ? `${current}\n${piece}` : piece;
+      if (current && candidate.length > limit) {
+        chunks.push(current);
+        current = piece;
+      } else {
+        current = candidate;
+      }
+    }
+  }
+  if (current) chunks.push(current);
+  return chunks;
+}
+
+// 8 chars from a no-look-alike alphabet (no 0/O/1/I). The pairing code is a shared
+// secret an unpaired sender must reproduce, so it draws from a CSPRNG by default.
+// randomIndex(max) → integer in [0, max) is injectable for deterministic tests;
+// it defaults to crypto.randomInt (rejection-sampled, unbiased).
 const PAIR_ALPHABET = "23456789ABCDEFGHJKLMNPQRSTUVWXYZ";
-export function generatePairingCode(rng = Math.random) {
+export function generatePairingCode(randomIndex = (max) => randomInt(max)) {
   let out = "";
-  for (let i = 0; i < 6; i++) out += PAIR_ALPHABET[Math.floor(rng() * PAIR_ALPHABET.length)];
+  for (let i = 0; i < 8; i++) out += PAIR_ALPHABET[randomIndex(PAIR_ALPHABET.length)];
   return out;
 }
 

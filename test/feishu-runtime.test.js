@@ -14,6 +14,18 @@ import { FeishuRuntimeService } from "../src/channels/feishu/runtime.js";
 import { createFeishuRenderer } from "../src/channels/feishu/renderer.js";
 import { setLocale } from "../src/core/i18n/index.js";
 
+// Polls until a condition holds. The pushfile delivery is fire-and-forget
+// (`void this.deliverQueued()`), so a fixed timeout races on slow/CI machines.
+// Waiting on the actual post-condition makes the test deterministic.
+async function waitFor(predicate, { timeout = 5000, interval = 5 } = {}) {
+  const start = Date.now();
+  for (;;) {
+    if (await predicate()) return;
+    if (Date.now() - start >= timeout) throw new Error("waitFor: condition not met within timeout");
+    await new Promise((resolve) => setTimeout(resolve, interval));
+  }
+}
+
 // Build a FeishuRuntimeService with a renderer wired by default (A8: the
 // runtime now extends BaseChannelRuntime and renders via the feishu renderer).
 // Tests pass their own adapter/driver/etc. via overrides; renderer can still be
@@ -348,6 +360,7 @@ test("handleCardAction resolves an approval and refreshes the card", async () =>
     adapter: {
       handleInbound: async () => ({ kind: "text" }),
       commandRouter: {
+        authorization: { isAuthorized: () => true },
         resolveApproval: async (code, decision) => resolved.push([code, decision]),
       },
     },
@@ -377,13 +390,17 @@ test("handleCardAction cancels a thread", async () => {
   const runtime = makeRuntime({
     adapter: {
       handleInbound: async () => ({ kind: "text" }),
-      commandRouter: { cancelThread: async (threadId) => cancelled.push(threadId) },
+      commandRouter: {
+        authorization: { isAuthorized: () => true },
+        cancelThread: async (threadId) => cancelled.push(threadId),
+      },
     },
     outboundQueue: new OutboundQueue(),
     driver: { getStatus: () => ({ state: "configured" }), verifyEvent: () => true },
   });
 
   await runtime.handleCardAction({
+    open_id: "ou_owner",
     action: { value: { kind: "cancel", threadId: "thread_c" } },
   });
   assert.deepEqual(cancelled, ["thread_c"]);
@@ -456,6 +473,7 @@ test("handleCardAction pick branch toasts immediately and logs the async error w
   // "处理中…" toast was already returned.
   const adapter = new FeishuChannelAdapter({
     commandRouter: {
+      authorization: { isAuthorized: () => true },
       conversationByIdentity: new Map([["feishu:ou_user", { conversationId: "oc_chat" }]]),
       chooseProject: async () => ({ kind: "text", text: "ok" }),
       useSessionAsync: async () => "ok",
@@ -505,6 +523,7 @@ test("handleCardAction dispatches a pick directly by pickKind", async () => {
   // the renderer turns it into a card delivered through driver.sendCard.
   const adapter = new FeishuChannelAdapter({
     commandRouter: {
+      authorization: { isAuthorized: () => true },
       conversationByIdentity: new Map([["feishu:ou_owner", { conversationId: "oc_chat" }]]),
       chooseProject: async (identity, selector) => {
         chosen.push(["project", identity.stableId, selector]);
@@ -563,6 +582,7 @@ test("handleCardAction pick delivers a card via the REAL adapter (no sendReplyCa
   const outbound = new OutboundQueue();
   const adapter = new FeishuChannelAdapter({
     commandRouter: {
+      authorization: { isAuthorized: () => true },
       conversationByIdentity: new Map([["feishu:ou_owner", { conversationId: "oc_chat" }]]),
       chooseProject: async () => ({ kind: "text", text: "已切换到项目 X" }),
       useSessionAsync: async () => ({ kind: "text", text: "已切换到对话 Y" }),
@@ -690,6 +710,7 @@ test("handleCardAction pushfile enqueues media within project, rejects escape", 
 
   const outboundQueue = new OutboundQueue();
   const router = {
+    authorization: { isAuthorized: () => true },
     getThreadBinding: (tid) =>
       tid === "t1" ? { channel: "feishu", conversationId: "c1", projectPath: dir } : null,
   };
@@ -707,7 +728,7 @@ test("handleCardAction pushfile enqueues media within project, rejects escape", 
     event: { action: { value: { kind: "pushfile", threadId: "t1", path: join(dir, "a.png") } }, open_id: "u1" },
   });
   assert.equal(ok.toast.type, "info");
-  await new Promise((r) => setTimeout(r, 10));
+  await waitFor(() => outboundQueue.snapshot().some((e) => e.kind === "media"));
   assert.equal(outboundQueue.snapshot().some((e) => e.kind === "media"), true);
 
   const bad = await runtime.handleCardAction({
@@ -768,6 +789,7 @@ test("handleCardAction pushfile with no binding returns error and enqueues nothi
     event: { action: { value: { kind: "pushfile", threadId: "nope", path: "/etc/passwd" } }, open_id: "u1" },
   });
   assert.equal(res.toast.type, "error");
-  await new Promise((r) => setTimeout(r, 10));
+  // The no-binding branch returns the error synchronously and never enqueues or
+  // dispatches anything (no fire-and-forget), so there is nothing to wait on.
   assert.equal(outboundQueue.snapshot().length, 0);
 });

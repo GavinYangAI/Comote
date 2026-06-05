@@ -4,6 +4,18 @@ import assert from "node:assert/strict";
 import { TelegramRuntimeService } from "../src/channels/telegram/runtime.js";
 import { createTelegramRenderer } from "../src/channels/telegram/renderer.js";
 
+// Polls until a condition holds. The card flush is fire-and-forget, so a fixed
+// timeout races on slow/CI machines. Waiting on the actual post-condition makes
+// the test deterministic.
+async function waitFor(predicate, { timeout = 5000, interval = 5 } = {}) {
+  const start = Date.now();
+  for (;;) {
+    if (await predicate()) return;
+    if (Date.now() - start >= timeout) throw new Error("waitFor: condition not met within timeout");
+    await new Promise((resolve) => setTimeout(resolve, interval));
+  }
+}
+
 function makeRuntime() {
   const calls = { send: [], edit: [] };
   const driver = {
@@ -37,7 +49,7 @@ test("update then finish edits the tracked message", async () => {
   const { rt, calls } = makeRuntime();
   await rt.openThreadCard({ threadId: "t1", conversationId: "9", card: rt.buildStatusCard({ phase: "started", threadId: "t1" }) });
   rt.updateThreadCard("t1", rt.buildStatusCard({ phase: "progress", threadId: "t1", steps: 1, text: "working" }));
-  await new Promise((r) => setTimeout(r, 5));
+  await waitFor(() => calls.edit.length >= 1);
   assert.equal(calls.edit.length, 1);
   assert.equal(calls.edit[0].messageId, 42);
   await rt.finishThreadCard("t1", rt.buildStatusCard({ phase: "completed", threadId: "t1", text: "done", done: true }));

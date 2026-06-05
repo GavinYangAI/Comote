@@ -28,7 +28,7 @@ test("configuring a token starts the runtime and generates a pairing code", asyn
   assert.equal(pub.configured, true);
   assert.equal(state.runtime.telegram.getStatus().state, "running");
   // pairing code generated on start (unpaired)
-  assert.match(state.runtime.telegram.getConfig().pairingCode ?? "", /^[0-9A-Z]{6}$/);
+  assert.match(state.runtime.telegram.getConfig().pairingCode ?? "", /^[0-9A-Z]{8}$/);
   assert.equal(state.runtime.telegram.getConfig().linkedChatId, null); // not bound yet
 });
 

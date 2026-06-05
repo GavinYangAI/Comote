@@ -256,6 +256,53 @@ export class FeishuRuntimeService extends BaseChannelRuntime {
     return this.sendDetachedThreadCard(session, card);
   }
 
+  // Resolves the clicking user's Comote identity from a card action. Feishu
+  // identities use the operator's open_id as the stableId (see adapter.js), so
+  // the open_id surfaced by normalizeCardAction IS the clicker's stableId.
+  clickerIdentity(action) {
+    if (!action.openId) {
+      return null;
+    }
+    return { channel: "feishu", stableId: action.openId };
+  }
+
+  // True when the clicker is on the allow-list. Card buttons are a side channel
+  // around the inbound message path, so they MUST re-check authorization — a
+  // different (unauthorized) group member can otherwise click another user's
+  // approve/cancel/pushfile button and trigger Codex shell execution.
+  //
+  // The gate is only enforced when the router actually exposes an authorization
+  // store. Every real CommandRouter requires `authorization` (constructor arg,
+  // always wired by state.js), so in production the gate is always active; only
+  // bare test-double routers omit it, and there is no allow-list to enforce.
+  isClickerAuthorized(router, identity) {
+    const authz = router?.authorization;
+    // Fail closed: with no authorization store wired in, an auth gate must deny
+    // rather than allow (matches the Telegram/DingTalk callback gates). In
+    // production CommandRouter always provides `authorization`, so this branch
+    // is only reachable from a misconfigured/test router.
+    if (typeof authz?.isAuthorized !== "function") {
+      return false;
+    }
+    return Boolean(identity) && authz.isAuthorized(identity);
+  }
+
+  // True when the thread (and thus its card) is owned by a different identity
+  // than the clicker. Prevents one authorized group member from resolving
+  // another member's approval. Threads with no recorded owner are not gated by
+  // ownership (authorization alone applies).
+  clickerIsNotThreadOwner(router, identity, threadId) {
+    if (!threadId || !identity) {
+      return false;
+    }
+    const owner = router?.getThreadBinding?.(threadId)?.ownerStableId ?? null;
+    return Boolean(owner) && owner !== identity.stableId;
+  }
+
+  deniedToast() {
+    return { toast: { type: "error", content: t("feishu.toast.notAuthorized") } };
+  }
+
   // Handles a Feishu `card.action.trigger` callback. Returns a toast payload.
   async handleCardAction(payload) {
     const action = normalizeCardAction(payload);
@@ -263,6 +310,19 @@ export class FeishuRuntimeService extends BaseChannelRuntime {
       return {};
     }
     const router = this.adapter?.commandRouter ?? null;
+    const identity = this.clickerIdentity(action);
+    // Gate every side-effecting button on allow-list membership — matching the
+    // Telegram/DingTalk callback gates. `pick` is included: the command router
+    // does NOT re-authorize, so without this an unauthorized clicker could drive
+    // project/session selection for their own identity.
+    const guarded = ["approval", "cancel", "pushfile", "pick"].includes(action.value.kind);
+    if (guarded && !this.isClickerAuthorized(router, identity)) {
+      this.eventLog?.warn?.("飞书卡片操作：未授权点击", {
+        kind: action.value.kind,
+        openId: action.openId ?? null,
+      });
+      return this.deniedToast();
+    }
     if (action.value.kind === "approval") {
       await router?.resolveApproval(action.value.code, action.value.decision);
       if (action.messageId && this.driver?.updateCard) {
@@ -285,10 +345,18 @@ export class FeishuRuntimeService extends BaseChannelRuntime {
       };
     }
     if (action.value.kind === "cancel") {
+      if (this.clickerIsNotThreadOwner(router, identity, action.value.threadId)) {
+        this.eventLog?.warn?.("飞书卡片操作：非所有者取消", { openId: action.openId ?? null });
+        return this.deniedToast();
+      }
       await router?.cancelThread?.(action.value.threadId);
       return { toast: { type: "info", content: t("feishu.toast.cancelRequested") } };
     }
     if (action.value.kind === "pushfile") {
+      if (this.clickerIsNotThreadOwner(router, identity, action.value.threadId)) {
+        this.eventLog?.warn?.("飞书卡片操作：非所有者推送文件", { openId: action.openId ?? null });
+        return this.deniedToast();
+      }
       const binding = router?.getThreadBinding?.(action.value.threadId);
       const projectPath = binding?.projectPath ?? null;
       const conversationId = binding?.conversationId ?? action.chatId ?? null;

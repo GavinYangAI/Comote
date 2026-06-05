@@ -3,6 +3,18 @@ import assert from "node:assert/strict";
 import { BaseChannelRuntime } from "../src/channels/base/runtime.js";
 import { OutboundQueue } from "../src/core/outbound-queue.js";
 
+// Polls until a condition holds. Inbound delivery/render runs off the awaited
+// onEvent as a fire-and-forget step, so a fixed timeout races on slow/CI
+// machines. Waiting on the actual post-condition makes the test deterministic.
+async function waitFor(predicate, { timeout = 5000, interval = 5 } = {}) {
+  const start = Date.now();
+  for (;;) {
+    if (await predicate()) return;
+    if (Date.now() - start >= timeout) throw new Error("waitFor: condition not met within timeout");
+    await new Promise((resolve) => setTimeout(resolve, interval));
+  }
+}
+
 function makeRuntime(overrides = {}) {
   const rendered = [];
   const queue = new OutboundQueue();
@@ -80,7 +92,7 @@ test("push mode start wires the driver event stream; inbound routes + delivers",
   await runtime.start();
   assert.equal(runtime.getStatus().state, "running");
   await handlers.onEvent({ id: "m1" });
-  await new Promise((r) => setTimeout(r, 0));
+  await waitFor(() => rendered.length >= 1);
   assert.equal(handled.length, 1);
   assert.deepEqual(rendered, ["reply"]);
   runtime.stop();

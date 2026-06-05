@@ -2,7 +2,7 @@
 import { BaseChannelRuntime } from "../base/runtime.js";
 import { routerReplyToSemantic } from "../base/messages.js";
 import { createTelegramRenderer } from "./renderer.js";
-import { decodeCallback } from "./cards.js";
+import { decodeCallback, chunkMessage } from "./cards.js";
 import { resolveWithinProject, classifyMedia } from "../../core/paths.js";
 
 // Telegram runtime. BaseChannelRuntime owns inbound (push), outbound delivery via the
@@ -58,7 +58,11 @@ export class TelegramRuntimeService extends BaseChannelRuntime {
   async openThreadCard({ threadId, conversationId, card }) {
     if (!conversationId) return false;
     const msg = await this.driver.sendMessage({ chatId: conversationId, text: card.text, replyMarkup: card.replyMarkup ?? null });
-    this.cardSessions.set(threadId, { messageId: msg.message_id, conversationId, lastSentAt: Date.now(), pendingCard: null, timer: null });
+    // Remember who owns this thread so a different (even authorized) user cannot
+    // drive someone else's card via a forwarded/leaked button. Telegram's
+    // accountId on the binding is the sender's id (== identity.stableId).
+    const ownerStableId = this.adapter?.commandRouter?.getThreadBinding?.(threadId)?.accountId ?? null;
+    this.cardSessions.set(threadId, { messageId: msg.message_id, conversationId, ownerStableId, lastSentAt: Date.now(), pendingCard: null, timer: null });
     return true;
   }
 
@@ -109,11 +113,32 @@ export class TelegramRuntimeService extends BaseChannelRuntime {
       await this.driver.editMessageText({ chatId: session.conversationId, messageId: session.messageId, text: card.text, replyMarkup: card.replyMarkup ?? null });
       return true;
     } catch (error) {
+      const message = error?.message ?? "";
       // Telegram rejects an identical edit with "message is not modified" — benign.
-      if (/not modified/i.test(error.message)) return true;
-      this.lastError = error.message;
+      if (/not modified/i.test(message)) return true;
+      // Defensive backstop: completion cards pre-clamp their body (tail kept), so
+      // this rarely fires — but a "message is too long" 400 would otherwise strand
+      // the card mid-progress. Fall back to chunked fresh sends so the reply survives.
+      if (/too long|message_too_long|MESSAGE_TOO_LONG/i.test(message)) {
+        const delivered = await this._sendChunked(session.conversationId, card.text).catch((err) => { this.lastError = err.message; return false; });
+        return delivered;
+      }
+      this.lastError = message;
       return false;
     }
+  }
+
+  // Sends a body as one or more fresh messages, each <=4096 chars. Used as the
+  // recovery path when editMessageText rejects an over-long card body.
+  async _sendChunked(chatId, text) {
+    // Reserve room for a possible "(i/n)\n" prefix so a prefixed chunk never overflows.
+    const chunks = chunkMessage(text, 4096 - 16);
+    if (chunks.length === 0) return true;
+    for (let i = 0; i < chunks.length; i += 1) {
+      const body = chunks.length > 1 ? `(${i + 1}/${chunks.length})\n${chunks[i]}` : chunks[i];
+      await this.driver.sendMessage({ chatId, text: body });
+    }
+    return true;
   }
 
   // Handles an inline-keyboard callback_query (driver onAction). The chat id + sender
@@ -124,6 +149,26 @@ export class TelegramRuntimeService extends BaseChannelRuntime {
     await this.driver.answerCallbackQuery({ callbackQueryId: cq.id }).catch(() => {});
     if (!params) return;
     const router = this.adapter?.commandRouter ?? null;
+
+    // Authorize the REAL clicker (callback_query.from), not the chat. Inline buttons
+    // can be pressed by anyone who can see the message (e.g. in a shared/forwarded
+    // context), so every side effect below must pass the same gate inbound messages
+    // do. Drop silently (the callback was already answered) before any side effect.
+    const clickerId = cq.from?.id != null ? String(cq.from.id) : null;
+    const identity = clickerId != null ? { channel: "telegram", stableId: clickerId } : null;
+    if (!identity || !router?.authorization?.isAuthorized?.(identity)) {
+      this.eventLog?.warn?.("telegram 回调：未授权点击，已忽略", { action: params.action, clickerId });
+      return;
+    }
+    // Where a card session exists, the clicker must be its owner — an authorized
+    // user still may not drive another operator's thread.
+    if (params.threadId != null) {
+      const session = this.cardSessions.get(params.threadId);
+      if (session?.ownerStableId != null && session.ownerStableId !== clickerId) {
+        this.eventLog?.warn?.("telegram 回调：点击者非线程归属人，已忽略", { action: params.action, clickerId });
+        return;
+      }
+    }
 
     if (params.action === "approve" || params.action === "reject") {
       const decision = params.action === "approve" ? "accept" : "decline";
@@ -136,7 +181,7 @@ export class TelegramRuntimeService extends BaseChannelRuntime {
     }
     if (params.action === "pick") {
       if (!router || !conversationId) return;
-      const identity = { channel: "telegram", stableId: conversationId };
+      // M1: route under the clicker's identity (already authorized above), not the chat id.
       void this.dispatchPickAsync({ identity, selector: String(params.index), pickKind: params.pickKind, conversationId });
       return;
     }

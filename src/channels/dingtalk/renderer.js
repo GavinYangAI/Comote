@@ -11,8 +11,19 @@ import {
   statusCardData,
 } from "./cards.js";
 
-// Image ≤1MB / file ≤10MB on DingTalk; degrade to text past the file ceiling.
-export const MAX_MEDIA_BYTES = 10 * 1024 * 1024;
+// DingTalk's upload API caps images at ~1MB but allows larger generic files, so
+// each media kind needs its own ceiling (mirrors telegram's per-kind limits). A
+// 1-10MB image must degrade to the tooLarge notice instead of failing at the API.
+export const MAX_IMAGE_BYTES = 1 * 1024 * 1024;
+export const MAX_FILE_BYTES = 10 * 1024 * 1024;
+// Back-compat alias for the previous single ceiling (the file limit).
+export const MAX_MEDIA_BYTES = MAX_FILE_BYTES;
+
+// DingTalk's markdown payload has a length limit; a long reply that exceeds it
+// fails permanently after retries. Chunk long text into chat-sized pieces before
+// sendMarkdown (mirrors WeChat's chunkForChannel).
+const MARKDOWN_CHUNK_SIZE = 1500;
+const MARKDOWN_MAX_CHUNKS = 6;
 
 // DingTalk renderer. Interactive kinds (approval/picker) render as a card when a
 // template id is configured, else degrade to markdown text (so the channel works
@@ -55,7 +66,13 @@ export function createDingTalkRenderer({ templates = {} } = {}) {
         default: {
           const text = reply.text ?? "";
           if (!text) return;
-          await driver.sendMarkdown({ receiveId: reply.conversationId, title: "Codex", text });
+          // Long replies exceed DingTalk's markdown payload limit and fail
+          // permanently after retries; chunk before sending so each piece fits.
+          const chunks = chunkForChannel(text);
+          for (let i = 0; i < chunks.length; i += 1) {
+            const body = chunks.length > 1 ? `(${i + 1}/${chunks.length})\n${chunks[i]}` : chunks[i];
+            await driver.sendMarkdown({ receiveId: reply.conversationId, title: "Codex", text: body });
+          }
         }
       }
     },
@@ -115,14 +132,16 @@ export function createDingTalkRenderer({ templates = {} } = {}) {
         await driver.sendText({ receiveId: reply.conversationId, text: t("dingtalk.media.missing", { path: reply.path }) });
         return;
       }
-      if (size > MAX_MEDIA_BYTES) {
+      const isImage = reply.mediaKind === "image";
+      const limit = isImage ? MAX_IMAGE_BYTES : MAX_FILE_BYTES;
+      if (size > limit) {
         await driver.sendText({
           receiveId: reply.conversationId,
           text: t("dingtalk.media.tooLarge", { name: basename(reply.path), size: Math.round(size / 1024 / 1024), path: reply.path }),
         });
         return;
       }
-      if (reply.mediaKind === "image") {
+      if (isImage) {
         const mediaId = await driver.uploadMedia(reply.path, "image");
         await driver.sendImage({ receiveId: reply.conversationId, mediaId });
       } else {
@@ -132,4 +151,24 @@ export function createDingTalkRenderer({ templates = {} } = {}) {
       }
     },
   };
+}
+
+// Splits a long reply into chat-sized chunks (mirrors WeChat's chunkForChannel):
+// past MARKDOWN_MAX_CHUNKS the tail is truncated with a "see full transcript
+// locally" notice so the message still fits DingTalk's markdown payload limit.
+function chunkForChannel(text, size = MARKDOWN_CHUNK_SIZE, maxChunks = MARKDOWN_MAX_CHUNKS) {
+  const value = String(text ?? "").trim();
+  if (!value) {
+    return [];
+  }
+  const chunks = [];
+  for (let index = 0; index < value.length; index += size) {
+    chunks.push(value.slice(index, index + size));
+  }
+  if (chunks.length > maxChunks) {
+    const kept = chunks.slice(0, maxChunks);
+    kept[maxChunks - 1] += "\n" + t("state.chunk.truncated");
+    return kept;
+  }
+  return chunks;
 }

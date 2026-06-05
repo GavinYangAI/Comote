@@ -3,6 +3,24 @@ import assert from "node:assert/strict";
 
 import { OutboundQueue } from "../src/core/outbound-queue.js";
 
+test("pendingActive surfaces a not-yet-due retry that list({pendingOnly}) hides", () => {
+  // Regression: the push re-drain scheduler must see a backed-off retry even
+  // before its window elapses, or the entry is stranded until the next inbound.
+  const queue = new OutboundQueue();
+  const entry = queue.enqueue({ channel: "feishu", conversationId: "c1", inReplyTo: "m1", text: "hi" });
+  // Second failure → status "retrying" with nextAttemptAt ~1s in the future.
+  queue.markFailed(entry.id, new Error("first"));
+  queue.markFailed(entry.id, new Error("second"));
+
+  // It is pending but NOT due, so the due-coupled list hides it...
+  assert.equal(queue.list({ channel: "feishu", pendingOnly: true }).length, 0);
+  // ...while pendingActive still reports it (with its future nextAttemptAt).
+  const pending = queue.pendingActive({ channel: "feishu" });
+  assert.equal(pending.length, 1);
+  assert.equal(pending[0].status, "retrying");
+  assert.ok(Date.parse(pending[0].nextAttemptAt) > Date.now());
+});
+
 test("outbound queue deduplicates platform deliveries and tracks retry state", () => {
   const queue = new OutboundQueue();
 

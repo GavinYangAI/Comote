@@ -1,12 +1,27 @@
 const TERMINAL_STATUSES = new Set(["delivered", "failed"]);
 const MAX_TERMINAL_ENTRIES = 200;
+const MAX_ACTIVE_ENTRIES = 500;
+// Exponential backoff between retries, capped so a stuck channel still retries
+// periodically rather than effectively never.
+const BACKOFF_BASE_MS = 1000;
+const BACKOFF_MAX_MS = 5 * 60_000;
 
 export class OutboundQueue {
-  constructor({ entries = [], maxAttempts = 3, maxTerminalEntries = MAX_TERMINAL_ENTRIES } = {}) {
+  constructor({
+    entries = [],
+    maxAttempts = 3,
+    maxTerminalEntries = MAX_TERMINAL_ENTRIES,
+    maxActiveEntries = MAX_ACTIVE_ENTRIES,
+    onShed = null,
+  } = {}) {
     this.entries = entries.map((entry) => ({ ...entry }));
     this.nextId = this.entries.length + 1;
     this.maxAttempts = maxAttempts;
     this.maxTerminalEntries = maxTerminalEntries;
+    this.maxActiveEntries = maxActiveEntries;
+    // Optional sink for shed-entry notifications so callers can log/alert
+    // instead of silently dropping undeliverable replies.
+    this.onShed = onShed;
   }
 
   enqueue(reply) {
@@ -29,17 +44,57 @@ export class OutboundQueue {
       nextAttemptAt: reply.nextAttemptAt ?? null,
     };
     this.entries.push(entry);
+    this.shedActive();
     return { ...entry };
   }
 
-  list({ channel = null, pendingOnly = true } = {}) {
+  list({ channel = null, pendingOnly = true, now = Date.now() } = {}) {
     return this.entries
       .filter(
         (entry) =>
           (!channel || entry.channel === channel) &&
-          (!pendingOnly || isPending(entry)),
+          (!pendingOnly || (isPending(entry) && isAttemptDue(entry, now))),
       )
       .map((entry) => ({ ...entry }));
+  }
+
+  // Pending entries (queued or retrying) for a channel REGARDLESS of whether
+  // their backoff window has elapsed. `list({pendingOnly:true})` hides a not-
+  // yet-due retry, but a re-drain scheduler must still see it to arm a timer for
+  // when it becomes due — otherwise a backed-off retry is stranded.
+  pendingActive({ channel = null } = {}) {
+    return this.entries
+      .filter((entry) => (!channel || entry.channel === channel) && isPending(entry))
+      .map((entry) => ({ ...entry }));
+  }
+
+  /**
+   * Cap the number of active (non-terminal) entries. When a channel cannot
+   * drain, active entries would otherwise grow without bound and exhaust
+   * memory / persistence. We drop the oldest active entries down to the cap and
+   * surface each drop via `onShed` so the loss is never silent.
+   */
+  shedActive() {
+    const active = [];
+    const rest = [];
+    for (const entry of this.entries) {
+      (TERMINAL_STATUSES.has(entry.status) ? rest : active).push(entry);
+    }
+    if (active.length <= this.maxActiveEntries) {
+      return;
+    }
+    const overflow = active.length - this.maxActiveEntries;
+    // Entries are appended in order, so the head holds the oldest.
+    const dropped = active.slice(0, overflow);
+    const kept = active.slice(overflow);
+    for (const entry of dropped) {
+      this.onShed?.({ ...entry });
+    }
+    // Preserve original ordering of the survivors interleaved with terminals.
+    const keptIds = new Set(kept.map((entry) => entry.id));
+    this.entries = this.entries.filter(
+      (entry) => TERMINAL_STATUSES.has(entry.status) || keptIds.has(entry.id),
+    );
   }
 
   ack(id) {
@@ -65,7 +120,10 @@ export class OutboundQueue {
     entry.attempts += 1;
     entry.lastError = error?.message ?? String(error);
     entry.status = entry.attempts >= this.maxAttempts ? "failed" : "retrying";
-    entry.nextAttemptAt = entry.status === "retrying" ? new Date().toISOString() : null;
+    entry.nextAttemptAt =
+      entry.status === "retrying"
+        ? new Date(Date.now() + backoffDelayMs(entry.attempts)).toISOString()
+        : null;
     if (TERMINAL_STATUSES.has(entry.status)) {
       this.prune();
     }
@@ -92,6 +150,35 @@ export class OutboundQueue {
 
 function isPending(entry) {
   return !entry.ackedAt && (entry.status === "queued" || entry.status === "retrying");
+}
+
+// A retrying entry is only due once its backoff window has elapsed. Queued
+// entries (never attempted) and entries without a stamp are always due.
+function isAttemptDue(entry, now) {
+  if (!entry.nextAttemptAt) {
+    return true;
+  }
+  const due = Date.parse(entry.nextAttemptAt);
+  if (Number.isNaN(due)) {
+    return true;
+  }
+  return due <= now;
+}
+
+// Backoff schedule (attempts is 1-based on the first failure):
+//   attempt 1 -> 0ms      (retry immediately on the next drain pass)
+//   attempt 2 -> BASE
+//   attempt 3 -> 2*BASE
+//   ...        exponential, capped at BACKOFF_MAX_MS.
+// The immediate first retry preserves the long-standing "a transient failure is
+// retried on the very next drain" behavior while still backing off a channel
+// that keeps failing.
+function backoffDelayMs(attempts) {
+  if (attempts <= 1) {
+    return 0;
+  }
+  const delay = BACKOFF_BASE_MS * 2 ** (attempts - 2);
+  return Math.min(delay, BACKOFF_MAX_MS);
 }
 
 function makeDedupeKey(reply) {

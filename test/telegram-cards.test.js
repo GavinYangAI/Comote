@@ -65,9 +65,9 @@ test("statusText renders phase title + body + steps", () => {
   assert.equal(typeof text, "string");
 });
 
-test("generatePairingCode is 6 chars from the safe alphabet, deterministic under injected rng", () => {
+test("generatePairingCode is 8 chars from the safe alphabet, deterministic under injected rng", () => {
   const code = generatePairingCode(() => 0); // always picks alphabet[0]
-  assert.equal(code.length, 6);
+  assert.equal(code.length, 8);
   assert.match(code, /^[0-9A-Z]+$/);
-  assert.equal(code, code[0].repeat(6));
+  assert.equal(code, code[0].repeat(8));
 });

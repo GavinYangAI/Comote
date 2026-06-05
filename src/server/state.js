@@ -25,6 +25,11 @@ import { Transcript } from "../core/transcript.js";
 import { VersionChecker } from "../core/version-check.js";
 import { setLocale as setI18nLocale, DEFAULT_LOCALE, t } from "../core/i18n/index.js";
 
+// Shown on a live card when the Codex Desktop connection drops. The connection
+// events are logged with hardcoded Chinese strings throughout routeDesktopEvent
+// (they predate i18n); this mirrors that wording so the card matches the log.
+const DISCONNECT_NOTICE = "与 Codex Desktop 的连接已断开";
+
 export function createComoteState({
   persisted = {},
   stateStore = null,
@@ -61,7 +66,15 @@ export function createComoteState({
   const desktop = desktopOverride ?? new CodexDesktopConnector();
   const cli = new CodexCliConnector();
 
-  const outboundReplies = new OutboundQueue({ entries: persisted.outboundReplies ?? [] });
+  const outboundReplies = new OutboundQueue({
+    entries: persisted.outboundReplies ?? [],
+    onShed: (entry) =>
+      eventLog.error("出站队列积压，丢弃最旧的未投递回复", {
+        id: entry.id,
+        channel: entry.channel,
+        attempts: entry.attempts,
+      }),
+  });
   const commandRouter = new CommandRouter({
     authorization,
     projects,
@@ -118,6 +131,29 @@ export function createComoteState({
   // outboundReplies, authorization, stateRef.persist). The plugin owns pure
   // construction (driver/adapter/runtime/renderer + config); everything that
   // closes over this server's runtime state lives here, keyed by channel id.
+  // Builds a downloadAttachment closure shared by every channel that downloads
+  // inbound files (feishu/dingtalk/telegram). The common shape is identical:
+  // resolve the sender's current project, sanitize the name, fence the dest path
+  // inside the project (DISTINCT error from NO_PROJECT so the adapter can tell a
+  // missing-project /open from an unsafe path), then defer the channel-specific
+  // driver call to `download({ driver, attachment, destPath })`.
+  function makeDownloadAttachment(stack, download) {
+    return async ({ attachment, identity }) => {
+      const projectPath = commandRouter.currentProjectByIdentity.get(commandRouter.identityKey(identity));
+      if (!projectPath) {
+        throw new Error("NO_PROJECT");
+      }
+      const safeName = sanitizeUploadName(attachment.fileName);
+      const relativePath = join(".comote", "uploads", safeName);
+      const destPath = join(projectPath, relativePath);
+      if (!resolveWithinProject(projectPath, destPath)) {
+        throw new Error("UNSAFE_ATTACHMENT_PATH");
+      }
+      await download({ driver: stack.runtime.driver, attachment, destPath });
+      return { relativePath };
+    };
+  }
+
   const perChannelWiring = {
     wechat: {
       buildAdapterOpts: (_stack) => ({
@@ -176,29 +212,14 @@ export function createComoteState({
         commandRouter,
         onDetectedIdentity: (identity) => authorization.detectIdentity(identity),
         resolveDisplayName: (openId) => stack.runtime?.driver?.resolveUserName?.(openId) ?? null,
-        downloadAttachment: async ({ attachment, identity }) => {
-          const projectPath = commandRouter.currentProjectByIdentity.get(commandRouter.identityKey(identity));
-          if (!projectPath) {
-            throw new Error("NO_PROJECT");
-          }
-          const { join } = await import("node:path");
-          const safeName = sanitizeUploadName(attachment.fileName);
-          const destPath = join(projectPath, ".comote", "uploads", safeName);
-          // Belt-and-suspenders: even after sanitizing the name, verify the final
-          // path stays inside the project. Use a DISTINCT error so an unsafe path is
-          // not conflated with the missing-project /open flow — the adapter treats
-          // any non-"NO_PROJECT" error as a graceful skip of this attachment.
-          if (!resolveWithinProject(projectPath, destPath)) {
-            throw new Error("UNSAFE_ATTACHMENT_PATH");
-          }
-          await stack.runtime.driver.downloadMessageResource({
+        downloadAttachment: makeDownloadAttachment(stack, ({ driver, attachment, destPath }) =>
+          driver.downloadMessageResource({
             messageId: attachment.messageId,
             fileKey: attachment.fileKey,
             type: attachment.type === "image" ? "image" : "file",
             destPath,
-          });
-          return { relativePath: join(".comote", "uploads", safeName) };
-        },
+          }),
+        ),
         sendReply: async (reply) => {
           outboundReplies.enqueue(reply);
           return { ok: true };
@@ -261,23 +282,12 @@ export function createComoteState({
       buildAdapterOpts: (stack) => ({
         commandRouter,
         onDetectedIdentity: (identity) => authorization.detectIdentity(identity),
-        downloadAttachment: async ({ attachment, identity }) => {
-          const projectPath = commandRouter.currentProjectByIdentity.get(commandRouter.identityKey(identity));
-          if (!projectPath) {
-            throw new Error("NO_PROJECT");
-          }
-          const { join } = await import("node:path");
-          const safeName = sanitizeUploadName(attachment.fileName);
-          const destPath = join(projectPath, ".comote", "uploads", safeName);
-          if (!resolveWithinProject(projectPath, destPath)) {
-            throw new Error("UNSAFE_ATTACHMENT_PATH");
-          }
-          await stack.runtime.driver.downloadMessageResource({
+        downloadAttachment: makeDownloadAttachment(stack, ({ driver, attachment, destPath }) =>
+          driver.downloadMessageResource({
             downloadCode: attachment.downloadCode,
             destPath,
-          });
-          return { relativePath: join(".comote", "uploads", safeName) };
-        },
+          }),
+        ),
         sendReply: async (reply) => {
           outboundReplies.enqueue(reply);
           return { ok: true };
@@ -303,16 +313,9 @@ export function createComoteState({
           stack.config = stack.plugin.normalizeConfig({ ...stack.config, linkedChatId: String(chatId), linkedUserName: displayName ?? null, pairingCode: null });
           await stateRef.persist?.();
         },
-        downloadAttachment: async ({ attachment, identity }) => {
-          const projectPath = commandRouter.currentProjectByIdentity.get(commandRouter.identityKey(identity));
-          if (!projectPath) throw new Error("NO_PROJECT");
-          const { join } = await import("node:path");
-          const safeName = sanitizeUploadName(attachment.fileName);
-          const destPath = join(projectPath, ".comote", "uploads", safeName);
-          if (!resolveWithinProject(projectPath, destPath)) throw new Error("UNSAFE_ATTACHMENT_PATH");
-          await stack.runtime.driver.downloadAttachment({ downloadCode: attachment.downloadCode, destPath });
-          return { relativePath: join(".comote", "uploads", safeName) };
-        },
+        downloadAttachment: makeDownloadAttachment(stack, ({ driver, attachment, destPath }) =>
+          driver.downloadAttachment({ downloadCode: attachment.downloadCode, destPath }),
+        ),
         sendReply: async (reply) => { outboundReplies.enqueue(reply); return { ok: true }; },
       }),
       buildRuntimeOpts: (stack) => ({
@@ -370,16 +373,101 @@ export function createComoteState({
     return typeof rt.openThreadCard === "function" ? rt : null;
   }
 
+  // Finishes every open live-card session across all live-card channels with a
+  // terminal card. Used when the Codex Desktop connection drops for good (or is
+  // lost): otherwise the in-progress card sessions leak in cardSessions and the
+  // user's chat shows a card stuck "in progress" forever, since no turnCompleted/
+  // error event will ever arrive to finish it.
+  function finishAllLiveCards(buildCard) {
+    for (const [channel] of channelStacks) {
+      const live = liveCardRuntime(channel);
+      if (!live) continue;
+      const sessions = live.cardSessions;
+      if (!sessions || typeof sessions.keys !== "function") continue;
+      for (const threadId of [...sessions.keys()]) {
+        live.finishThreadCard(threadId, buildCard(live, threadId)).catch(() => {});
+      }
+    }
+  }
+
+  // Closes every open live card with a disconnect notice and clears the per-turn
+  // bookkeeping. Shared by connectionLost and connectionGaveUp.
+  function finishLiveCardsForDisconnect() {
+    finishAllLiveCards((live) =>
+      live.buildStatusCard({
+        phase: "error",
+        text: t("state.error.card", { message: DISCONNECT_NOTICE }),
+        done: true,
+      }),
+    );
+    streamTextByThread.clear();
+    progressByThread.clear();
+    changedFilesDeliveredThreads.clear();
+  }
+
+  // Per-channel re-drain timer guard, so overlapping deliverIfPush calls don't
+  // stack timers. Cleared when its drain runs.
+  const pushRedrainTimers = new Map();
+  // Floor on the re-drain delay so a tight backoff (or a just-enqueued entry)
+  // can't spin the timer. Poll channels (wechat) re-drain via their own loop;
+  // push channels have no loop, so a transient send failure (status="retrying")
+  // would sit until the next inbound event without this.
+  const PUSH_REDRAIN_FLOOR_MS = 1_000;
+
   // push channels have no poll loop, so a freshly enqueued reply must be drained
   // explicitly. poll channels (wechat) drain via their own loop. Equivalent to the
   // old deliverIfFeishu: feishu is push → drains; wechat is poll → no-op.
+  // After draining, if any entries are still pending (a transient send failure
+  // flipped them to "retrying"), schedule a single follow-up drain — otherwise a
+  // push channel never retries on its own.
   function deliverIfPush(channel) {
     const stack = channelStacks.get(channel);
-    if (stack?.plugin.meta.inboundMode === "push") {
-      stack.runtime.deliverQueued().catch((error) => {
-        stack.runtime.lastError = error.message;
-      });
+    if (stack?.plugin.meta.inboundMode !== "push") {
+      return;
     }
+    stack.runtime
+      .deliverQueued()
+      .catch((error) => {
+        stack.runtime.lastError = error.message;
+      })
+      .finally(() => {
+        schedulePushRedrain(channel);
+      });
+  }
+
+  // Schedules one re-drain of a push channel if it still has pending (queued or
+  // retrying) entries and no re-drain is already pending. The follow-up drain
+  // re-arms itself the same way, so retrying entries keep getting re-driven until
+  // they deliver or hit maxAttempts (status="failed", no longer pending).
+  function schedulePushRedrain(channel) {
+    if (pushRedrainTimers.has(channel)) {
+      return;
+    }
+    // Consider ALL pending entries, including retries whose backoff window has
+    // not elapsed yet — those are exactly the ones a fixed-interval poll would
+    // strand. list({pendingOnly}) hides not-yet-due retries, so use pendingActive.
+    const pending = outboundReplies.pendingActive({ channel });
+    if (pending.length === 0) {
+      return;
+    }
+    // Arm for when the soonest entry becomes due (queued/never-attempted → now),
+    // floored so we never busy-spin.
+    const now = Date.now();
+    let soonestDue = null;
+    for (const entry of pending) {
+      const parsed = entry.nextAttemptAt ? Date.parse(entry.nextAttemptAt) : now;
+      const dueAt = Number.isNaN(parsed) ? now : parsed;
+      if (soonestDue === null || dueAt < soonestDue) {
+        soonestDue = dueAt;
+      }
+    }
+    const delay = Math.max(PUSH_REDRAIN_FLOOR_MS, soonestDue - now);
+    const timer = setTimeout(() => {
+      pushRedrainTimers.delete(channel);
+      deliverIfPush(channel);
+    }, delay);
+    timer.unref?.();
+    pushRedrainTimers.set(channel, timer);
   }
 
   // Build a runtime WRAPPER per channel from its stack. Common methods (getConfig
@@ -513,12 +601,36 @@ export function createComoteState({
     },
     currentVersion,
     versionChecker,
+    // Graceful shutdown: release the sleep guard (otherwise the spawned
+    // `caffeinate` is orphaned and keeps the Mac awake after the daemon exits)
+    // and stop every channel runtime + the version poller. Safe to call more than
+    // once; each stop() is independently guarded.
+    async shutdown() {
+      sleepGuard.releaseAll();
+      for (const timer of pushRedrainTimers.values()) {
+        clearTimeout(timer);
+      }
+      pushRedrainTimers.clear();
+      versionChecker?.stop?.();
+      await Promise.allSettled(
+        [...channelStacks.values()].map((stack) =>
+          Promise.resolve(stack.runtime.stop?.()).catch(() => {}),
+        ),
+      );
+    },
   };
   // --- Codex Desktop return path: route thread events back to the phone ---
   // threadId -> { count, lastSentAt } for throttled progress updates.
   const progressByThread = new Map();
   // threadId -> latest accumulated streaming text, for Feishu live cards.
   const streamTextByThread = new Map();
+  // Threads whose changed-file delivery already ran this turn. A turn can emit
+  // more than one agentMessage; only the FIRST claims the live card and delivers
+  // the turn's changed files. Subsequent agentMessages must enqueue their own
+  // text but MUST NOT re-run deliverChangedFilesAndFinish — its fresh-millisecond
+  // dedupeKey stamp would slip past the outbound queue's dedup and deliver the
+  // changed files twice. Cleared on turnStarted and turnCompleted.
+  const changedFilesDeliveredThreads = new Set();
   desktop.onEvent = (event) => {
     try {
       routeDesktopEvent(event);
@@ -527,8 +639,19 @@ export function createComoteState({
     }
   };
 
+  // Fire-and-forget persist that never rejects. persist() touches the disk and
+  // can fail (EACCES, ENOSPC, a serialization throw); without a .catch the
+  // rejection is unhandled and Node's default handler crashes the daemon. Log
+  // and degrade instead — a missed snapshot is recoverable, a dead daemon is not.
+  function persistInBackground() {
+    Promise.resolve(stateRef.persist?.()).catch((err) =>
+      eventLog.error("持久化失败", { error: err?.message ?? String(err) }),
+    );
+  }
+
   function routeDesktopEvent(event) {
     if (event.type === "turnStarted") {
+      changedFilesDeliveredThreads.delete(event.threadId);
       sleepGuard.acquire(event.threadId);
       const startedBinding = commandRouter.getThreadBinding(event.threadId);
       if (startedBinding?.channel === "wechat") {
@@ -576,6 +699,7 @@ export function createComoteState({
           .catch(() => {});
       }
       streamTextByThread.delete(event.threadId);
+      changedFilesDeliveredThreads.delete(event.threadId);
       sleepGuard.release(event.threadId);
       eventLog.info("Codex turn 完成", { threadId: event.threadId });
       return;
@@ -588,7 +712,11 @@ export function createComoteState({
       // Turns cannot complete once the connection is gone — release the
       // sleep guard so the Mac is not held awake indefinitely.
       sleepGuard.releaseAll();
-      eventLog.warn("与 Codex Desktop 的连接断开，正在尝试重连…");
+      // Finish any open live cards: no turnCompleted/error will arrive to close
+      // them while the connection is down, so otherwise they leak (cardSessions
+      // grows unbounded) and the chat shows a perpetual "in progress" card.
+      finishLiveCardsForDisconnect();
+      eventLog.warn(DISCONNECT_NOTICE);
       return;
     }
     if (event.type === "reconnected") {
@@ -597,6 +725,9 @@ export function createComoteState({
     }
     if (event.type === "connectionGaveUp") {
       sleepGuard.releaseAll();
+      // Same leak as connectionLost, and now no reconnect is coming at all — close
+      // every open live card so none is left hanging.
+      finishLiveCardsForDisconnect();
       eventLog.error("多次重连 Codex Desktop 失败，已停止重试，请手动重试连接");
       return;
     }
@@ -672,6 +803,24 @@ export function createComoteState({
       const msgLive = liveCardRuntime(binding.channel);
       if (msgLive) {
         streamTextByThread.delete(event.threadId);
+        if (changedFilesDeliveredThreads.has(event.threadId)) {
+          // A prior agentMessage this turn already claimed the card and delivered
+          // the turn's changed files. Re-running deliverChangedFilesAndFinish would
+          // re-enqueue those files under a fresh-millisecond dedupeKey the queue
+          // cannot collapse — a double delivery. Enqueue only this message's text.
+          outboundReplies.enqueue({
+            channel: binding.channel,
+            conversationId: binding.conversationId,
+            ...(binding.accountId ? { accountId: binding.accountId } : {}),
+            kind: "text",
+            text: event.text ?? "",
+            dedupeKey: `agent:${event.itemId ?? event.threadId}`,
+          });
+          deliverIfPush(binding.channel);
+          persistInBackground();
+          return;
+        }
+        changedFilesDeliveredThreads.add(event.threadId);
         // Claim the live card SYNCHRONOUSLY now, before the async file work below.
         // agentMessage is the live-card completion path; detaching here means a
         // racing turnCompleted sees no card (hasThreadCard=false) and skips, so the
@@ -680,7 +829,7 @@ export function createComoteState({
         void deliverChangedFilesAndFinish(msgLive, binding, event, claimedSession).catch((error) => {
           msgLive.lastError = error.message;
         });
-        stateRef.persist?.();
+        persistInBackground();
         return;
       }
       // Chunking moved to the wechat renderer — enqueue ONE semantic text reply.
@@ -693,7 +842,7 @@ export function createComoteState({
         dedupeKey: `agent:${event.itemId ?? event.threadId}`,
       });
       deliverIfPush(binding.channel);
-      stateRef.persist?.();
+      persistInBackground();
       return;
     }
 
@@ -721,11 +870,17 @@ export function createComoteState({
         dedupeKey: `approval:${event.approval.id}`,
       });
       deliverIfPush(binding.channel);
-      stateRef.persist?.();
+      persistInBackground();
       return;
     }
 
     if (event.type === "error") {
+      // A turn can end via error with no following turnCompleted. Release the
+      // sleep guard here too, otherwise caffeinate is held awake until the next
+      // (successful) turn completes — or indefinitely. Clear the per-turn
+      // changed-files marker for the same reason.
+      sleepGuard.release(event.threadId);
+      changedFilesDeliveredThreads.delete(event.threadId);
       const binding = commandRouter.getThreadBinding(event.threadId);
       const errLive = liveCardRuntime(binding?.channel);
       if (errLive && errLive.hasThreadCard(event.threadId)) {
@@ -760,7 +915,7 @@ export function createComoteState({
         dedupeKey: `error:${event.threadId ?? ""}:${Date.now()}`,
       });
       deliverIfPush(binding.channel);
-      stateRef.persist?.();
+      persistInBackground();
       return;
     }
   }

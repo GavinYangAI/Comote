@@ -28,6 +28,7 @@ export default {
   "feishu.toast.cancelRequested": "Annulation demandée",
   "feishu.toast.noProject": "Projet introuvable ; rouvrez la session",
   "feishu.toast.pathDenied": "Chemin hors limites, refusé",
+  "feishu.toast.notAuthorized": "Non autorisé",
   "feishu.toast.pushing": "Envoi…",
   "feishu.toast.noConversation": "Conversation introuvable ; répondez avec le numéro",
   "feishu.toast.processing": "En cours…",

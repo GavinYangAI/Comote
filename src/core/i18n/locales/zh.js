@@ -28,6 +28,7 @@ export default {
   "feishu.toast.cancelRequested": "已请求取消任务",
   "feishu.toast.noProject": "无法定位项目，请重开会话",
   "feishu.toast.pathDenied": "路径越界，已拒绝",
+  "feishu.toast.notAuthorized": "无操作权限",
   "feishu.toast.pushing": "推送中…",
   "feishu.toast.noConversation": "无法定位会话，请直接回复编号",
   "feishu.toast.processing": "处理中…",

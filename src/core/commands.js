@@ -54,7 +54,12 @@ export class CommandRouter {
     };
   }
 
-  // Throws a user-facing error when an identity exceeds its hourly turn budget.
+  // Throws a user-facing error when an identity exceeds its hourly turn budget,
+  // otherwise reserves one unit of quota. The reservation is tentative: callers
+  // MUST refundTurnStart() if the turn fails to actually start, so a turn that
+  // never reaches Codex (e.g. desktop disconnected) does not burn the user's
+  // hourly budget. The timestamp returned identifies this reservation so the
+  // refund removes exactly the unit that was reserved.
   enforceTurnRate(identity) {
     const key = this.identityKey(identity);
     const now = Date.now();
@@ -65,6 +70,23 @@ export class CommandRouter {
     }
     recent.push(now);
     this.turnTimestamps.set(key, recent);
+    return now;
+  }
+
+  // Refunds a reservation made by enforceTurnRate when the turn failed to start.
+  // `reservation` is the timestamp enforceTurnRate returned; if omitted, the most
+  // recent reservation for the identity is dropped.
+  refundTurnStart(identity, reservation = null) {
+    const key = this.identityKey(identity);
+    const recent = this.turnTimestamps.get(key);
+    if (!recent || recent.length === 0) {
+      return;
+    }
+    const index = reservation == null ? recent.length - 1 : recent.lastIndexOf(reservation);
+    if (index >= 0) {
+      recent.splice(index, 1);
+    }
+    this.turnTimestamps.set(key, recent);
   }
 
   bindThreadForIdentity(identity, threadId, projectPath = null) {
@@ -73,7 +95,14 @@ export class CommandRouter {
     }
     const conversation = this.conversationByIdentity.get(this.identityKey(identity));
     if (conversation) {
-      this.threadBindings.set(threadId, { ...conversation, projectPath: projectPath ?? null });
+      // Record the initiating identity's stableId so channel card buttons
+      // (Feishu cancel/pushfile) can verify the clicker owns the thread and a
+      // different group member cannot act on another user's live card.
+      this.threadBindings.set(threadId, {
+        ...conversation,
+        projectPath: projectPath ?? null,
+        ownerStableId: identity?.stableId ?? null,
+      });
     }
   }
 
@@ -516,36 +545,43 @@ export class CommandRouter {
       this.pendingByIdentity.set(key, { type: "await_new_session_message", projectPath });
       return t("cmd.session.promptFirstMessage");
     }
-    this.enforceTurnRate(identity);
+    // Reserve quota up front; refund it if the turn never actually starts so a
+    // failed hand-off to Codex does not count against the user's hourly budget.
+    const reservation = this.enforceTurnRate(identity);
     const images = this.collectImagePaths(attachments, projectPath);
-    if (this.codexDesktop?.getStatus?.().state === "connected") {
-      const started = await this.codexDesktop.startThread({ cwd: projectPath });
-      const threadId = started.thread.id;
-      this.bindThreadForIdentity(identity, threadId, projectPath);
-      this.transcript?.record(threadId, "user", message);
-      await this.codexDesktop.startTurn({ threadId, text: message, cwd: projectPath, images });
-      this.sessions.upsertExternalSession({
-        projectPath,
-        id: threadId,
-        title: message || threadId,
-        messages: message ? [{ role: "user", text: message }] : [],
-      });
+    try {
+      if (this.codexDesktop?.getStatus?.().state === "connected") {
+        const started = await this.codexDesktop.startThread({ cwd: projectPath });
+        const threadId = started.thread.id;
+        this.bindThreadForIdentity(identity, threadId, projectPath);
+        this.transcript?.record(threadId, "user", message);
+        await this.codexDesktop.startTurn({ threadId, text: message, cwd: projectPath, images });
+        this.sessions.upsertExternalSession({
+          projectPath,
+          id: threadId,
+          title: message || threadId,
+          messages: message ? [{ role: "user", text: message }] : [],
+        });
+        this.pendingByIdentity.delete(key);
+        return t("cmd.new.sentDesktop", { id: threadId });
+      }
+      if (this.codexCli?.runPrompt) {
+        const result = await this.codexCli.runPrompt({ cwd: projectPath, text: message, images });
+        this.sessions.upsertExternalSession({
+          projectPath,
+          id: result.id,
+          title: message || result.id,
+          messages: message ? [{ role: "user", text: message }] : [],
+        });
+        this.pendingByIdentity.delete(key);
+        return t("cmd.new.startedCli", { name: message || result.id, output: result.output });
+      }
       this.pendingByIdentity.delete(key);
-      return t("cmd.new.sentDesktop", { id: threadId });
+      return this.newSession(identity, message);
+    } catch (error) {
+      this.refundTurnStart(identity, reservation);
+      throw error;
     }
-    if (this.codexCli?.runPrompt) {
-      const result = await this.codexCli.runPrompt({ cwd: projectPath, text: message, images });
-      this.sessions.upsertExternalSession({
-        projectPath,
-        id: result.id,
-        title: message || result.id,
-        messages: message ? [{ role: "user", text: message }] : [],
-      });
-      this.pendingByIdentity.delete(key);
-      return t("cmd.new.startedCli", { name: message || result.id, output: result.output });
-    }
-    this.pendingByIdentity.delete(key);
-    return this.newSession(identity, message);
   }
 
   async handlePlainText(identity, text, attachments = []) {
@@ -629,19 +665,25 @@ export class CommandRouter {
     if (this.codexDesktop?.getStatus?.().state !== "connected") {
       throw new Error(t("cmd.desktop.notConnected"));
     }
-    this.enforceTurnRate(identity);
+    // Reserve quota up front; refund it if the turn never actually starts.
+    const reservation = this.enforceTurnRate(identity);
     this.bindThreadForIdentity(identity, activeSession.id, projectPath);
-    await this.resumeDesktopThread(activeSession.id, projectPath);
-    this.transcript?.record(activeSession.id, "user", text);
     const images = this.collectImagePaths(attachments, projectPath);
     try {
-      await this.codexDesktop.startTurn({ threadId: activeSession.id, text, cwd: projectPath, images });
-    } catch (error) {
-      if (!isThreadNotFoundError(error)) {
-        throw error;
-      }
       await this.resumeDesktopThread(activeSession.id, projectPath);
-      await this.codexDesktop.startTurn({ threadId: activeSession.id, text, cwd: projectPath, images });
+      this.transcript?.record(activeSession.id, "user", text);
+      try {
+        await this.codexDesktop.startTurn({ threadId: activeSession.id, text, cwd: projectPath, images });
+      } catch (error) {
+        if (!isThreadNotFoundError(error)) {
+          throw error;
+        }
+        await this.resumeDesktopThread(activeSession.id, projectPath);
+        await this.codexDesktop.startTurn({ threadId: activeSession.id, text, cwd: projectPath, images });
+      }
+    } catch (error) {
+      this.refundTurnStart(identity, reservation);
+      throw error;
     }
     return t("cmd.send.processing", { id: activeSession.id });
   }

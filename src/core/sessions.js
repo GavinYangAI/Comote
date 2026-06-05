@@ -2,6 +2,13 @@ function makeId(prefix, nextId) {
   return `${prefix}_${String(nextId).padStart(4, "0")}`;
 }
 
+// Extracts the numeric suffix from a "session_NNNN" id, or 0 if the id does not
+// match our generated pattern (e.g. external thread ids).
+function parseSessionIdNumber(id) {
+  const match = /^session_(\d+)$/.exec(id);
+  return match ? Number(match[1]) : 0;
+}
+
 export class SessionStore {
   constructor({ sessions = [] } = {}) {
     this.sessionsByProject = new Map();
@@ -9,6 +16,12 @@ export class SessionStore {
     this.nextId = 1;
     for (const session of sessions) {
       this.upsertExternalSession(session);
+      // Seed nextId past any rehydrated session_NNNN id so freshly created
+      // sessions never collide with reloaded ones on the synchronous /new path.
+      const existingNumber = parseSessionIdNumber(session.id);
+      if (existingNumber >= this.nextId) {
+        this.nextId = existingNumber + 1;
+      }
     }
   }
 
