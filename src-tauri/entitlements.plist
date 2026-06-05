@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Hardened-runtime entitlements for notarization.
+
+  The app embeds the official Node.js runtime as a sidecar. V8's JIT writes to
+  executable memory, so without allow-jit / allow-unsigned-executable-memory the
+  sidecar crashes the moment it runs JS under hardened runtime. disable-library-
+  validation lets the main app spawn the separately-signed sidecar (and lets Node
+  load CommonJS/native modules) without a library-validation kill.
+
+  These three are the standard Node/Electron entitlement set. Keep this list
+  minimal — every entitlement here is signed surface area.
+-->
+<plist version="1.0">
+<dict>
+    <key>com.apple.security.cs.allow-jit</key>
+    <true/>
+    <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+    <true/>
+    <key>com.apple.security.cs.disable-library-validation</key>
+    <true/>
+</dict>
+</plist>

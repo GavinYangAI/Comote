@@ -13,16 +13,72 @@ jobs:
   mac-arm64:
     name: Comote macOS arm64 DMG
     runs-on: macos-14
+    # Gates the signing secrets behind an approval / tag-restriction rule.
+    # Configure protection in: Settings → Environments → release-signing
+    # (required reviewers + "Deployment branches and tags" limited to v*).
+    environment: release-signing
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-node@v5
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
         with:
           node-version: 22
           cache: npm
       - run: npm ci
       - run: npm test
-      - run: npm run dist:mac
-      - uses: actions/upload-artifact@v7
+
+      # Only set up signing when the secrets exist (forks / pre-config builds
+      # fall through to an unsigned DMG instead of failing).
+      - name: Detect signing availability
+        id: cfg
+        env:
+          HAS_CERT: ${{ secrets.APPLE_CERTIFICATE != '' }}
+        run: echo "signing=$HAS_CERT" >> "$GITHUB_OUTPUT"
+
+      - name: Prepare signing keychain + notary key
+        if: steps.cfg.outputs.signing == 'true'
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_NOTARY_KEY: ${{ secrets.APPLE_NOTARY_KEY }}
+        run: |
+          set -euo pipefail
+          KEYCHAIN_PATH="$RUNNER_TEMP/comote-signing.keychain-db"
+          KEYCHAIN_PASSWORD="$(openssl rand -base64 24)"
+
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+
+          echo "$APPLE_CERTIFICATE" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security import "$RUNNER_TEMP/cert.p12" \
+            -P "$APPLE_CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+          security set-key-partition-list \
+            -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          # Make the temp keychain visible to codesign without dropping the login one.
+          security list-keychain -d user -s "$KEYCHAIN_PATH" login.keychain-db
+
+          # Notary API key (.p8) → file for notarytool.
+          echo "$APPLE_NOTARY_KEY" | base64 --decode > "$RUNNER_TEMP/notary_key.p8"
+          echo "COMOTE_NOTARY_KEY_PATH=$RUNNER_TEMP/notary_key.p8" >> "$GITHUB_ENV"
+          rm -f "$RUNNER_TEMP/cert.p12"
+
+      - name: Build DMG
+        env:
+          # Empty when unsigned → sign-macos-app.mjs no-ops.
+          COMOTE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+        run: npm run dist:mac
+
+      - name: Notarize + staple DMG
+        env:
+          COMOTE_NOTARY_KEY_ID: ${{ secrets.APPLE_NOTARY_KEY_ID }}
+          COMOTE_NOTARY_ISSUER_ID: ${{ secrets.APPLE_NOTARY_ISSUER_ID }}
+        run: node scripts/notarize-macos-dmg.mjs release/Comote-*-arm64.dmg
+
+      - name: Clean up keychain
+        if: always() && steps.cfg.outputs.signing == 'true'
+        run: security delete-keychain "$RUNNER_TEMP/comote-signing.keychain-db" || true
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: Comote-arm64-dmg
           path: release/Comote-*-arm64.dmg
@@ -32,15 +88,15 @@ jobs:
     name: Comote Windows x64 installer
     runs-on: windows-2022
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-node@v5
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
         with:
           node-version: 22
           cache: npm
       - run: npm ci
       - run: npm test
       - run: npm run dist:win
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: Comote-win-x64-setup
           path: release/Comote-Setup-*-x64.exe
@@ -52,16 +108,16 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: Comote-arm64-dmg
           path: release-artifacts
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: Comote-win-x64-setup
           path: release-artifacts
       - name: Create or update GitHub Release
-        uses: softprops/action-gh-release@v3
+        uses: softprops/action-gh-release@b4309332981a82ec1c5618f44dd2e27cc8bfbfda # v3
         with:
           files: release-artifacts/*
           name: Comote ${{ github.ref_name }}
