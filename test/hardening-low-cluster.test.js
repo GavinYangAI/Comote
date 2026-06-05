@@ -43,7 +43,10 @@ test("backoff grows with each successive failure", () => {
     delays.push(Date.parse(e.nextAttemptAt) - before);
   }
   // First retry is immediate; subsequent retries grow monotonically.
-  assert.equal(delays[0], 0, "first retry immediate");
+  // delays[0] is measured against an external Date.now(), so allow a few ms of
+  // jitter for a millisecond boundary crossed between the two clock reads
+  // (asserting === 0 here is a real timing flake).
+  assert.ok(delays[0] <= 50, "first retry effectively immediate");
   for (let i = 2; i < delays.length; i += 1) {
     assert.ok(delays[i] >= delays[i - 1], `delay[${i}] >= delay[${i - 1}]`);
   }
