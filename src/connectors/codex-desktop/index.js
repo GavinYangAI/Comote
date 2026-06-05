@@ -1,7 +1,7 @@
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
-import { dirname, join, win32 as winPath } from "node:path";
+import { basename, dirname, join, win32 as winPath } from "node:path";
 
 import { JsonRpcClient, StdioTransport } from "./json-rpc.js";
 
@@ -695,10 +695,6 @@ function isMethodMissingError(error) {
   return /method not found|unknown method|no such method|unsupported method|not found.*method/i.test(
     error?.message ?? String(error),
   );
-}
-
-function basename(path) {
-  return path.split("/").filter(Boolean).at(-1) ?? path;
 }
 
 function isCliThread(thread) {

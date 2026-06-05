@@ -74,7 +74,20 @@ export class JsonRpcClient {
   }
 
   handleMessage(message) {
-    const payload = typeof message === "string" ? JSON.parse(message) : message;
+    let payload;
+    if (typeof message === "string") {
+      try {
+        payload = JSON.parse(message);
+      } catch (err) {
+        // A single non-JSON line on the child's stdout must never tear down the
+        // read loop or reject pending requests — log and drop it.
+        const snippet = message.length > 200 ? `${message.slice(0, 200)}…` : message;
+        console.warn(`Codex app-server 收到非 JSON 行，已忽略：${snippet} (${err.message})`);
+        return;
+      }
+    } else {
+      payload = message;
+    }
 
     if (Object.hasOwn(payload, "id") && (Object.hasOwn(payload, "result") || Object.hasOwn(payload, "error"))) {
       this.#settle(payload.id, (pending) => {
@@ -153,17 +166,7 @@ export class StdioTransport {
     });
     this.child = child;
     child.stdout.setEncoding("utf8");
-    child.stdout.on("data", (chunk) => {
-      this.buffer += chunk;
-      let newline;
-      while ((newline = this.buffer.indexOf("\n")) >= 0) {
-        const line = this.buffer.slice(0, newline).trim();
-        this.buffer = this.buffer.slice(newline + 1);
-        if (line) {
-          this.messageHandler?.(line);
-        }
-      }
-    });
+    child.stdout.on("data", (chunk) => this.feed(chunk));
     const onGone = () => {
       if (this.child === child) {
         this.child = null;
@@ -172,6 +175,23 @@ export class StdioTransport {
     };
     child.once("exit", onGone);
     child.once("error", onGone);
+  }
+
+  // Appends a stdout chunk to the buffer and dispatches every complete,
+  // newline-terminated line. A trailing partial line stays buffered until its
+  // newline arrives, so messages split across chunk boundaries are reassembled
+  // intact and multiple messages in one chunk are dispatched in order. Blank
+  // and whitespace-only lines are skipped.
+  feed(chunk) {
+    this.buffer += chunk;
+    let newline;
+    while ((newline = this.buffer.indexOf("\n")) >= 0) {
+      const line = this.buffer.slice(0, newline).trim();
+      this.buffer = this.buffer.slice(newline + 1);
+      if (line) {
+        this.messageHandler?.(line);
+      }
+    }
   }
 
   send(message) {

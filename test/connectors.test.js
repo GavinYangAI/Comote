@@ -581,6 +581,43 @@ test("desktop connector resolves legacy exec approvals", async () => {
   });
 });
 
+test("malformed stdout line is dropped without tearing down the read loop", async () => {
+  const transport = new MemoryTransport();
+  const connector = new CodexDesktopConnector({ transport });
+  await connector.client.connect();
+  const events = [];
+  connector.onEvent = (event) => events.push(event);
+
+  // Feed a non-JSON line through the exact path StdioTransport drives:
+  // transport.onMessage(handler) wires handler === client.handleMessage, and
+  // the stdout 'data' handler calls it with a raw string per newline.
+  const warnings = [];
+  const originalWarn = console.warn;
+  console.warn = (...args) => warnings.push(args.join(" "));
+  try {
+    assert.doesNotThrow(() => transport.messageHandler("not json{"));
+  } finally {
+    console.warn = originalWarn;
+  }
+  assert.equal(warnings.length, 1);
+
+  // A subsequent VALID message must still be parsed and dispatched — proving
+  // the loop survived the malformed line.
+  transport.receive({
+    jsonrpc: "2.0",
+    method: "item/updated",
+    params: {
+      threadId: "thread_malformed",
+      item: { type: "agentMessage", id: "item_ok", text: "still alive" },
+    },
+  });
+
+  assert.ok(
+    events.some((event) => event.type === "agentMessageDelta" && event.text === "still alive"),
+    "valid message after a malformed line should still dispatch",
+  );
+});
+
 test("desktop connector emits agentMessageDelta on item/updated", async () => {
   const transport = new MemoryTransport();
   const connector = new CodexDesktopConnector({ transport });
