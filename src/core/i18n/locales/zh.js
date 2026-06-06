@@ -39,6 +39,7 @@ export default {
   "dingtalk.media.missing": "文件不见了：{path}",
   "dingtalk.media.tooLarge": "文件 {name} 有 {size}MB，超过钉钉上限，没发。路径：{path}",
   "telegram.attachment.noProject": "收到文件，但还没打开项目。先用 /open 选一个项目，再把文件发我。",
+  "attachment.read.instruction": "用户发来一个文件 `{path}`（已保存在当前项目内），请先读取它再回答。",
   "telegram.pair.prompt": "请把配对码 {code} 发给我完成绑定。",
   "telegram.pair.success": "✅ 配对成功，已绑定到这个聊天。",
   "telegram.picker.replyHint": "点上面的按钮选择。",

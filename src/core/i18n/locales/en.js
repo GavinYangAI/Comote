@@ -39,6 +39,7 @@ export default {
   "dingtalk.media.missing": "File is gone: {path}",
   "dingtalk.media.tooLarge": "{name} is {size}MB, over DingTalk's limit — not sent. Path: {path}",
   "telegram.attachment.noProject": "Got a file, but no project is open. Use /open to pick one first, then send the file.",
+  "attachment.read.instruction": "The user sent a file `{path}` (saved inside the current project). Read it before answering.",
   "telegram.pair.prompt": "Send me the pairing code {code} to finish linking.",
   "telegram.pair.success": "✅ Paired — this chat is now linked.",
   "telegram.picker.replyHint": "Tap a button above to choose.",

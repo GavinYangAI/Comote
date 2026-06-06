@@ -39,6 +39,7 @@ export default {
   "dingtalk.media.missing": "El archivo ya no está: {path}",
   "dingtalk.media.tooLarge": "{name} pesa {size}MB, supera el límite de DingTalk: no se envió. Ruta: {path}",
   "telegram.attachment.noProject": "Recibí un archivo, pero no hay ningún proyecto abierto. Usa primero /open para elegir uno y luego envía el archivo.",
+  "attachment.read.instruction": "El usuario envió un archivo `{path}` (guardado dentro del proyecto actual). Léelo antes de responder.",
   "telegram.pair.prompt": "Envíame el código de emparejamiento {code} para terminar la vinculación.",
   "telegram.pair.success": "✅ Emparejado: este chat ya está vinculado.",
   "telegram.picker.replyHint": "Toca un botón de arriba para elegir.",

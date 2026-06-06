@@ -39,6 +39,7 @@ export default {
   "dingtalk.media.missing": "ファイルが見つかりません：{path}",
   "dingtalk.media.tooLarge": "{name} は {size}MB で、DingTalk の上限を超えているため送信できませんでした。パス：{path}",
   "telegram.attachment.noProject": "ファイルを受け取りましたが、プロジェクトが開かれていません。まず /open でプロジェクトを選んでから、ファイルを送ってください。",
+  "attachment.read.instruction": "ユーザーがファイル `{path}` を送ってきました（現在のプロジェクト内に保存済み）。回答する前にそのファイルを読んでください。",
   "telegram.pair.prompt": "ペアリングコード {code} を送って連携を完了してください。",
   "telegram.pair.success": "✅ ペアリング完了。このチャットを連携しました。",
   "telegram.picker.replyHint": "上のボタンを押して選択してください。",
