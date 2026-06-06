@@ -27,8 +27,9 @@ export function classifyFile(filePath) {
 }
 
 // Sanitizes a channel-controlled file name into a single safe path segment for
-// the .comote/uploads directory. The result also lands inside the Codex prompt
-// as `[attachment: …]`, so it must contain no path separators, control characters, or
+// the .comote/uploads directory. The result also lands inside the Codex prompt —
+// as `[attachment: …]` for images, or inside a "read this file" instruction for
+// other files — so it must contain no path separators, control characters, or
 // bracket characters that could break the prompt marker.
 export function sanitizeUploadName(fileName, fallback = "attachment") {
   // Basename only: drop everything up to and including the last / or \.
