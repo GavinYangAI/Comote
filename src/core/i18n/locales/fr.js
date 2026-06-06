@@ -39,6 +39,7 @@ export default {
   "dingtalk.media.missing": "Fichier introuvable : {path}",
   "dingtalk.media.tooLarge": "{name} fait {size} Mo, au-delà de la limite de DingTalk — non envoyé. Chemin : {path}",
   "telegram.attachment.noProject": "Fichier bien reçu, mais aucun projet n'est ouvert. Utilisez d'abord /open pour en choisir un, puis envoyez le fichier.",
+  "attachment.read.instruction": "L'utilisateur a envoyé un fichier `{path}` (enregistré dans le projet actuel). Lisez-le avant de répondre.",
   "telegram.pair.prompt": "Envoyez-moi le code d'appairage {code} pour terminer la liaison.",
   "telegram.pair.success": "✅ Appairage réussi — cette conversation est maintenant liée.",
   "telegram.picker.replyHint": "Touchez un bouton ci-dessus pour choisir.",

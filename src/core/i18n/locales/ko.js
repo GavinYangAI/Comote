@@ -39,6 +39,7 @@ export default {
   "dingtalk.media.missing": "파일이 사라졌습니다: {path}",
   "dingtalk.media.tooLarge": "{name}은(는) {size}MB로 DingTalk 한도를 초과하여 전송하지 않았습니다. 경로: {path}",
   "telegram.attachment.noProject": "파일을 받았지만 열린 프로젝트가 없습니다. 먼저 /open 으로 프로젝트를 선택한 뒤 파일을 보내 주세요.",
+  "attachment.read.instruction": "사용자가 파일 `{path}` 을(를) 보냈습니다(현재 프로젝트 안에 저장됨). 답변하기 전에 그 파일을 읽어 주세요.",
   "telegram.pair.prompt": "페어링 코드 {code}을(를) 보내 연동을 완료하세요.",
   "telegram.pair.success": "✅ 페어링 완료 — 이 채팅이 연동되었습니다.",
   "telegram.picker.replyHint": "위의 버튼을 눌러 선택하세요.",
