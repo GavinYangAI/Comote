@@ -89,3 +89,22 @@ test("non-image attachment becomes a read instruction in the prompt", async () =
   assert.match(calls[0], /\.comote\/uploads\/report\.pdf/);
   assert.match(calls[0], /see/);
 });
+
+test("a message with both an image and a non-image yields a reference for the image and an instruction for the file", async () => {
+  const calls = [];
+  const { adapter } = make({
+    commandRouter: { handleMessageAsync: async (m) => { calls.push(m.text); return { kind: "text", text: "ok" }; } },
+    downloadAttachment: async ({ attachment }) => ({ relativePath: `.comote/uploads/${attachment.fileName}` }),
+  });
+  await adapter.handleInbound({
+    id: "m5", chat: "c1", user: "u1", text: "look at these",
+    attachments: [{ fileName: "pic.png" }, { fileName: "notes.pdf" }],
+  });
+  // Image keeps the bare reference…
+  assert.match(calls[0], /\[attachment: \.comote\/uploads\/pic\.png\]/);
+  // …the non-image is NOT a bare reference but its path still appears (inside the read instruction)…
+  assert.doesNotMatch(calls[0], /\[attachment: \.comote\/uploads\/notes\.pdf\]/);
+  assert.match(calls[0], /\.comote\/uploads\/notes\.pdf/);
+  // …and the user's own text is preserved.
+  assert.match(calls[0], /look at these/);
+});
