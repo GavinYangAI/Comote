@@ -1,4 +1,5 @@
 import { classifyMedia } from "../../core/paths.js";
+import { attachmentPromptLine } from "../../core/attachment-prompt.js";
 import { routerReplyToSemantic } from "./messages.js";
 
 // Shared inbound pipeline for every channel: normalize → group-gate → detect
@@ -52,15 +53,15 @@ export class BaseChannelAdapter {
       for (const attachment of message.attachments) {
         try {
           const { relativePath } = await this.downloadAttachment({ attachment, identity: message.identity });
-          prefixes.push(`[attachment: ${relativePath}]`);
+          const kind = attachment.kind ?? classifyMedia(relativePath);
+          // Images keep a bare path reference (pixels are forwarded separately as
+          // a multimodal input by the command router); every other file type gets
+          // an explicit instruction so Codex actually opens it from the project.
+          prefixes.push(attachmentPromptLine({ relativePath, kind }));
           // Stamp the downloaded local path + media kind so the command router
           // can forward image attachments to Codex as real images (localImage /
           // --image) instead of only referencing them in the prompt text.
-          attachments.push({
-            ...attachment,
-            localPath: relativePath,
-            kind: attachment.kind ?? classifyMedia(relativePath),
-          });
+          attachments.push({ ...attachment, localPath: relativePath, kind });
         } catch (error) {
           if (error.message === "NO_PROJECT") {
             await this.sendReply({

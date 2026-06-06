@@ -75,3 +75,17 @@ test("noProjectMessage override is used for the attachment NO_PROJECT reply", as
   await adapter.handleInbound({});
   assert.equal(sent[0].text, "CUSTOM_NO_PROJECT");
 });
+
+test("non-image attachment becomes a read instruction in the prompt", async () => {
+  const calls = [];
+  const { adapter } = make({
+    commandRouter: { handleMessageAsync: async (m) => { calls.push(m.text); return { kind: "text", text: "ok" }; } },
+    downloadAttachment: async ({ attachment }) => ({ relativePath: `.comote/uploads/${attachment.fileName}` }),
+  });
+  await adapter.handleInbound({ id: "m4", chat: "c1", user: "u1", text: "see", attachments: [{ fileName: "report.pdf" }] });
+  // A non-image file is no longer a bare `[attachment: …]` reference…
+  assert.doesNotMatch(calls[0], /\[attachment: \.comote\/uploads\/report\.pdf\]/);
+  // …it names the in-project path inside a read instruction, and keeps the user's text.
+  assert.match(calls[0], /\.comote\/uploads\/report\.pdf/);
+  assert.match(calls[0], /see/);
+});
