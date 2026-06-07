@@ -4,9 +4,9 @@
 
 **手机上的 Codex 遥控器 · 本地运行 · 端到端私密**
 
-把你电脑上的 [Codex Desktop](https://openai.com/codex) 接到飞书 / 微信，让你在地铁里、客户那边、半夜的床上，都能继续指挥你的 Codex agent —— 不需要把电脑暴露到公网，不需要租服务器，不需要装一堆中间件。
+把你电脑上的 [Codex Desktop](https://openai.com/codex) 接到飞书 / 微信 / 钉钉 / Telegram，让你在地铁里、客户那边、半夜的床上，都能继续指挥你的 Codex agent —— 不需要把电脑暴露到公网，不需要租服务器，不需要装一堆中间件。
 
-[English](#english-tldr) · [快速开始](#快速开始) · [常见问题](#faq) · [仓库](https://github.com/GavinYangAI/comote)
+[English](./README.en.md) · [快速开始](#快速开始) · [常见问题](#faq) · [仓库](https://github.com/GavinYangAI/comote)
 
 </div>
 
@@ -35,26 +35,37 @@
 | 远程使唤本机 Codex | SSH + tmux + 手敲命令 | 飞书发一句话 |
 | 在 IM 里审批 Codex 的高危操作 | 没法做 | 卡片点按钮 |
 | 不想把电脑暴露公网 | 装 frp / ngrok | 不用，daemon 只听本机 |
-| 想用别的 IM | 自己写 bot | 实现一个 100 行的 channel adapter |
+| 想用别的 IM | 自己写 bot | 实现一个 channel adapter（约 200-400 行） |
 
 > **关于官方 Codex 手机端**：OpenAI 自己出了 ChatGPT/Codex 的手机客户端，但它只服务 ChatGPT 订阅用户 —— 用 API key 跑 Codex CLI / Codex Desktop 的人没法用。Comote 就是给这类用户的：你的 Codex 在你电脑上跑、用你自己的 key，手机端只是个遥控器。
 
 ## 特性
 
 - **真·本地优先** —— daemon 只绑 `127.0.0.1`，所有 token 落在 `~/.comote/`，不上传任何服务器
-- **强授权模型** —— 没在桌面 UI 里"点确认"的聊天身份，连 `/status` 都得不到回复
-- **流式回复** —— Codex 边想边说，飞书卡片实时更新（不是等完整答案再发一坨）
+- **强授权模型** —— 没绑定 / 没确认过的聊天身份，连 `/status` 都得不到回复
+- **流式回复** —— Codex 边想边说，IM 卡片实时更新（不是等完整答案再发一坨）
 - **审批卡片** —— Codex 想跑 `rm -rf` 或者写文件时，IM 里弹卡片让你点批准 / 拒绝
 - **会话恢复** —— 关掉手机过几个小时回来，`/sessions` 继续之前的 thread
-- **多频道并行** —— 飞书和微信同时绑，互不打架
+- **多频道并行** —— 飞书、微信、钉钉、Telegram 可以同时绑，互不打架
 - **可扩展** —— 加新 IM 就实现一个 channel adapter；加新 agent 后端就实现一个 connector
+
+## 支持的渠道
+
+| 渠道 | 绑定方式 | 状态 |
+|---|---|---|
+| **飞书 / Lark** | 扫码自建应用（feishu / lark 域可选） | ✅ 稳定 |
+| **微信** | iLink 扫码登录 | ✅ 稳定 |
+| **钉钉 / DingTalk** | AppKey / AppSecret + 卡片模板 | 🧪 实验性 |
+| **Telegram** | Bot Token + 配对码 | 🧪 实验性 |
+
+> 🧪 **实验性**：功能已实现并有测试覆盖，但真机长期联调还在进行中，可能有边角坑。欢迎试用并反馈。
 
 ## 多语言
 
 Comote 支持全局界面语言切换：中文（默认）、English、日本語、한국어、Français、Español。
 
 - 在 Web 设置页的「语言」下拉切换，**即时生效并持久化**（写入 state.json 的 `settings.locale`）。
-- 覆盖所有用户可见文案：飞书 / 微信的聊天回复与卡片、Web 设置页。服务端运行日志（eventLog）保持原文，不随语言切换。
+- 覆盖所有用户可见文案：各 IM 的聊天回复与卡片、Web 设置页。服务端运行日志（eventLog）保持原文，不随语言切换。
 - 也可经 API 读写：`GET /api/settings` 返回 `{ locale, supported }`，`PUT /api/settings { locale }` 切换。
 
 ## 快速开始
@@ -68,16 +79,27 @@ Comote 支持全局界面语言切换：中文（默认）、English、日本語
 
 或从源码编译（见[下面](#从源码构建)）。
 
-### 2. 启动并绑定一个 IM
+### 2. 绑定一个 IM
 
-打开 Comote，按提示二选一（也可以都绑）：
+打开 Comote，在 Web 设置页选一个渠道绑定（也可以都绑）。四种渠道有两类绑定方式：
+
+**扫码类（飞书 / 微信）—— 在桌面确认身份**
 
 - **飞书**：点"绑定飞书" → 用飞书 App 扫码 → 自动建好自建应用 → 完成
 - **微信**：点"绑定微信" → 扫描 iLink 登录码 → 完成
 
-### 3. 在 IM 里确认身份
+**凭证 / Token 类（钉钉 / Telegram，实验性）—— 填配置后绑定到具体聊天**
 
-第一次发消息，Comote 会在桌面 UI 弹"待授权"卡片。点"确认"。**只有确认过的身份才能控制 Codex。**
+- **Telegram**：在 [@BotFather](https://t.me/BotFather) 建一个 bot，拿到 Bot Token 填进设置页 → daemon 自动起来接收消息 → 设置页会显示一个**配对码**，把它发给你的 bot，绑定即完成（绑定到这个聊天）。
+- **钉钉**：在钉钉开放平台建企业内部应用，填 AppKey / AppSecret；如需卡片（审批 / 状态 / 选择器），在后台建好三个卡片模板并把模板 id 填进设置页（不填则降级为纯文本）→ 给应用发消息完成绑定。
+
+### 3. 确认身份
+
+**只有绑定 / 确认过的身份才能控制 Codex。**
+
+- 飞书 / 微信：第一次发消息，Comote 会在桌面 UI 弹"待授权"卡片，点"确认"。
+- Telegram：发出配对码即完成绑定，无需再到桌面确认。
+- 钉钉：以发消息的用户身份绑定。
 
 ### 4. 开始用
 
@@ -98,7 +120,7 @@ Comote 支持全局界面语言切换：中文（默认）、English、日本語
 ```text
        手机
          │
-  微信 / 飞书 bot
+微信 / 飞书 / 钉钉 / Telegram bot
          │
          ▼ 长连接 / 推送
 ┌──────────────────────────┐
@@ -114,7 +136,7 @@ Comote 支持全局界面语言切换：中文（默认）、English、日本語
 
 桌面端用 [Tauri](https://tauri.app/) 包了一层壳，Node daemon 作为 sidecar 启动，只监听本机回环地址。
 
-整个链路里**没有任何一步走公网中转**：手机端的 IM bot 通过腾讯 / 飞书自己的服务推到你的 daemon（飞书是 WebSocket 长连接，微信是 iLink getupdates 轮询），daemon 在 localhost 跟 Codex Desktop 说话。
+整个链路里**没有任何一步走公网中转**：手机端的 IM bot 通过各平台自己的服务推到你的 daemon（飞书是 WebSocket 长连接，钉钉是 Stream 长连接，微信是 iLink getupdates 轮询，Telegram 是 getUpdates 长轮询），daemon 在 localhost 跟 Codex Desktop 说话。
 
 ## 配置
 
@@ -122,6 +144,8 @@ Comote 支持全局界面语言切换：中文（默认）、English、日本語
 
 - **飞书 / Lark** — 详见 [`src/channels/feishu/README.md`](src/channels/feishu/README.md)
 - **微信** — 详见 [`src/channels/wechat/README.md`](src/channels/wechat/README.md)
+- **钉钉 / DingTalk** — 配置项：`appKey` / `appSecret` + 可选的 `approvalTemplateId` / `statusTemplateId` / `pickerTemplateId`（卡片模板，缺省降级纯文本）
+- **Telegram** — 配置项：`botToken`；首次连上后设置页显示 `pairingCode`，发给 bot 完成绑定
 
 常用环境变量：
 
@@ -149,19 +173,19 @@ Comote 支持全局界面语言切换：中文（默认）、English、日本語
 
 **Q：数据会上传到任何服务器吗？**
 
-不会。daemon 只绑 `127.0.0.1`，所有授权、token、会话历史都存在本机 `~/.comote/` 下。手机端消息也是 IM 自己的服务器（腾讯 / 飞书）推到你本机，Comote 不经过任何第三方中转。
+不会。daemon 只绑 `127.0.0.1`，所有授权、token、会话历史都存在本机 `~/.comote/` 下。手机端消息也是 IM 自己的服务器（腾讯 / 飞书 / 钉钉 / Telegram）推到你本机，Comote 不经过任何第三方中转。
 
 **Q：可以多人共用一台 daemon 吗？**
 
-可以。每个聊天身份都需要在桌面 UI 里单独"确认"，授权颗粒度是按身份的。但请注意：所有授权身份共享同一台 Codex Desktop，互相之间能看到彼此的 thread 列表。
+可以。每个聊天身份都需要单独绑定 / 确认，授权颗粒度是按身份的。但请注意：所有授权身份共享同一台 Codex Desktop，互相之间能看到彼此的 thread 列表。
 
 **Q：微信集成合规吗？**
 
 我们用的是腾讯 iLink 公开的 bot 接口（`ilinkai.weixin.qq.com`），不是逆向、不是桌面 UI 自动化、不绕过任何账号验证。但腾讯的服务条款会变，你需要自己评估当前的合规风险，**作者不为此承担责任**。
 
-**Q：支持其他 IM 吗（Telegram / Discord / Slack）?**
+**Q：支持哪些 IM？还能加别的吗（Discord / Slack）？**
 
-目前内置飞书和微信。新增一个 IM 需要实现一个 `ChannelAdapter` —— 大概 200-400 行代码。欢迎 PR。
+目前内置四个：**飞书**和**微信**（稳定），**钉钉**和**Telegram**（实验性）。新增一个 IM 需要实现一个 `ChannelAdapter` —— 大概 200-400 行代码，Discord 的适配已在规划中。欢迎 PR。
 
 **Q：官方不是有 Codex 手机端吗？**
 
@@ -214,9 +238,9 @@ npm run dist:win
 
 ```
 src/
-  channels/       聊天平台适配器（feishu / wechat）
+  channels/       聊天平台适配器（feishu / wechat / dingtalk / telegram）
   connectors/     Codex 后端适配器（codex-desktop / codex-cli）
-  core/           授权、命令路由、project/session、持久化、版本检查
+  core/           授权、命令路由、project/session、持久化、i18n、版本检查
   server/         本地 HTTP API + 静态站点
 src-tauri/        Tauri 桌面壳（Rust）
 public/           设置 UI 的静态资源
@@ -252,19 +276,4 @@ Comote 的目标是让"远程使唤本机 Codex"这件事**简单到不值得专
 
 ---
 
-## English TL;DR
-
-**Comote** is a local-first remote companion for [Codex Desktop](https://openai.com/codex). It runs as a small Node.js daemon (packaged as a Tauri desktop app) on your Mac/PC and lets your phone-side WeChat or Feishu (Lark) bot relay messages into Codex — so you can keep nudging your Codex agent from the subway, from a friend's house, from bed, without ever exposing your machine to the public internet.
-
-**Why you might want it:**
-
-- You want to keep an LLM coding agent running on your own machine (where your secrets live) but interact from your phone.
-- You don't want to set up SSH tunnels, ngrok, or rent a server.
-- You want approval-gated execution: Codex shows you the diff in your chat app, you tap approve.
-- You're okay routing through your IM provider (Tencent / Lark) but nothing else.
-
-**Privacy model:** the daemon binds only to `127.0.0.1`. All credentials and history live in `~/.comote/`. The only network hops are: your phone → IM provider (Tencent / Lark) → push to your daemon. No third-party relay.
-
-**Status:** alpha. Channels: WeChat (via iLink), Feishu/Lark (official OpenAPI). Connectors: Codex Desktop (primary), Codex CLI (fallback).
-
-See [Quick Start](#快速开始) above (Chinese), or open an issue if you'd like a fully English doc.
+🌐 **English**: see [README.en.md](./README.en.md)
