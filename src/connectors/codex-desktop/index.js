@@ -644,15 +644,17 @@ function readCodexWorkspaceProjects(statePath) {
   const active = state["active-workspace-roots"] ?? [];
   const order = state["project-order"] ?? [];
   const saved = state["electron-saved-workspace-roots"] ?? [];
+  const labels = state["electron-workspace-root-labels"] ?? {};
   const seen = new Set();
   const projects = [];
+  const hasLabel = (path) => typeof labels[path] === "string" && labels[path].trim();
   const add = (path, isActive) => {
     if (!path || seen.has(path)) {
       return;
     }
     seen.add(path);
     projects.push({
-      name: basename(path),
+      name: hasLabel(path) ? labels[path].trim() : basename(path),
       path,
       source: "codex-desktop",
       status: "available",
@@ -661,6 +663,11 @@ function readCodexWorkspaceProjects(statePath) {
   };
   for (const path of active) {
     add(path, true);
+  }
+  for (const path of [...order, ...saved]) {
+    if (hasLabel(path)) {
+      add(path, false);
+    }
   }
   for (const path of [...order, ...saved]) {
     add(path, false);

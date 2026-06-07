@@ -150,3 +150,30 @@ test("persistSnapshot keeps all active entries but caps terminal history", () =>
   // Order is preserved: actives precede the terminal tail as inserted.
   assert.deepEqual(snap.slice(0, 3).map((e) => e.text), ["active 0", "active 1", "active 2"]);
 });
+
+test("restored queue allocates ids after the highest existing outbound id", () => {
+  const queue = new OutboundQueue({
+    entries: [
+      { id: "out_000278", channel: "feishu", conversationId: "c1", text: "old", status: "delivered", ackedAt: "2026-01-01T00:00:00.000Z" },
+      { id: "out_000205", channel: "feishu", conversationId: "c1", text: "pending", status: "queued", ackedAt: null },
+    ],
+  });
+
+  const next = queue.enqueue({ channel: "feishu", conversationId: "c1", text: "new" });
+
+  assert.equal(next.id, "out_000279");
+});
+
+test("markDelivered prefers a pending duplicate id over a terminal historical entry", () => {
+  const queue = new OutboundQueue({
+    entries: [
+      { id: "out_000205", channel: "feishu", conversationId: "c1", text: "old", status: "delivered", ackedAt: "2026-01-01T00:00:00.000Z" },
+      { id: "out_000205", channel: "feishu", conversationId: "c1", text: "new", status: "queued", ackedAt: null },
+    ],
+  });
+
+  queue.markDelivered("out_000205");
+
+  const remaining = queue.list({ pendingOnly: false });
+  assert.deepEqual(remaining.map((entry) => entry.status), ["delivered", "delivered"]);
+});
