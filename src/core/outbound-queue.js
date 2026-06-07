@@ -15,7 +15,7 @@ export class OutboundQueue {
     onShed = null,
   } = {}) {
     this.entries = entries.map((entry) => ({ ...entry }));
-    this.nextId = this.entries.length + 1;
+    this.nextId = nextIdAfter(this.entries);
     this.maxAttempts = maxAttempts;
     this.maxTerminalEntries = maxTerminalEntries;
     this.maxActiveEntries = maxActiveEntries;
@@ -102,7 +102,7 @@ export class OutboundQueue {
   }
 
   markDelivered(id) {
-    const entry = this.entries.find((candidate) => candidate.id === id);
+    const entry = findMutableEntry(this.entries, id);
     if (!entry) {
       throw new Error(`unknown outbound reply: ${id}`);
     }
@@ -113,7 +113,7 @@ export class OutboundQueue {
   }
 
   markFailed(id, error) {
-    const entry = this.entries.find((candidate) => candidate.id === id);
+    const entry = findMutableEntry(this.entries, id);
     if (!entry) {
       throw new Error(`unknown outbound reply: ${id}`);
     }
@@ -170,6 +170,22 @@ export class OutboundQueue {
 
 function isPending(entry) {
   return !entry.ackedAt && (entry.status === "queued" || entry.status === "retrying");
+}
+
+function findMutableEntry(entries, id) {
+  return entries.find((candidate) => candidate.id === id && isPending(candidate))
+    ?? entries.find((candidate) => candidate.id === id);
+}
+
+function nextIdAfter(entries) {
+  let max = 0;
+  for (const entry of entries) {
+    const match = /^out_(\d+)$/.exec(String(entry.id ?? ""));
+    if (match) {
+      max = Math.max(max, Number(match[1]));
+    }
+  }
+  return max + 1;
 }
 
 // A retrying entry is only due once its backoff window has elapsed. Queued

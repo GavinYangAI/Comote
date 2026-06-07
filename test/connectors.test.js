@@ -401,7 +401,11 @@ test("desktop connector lists the active workspace first, then project order", a
     JSON.stringify({
       "active-workspace-roots": ["/home/test/projects/team-skills"],
       "project-order": ["/home/test/projects/alpha", "/home/test/projects/beta"],
-      "electron-saved-workspace-roots": ["/home/test/projects/alpha"],
+      "electron-saved-workspace-roots": ["/home/test/projects/alpha", "/home/test/projects/worktrees/team-skills"],
+      "electron-workspace-root-labels": {
+        "/home/test/projects/team-skills": "Team Skills",
+        "/home/test/projects/worktrees/team-skills": "Team Skills Worktree",
+      },
     }),
   );
   try {
@@ -410,7 +414,8 @@ test("desktop connector lists the active workspace first, then project order", a
     assert.deepEqual(
       projects.map((p) => [p.name, p.active]),
       [
-        ["team-skills", true],
+        ["Team Skills", true],
+        ["Team Skills Worktree", false],
         ["alpha", false],
         ["beta", false],
       ],
