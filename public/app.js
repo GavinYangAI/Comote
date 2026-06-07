@@ -1,5 +1,13 @@
 import { qrDataUrl } from "./qr-code.js";
 import {
+  threadListSignature,
+  newTranscriptMessages,
+  transcriptRefreshLimit,
+  advanceRefreshCursor,
+  resolveRefreshTotal,
+  shouldSkipPanelRefresh,
+} from "./thread-view.js";
+import {
   channelBadge,
   channelRows,
   channelFormSpec,
@@ -669,7 +677,7 @@ const threadDetailCache = new Map(); // threadId -> { html, offset, loaded }
 let lastThreadSignature = null;
 
 function defaultThreadDetailState() {
-  return { html: "", offset: "0", loaded: "" };
+  return { html: "", offset: "0", loaded: "", total: "0" };
 }
 
 // Snapshot the currently rendered detail panels back into the cache so the
@@ -690,6 +698,7 @@ function syncExpandedThreadStates(target) {
       html: panel.innerHTML,
       offset: panel.dataset.offset ?? "0",
       loaded: panel.dataset.loaded ?? "",
+      total: panel.dataset.total ?? "0",
     });
   }
 }
@@ -723,10 +732,10 @@ function paintThreads(threadList, primaryProject) {
     return;
   }
 
-  const signature = JSON.stringify({
-    ids: threadList.map((thread) => String(thread.id ?? "")),
-    expanded: [...expandedThreadIds].sort(),
-  });
+  // Signature folds in each thread's revision (message count / updatedAt /
+  // latest preview), not just the id set, so new messages in an existing
+  // thread still force a repaint instead of being skipped here.
+  const signature = threadListSignature(threadList, expandedThreadIds);
   if (signature === lastThreadSignature) {
     return;
   }
@@ -742,11 +751,112 @@ function paintThreads(threadList, primaryProject) {
       const cwd = thread.cwd ?? primaryProject.path;
       const expanded = expandedThreadIds.has(threadId);
       const state = threadDetailCache.get(threadId) ?? defaultThreadDetailState();
-      return `<li class="thread-row" data-thread-id="${escapeAttr(threadId)}"><div class="thread-row-summary"><strong>${index + 1}. ${escapeHtml(title)}</strong><div class="meta">${escapeHtml(threadId)}</div><div class="meta">${escapeHtml(cwd)}</div></div><div class="thread-detail"${expanded ? "" : " hidden"} data-offset="${escapeAttr(state.offset)}" data-loaded="${escapeAttr(state.loaded)}">${expanded ? state.html : ""}</div></li>`;
+      return `<li class="thread-row" data-thread-id="${escapeAttr(threadId)}"><div class="thread-row-summary"><strong>${index + 1}. ${escapeHtml(title)}</strong><div class="meta">${escapeHtml(threadId)}</div><div class="meta">${escapeHtml(cwd)}</div></div><div class="thread-detail"${expanded ? "" : " hidden"} data-offset="${escapeAttr(state.offset)}" data-loaded="${escapeAttr(state.loaded)}" data-total="${escapeAttr(state.total)}">${expanded ? state.html : ""}</div></li>`;
     })
     .join("");
 
   lastThreadSignature = signature;
+}
+
+// Re-fetch the transcript for every *expanded* detail panel and append any
+// messages that arrived since it was loaded. paintThreads restores expanded
+// panels from cached HTML, so without this an open conversation would never
+// pick up new messages from the 5s poll. Only expanded panels are fetched, so
+// the request volume stays one-per-open-conversation. Pagination from "load
+// more" is preserved: new (newest) messages are inserted before the load-more
+// button and dataset.offset is advanced so older pages still fetch correctly.
+async function refreshExpandedThreadDetails(target) {
+  for (const row of target.querySelectorAll("li[data-thread-id]")) {
+    const threadId = row.dataset.threadId;
+    const panel = row.querySelector(".thread-detail");
+    if (!threadId || !panel || panel.hidden || panel.dataset.loaded !== "1") {
+      continue;
+    }
+    // Per-panel mutex: skip a panel whose fetch (this refresh or a "load more")
+    // is already in flight so a slow/overlapping tick can't read-modify-write the
+    // same offset/total/DOM concurrently and duplicate or reorder messages.
+    if (shouldSkipPanelRefresh(panel)) {
+      continue;
+    }
+    panel.dataset.refreshing = "1";
+    try {
+      const prevTotal = Number(panel.dataset.total || 0);
+      const total = await refreshPanelTranscript(threadId, panel, prevTotal);
+      if (total != null) {
+        rememberThreadDetail(row, panel);
+      }
+    } finally {
+      delete panel.dataset.refreshing;
+    }
+  }
+}
+
+// Fetch the newest messages for one expanded panel and append the genuinely-new
+// tail. Returns the count the panel is now rendered at (so the caller can cache
+// it), or null when the fetch failed. Sizes the page to cover a burst since the
+// panel was last rendered — a fixed limit=20 silently dropped the middle of any
+// >20-message burst — and advances offset/total by exactly what was appended so
+// "load more" and the next refresh's delta stay aligned.
+async function refreshPanelTranscript(threadId, panel, prevTotal) {
+  // First fetch the default page. Its `total` reveals how big the burst is; if it
+  // overflows the default page we re-fetch a page wide enough to carry the whole
+  // delta in one newest-first slice (capped), so nothing in the middle is
+  // stranded the way a fixed limit=20 used to strand it.
+  const probe = await safeGet(
+    `/api/codex/transcript?threadId=${encodeURIComponent(threadId)}&limit=20&offset=0`,
+    null,
+  );
+  if (!probe.ok || !probe.value) {
+    return null;
+  }
+  let total = probe.value.total ?? prevTotal;
+  let page = probe.value.messages;
+  const wideLimit = transcriptRefreshLimit(prevTotal, total);
+  if (wideLimit > 20) {
+    const wide = await safeGet(
+      `/api/codex/transcript?threadId=${encodeURIComponent(threadId)}&limit=${wideLimit}&offset=0`,
+      null,
+    );
+    if (wide.ok && wide.value) {
+      total = wide.value.total ?? total;
+      page = wide.value.messages;
+    }
+  }
+  const newest = newTranscriptMessages(page, prevTotal, total);
+  if (newest.length === 0) {
+    // Nothing new; only move total forward by what is actually loaded (0), which
+    // leaves it at prevTotal so a later burst is still detected.
+    const cursor = advanceRefreshCursor(panel.dataset.offset, prevTotal, 0);
+    panel.dataset.total = String(cursor.total);
+    return cursor.total;
+  }
+  const tmp = document.createElement("div");
+  tmp.innerHTML = renderThreadMessages(newest);
+  const frag = document.createDocumentFragment();
+  while (tmp.firstChild) {
+    frag.appendChild(tmp.firstChild);
+  }
+  // The panel may currently show only a placeholder (e.g. "no local history")
+  // with no rendered messages; drop it before the first real message lands.
+  if (!panel.querySelector(".chat-msg")) {
+    panel.innerHTML = "";
+  }
+  const moreBtn = panel.querySelector(".thread-load-more-btn");
+  if (moreBtn) {
+    panel.insertBefore(frag, moreBtn);
+  } else {
+    panel.appendChild(frag);
+  }
+  // Advance the load-more cursor by exactly what we appended. For total (the next
+  // refresh's prevTotal): when the page carried the whole delta, prevTotal+appended
+  // already equals the server total; when a burst overflowed even the capped wide
+  // page, jump straight to the server total so we don't re-fetch — and re-append —
+  // the same newest slice next tick (the un-carried middle is "load more" history).
+  const cursor = advanceRefreshCursor(panel.dataset.offset, prevTotal, newest.length);
+  const nextTotal = resolveRefreshTotal(prevTotal, total, newest.length);
+  panel.dataset.total = String(nextTotal);
+  panel.dataset.offset = String(cursor.offset);
+  return nextTotal;
 }
 
 async function renderThreads(status, projectsValue) {
@@ -768,6 +878,9 @@ async function renderThreads(status, projectsValue) {
   }
   const threadList = result.value?.data ?? result.value?.threads ?? [];
   paintThreads(threadList, primaryProject);
+  // paintThreads restores expanded panels from cache; pull fresh transcripts so
+  // new messages show up within the 5s poll instead of being frozen at expand.
+  await refreshExpandedThreadDetails(target);
 }
 
 function setBridgeStatus(label) {
@@ -1243,6 +1356,7 @@ function rememberThreadDetail(row, panel) {
       html: panel.innerHTML,
       offset: panel.dataset.offset ?? "0",
       loaded: panel.dataset.loaded ?? "",
+      total: panel.dataset.total ?? "0",
     });
   }
   lastThreadSignature = null;
@@ -1260,32 +1374,46 @@ document.querySelector("#threads").addEventListener("click", async (event) => {
       return;
     }
     const panel = btn.closest(".thread-detail");
-    const threadId = row.dataset.threadId;
-    const currentOffset = Number(panel.dataset.offset || 0);
-    const nextResult = await safeGet(
-      `/api/codex/transcript?threadId=${encodeURIComponent(threadId)}&limit=20&offset=${currentOffset}`,
-      null,
-    );
-    btn.remove();
-    if (!nextResult.ok || !nextResult.value) {
+    // Share the per-panel mutex with the 5s refresh: if a refresh is already
+    // appending to this panel, ignore the click so the two don't interleave
+    // read-modify-writes on offset/total/DOM.
+    if (shouldSkipPanelRefresh(panel)) {
       return;
     }
-    const newMessages = (nextResult.value.messages ?? []).slice().reverse();
-    const newHasMore = nextResult.value.hasMore ?? false;
-    panel.dataset.offset = String(currentOffset + newMessages.length);
-    const frag = document.createDocumentFragment();
-    const tmp = document.createElement("div");
-    tmp.innerHTML = renderThreadMessages(newMessages);
-    while (tmp.firstChild) {
-      frag.appendChild(tmp.firstChild);
+    const threadId = row.dataset.threadId;
+    panel.dataset.refreshing = "1";
+    try {
+      const currentOffset = Number(panel.dataset.offset || 0);
+      const nextResult = await safeGet(
+        `/api/codex/transcript?threadId=${encodeURIComponent(threadId)}&limit=20&offset=${currentOffset}`,
+        null,
+      );
+      btn.remove();
+      if (!nextResult.ok || !nextResult.value) {
+        return;
+      }
+      const newMessages = (nextResult.value.messages ?? []).slice().reverse();
+      const newHasMore = nextResult.value.hasMore ?? false;
+      panel.dataset.offset = String(currentOffset + newMessages.length);
+      if (nextResult.value.total != null) {
+        panel.dataset.total = String(nextResult.value.total);
+      }
+      const frag = document.createDocumentFragment();
+      const tmp = document.createElement("div");
+      tmp.innerHTML = renderThreadMessages(newMessages);
+      while (tmp.firstChild) {
+        frag.appendChild(tmp.firstChild);
+      }
+      if (newHasMore) {
+        const moreLi = document.createElement("div");
+        moreLi.innerHTML = `<button class="secondary-button thread-load-more-btn">${tWeb("web.threads.loadMore")}</button>`;
+        frag.appendChild(moreLi.firstChild);
+      }
+      panel.appendChild(frag);
+      rememberThreadDetail(row, panel);
+    } finally {
+      delete panel.dataset.refreshing;
     }
-    if (newHasMore) {
-      const moreLi = document.createElement("div");
-      moreLi.innerHTML = `<button class="secondary-button thread-load-more-btn">${tWeb("web.threads.loadMore")}</button>`;
-      frag.appendChild(moreLi.firstChild);
-    }
-    panel.appendChild(frag);
-    rememberThreadDetail(row, panel);
     return;
   }
 
@@ -1319,6 +1447,9 @@ document.querySelector("#threads").addEventListener("click", async (event) => {
   const messages = (firstResult.value.messages ?? []).slice().reverse();
   const hasMore = firstResult.value.hasMore ?? false;
   panel.dataset.offset = String(messages.length);
+  // Total message count seen at expand time; the 5s refresh compares against
+  // this to detect (and append) only the genuinely new messages.
+  panel.dataset.total = String(firstResult.value.total ?? messages.length);
   if (messages.length === 0) {
     panel.innerHTML = `<div class="meta">${tWeb("web.threads.noLocal")}</div>`;
     rememberThreadDetail(row, panel);

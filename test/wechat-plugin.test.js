@@ -8,7 +8,7 @@ test("wechat plugin exposes meta + factories", () => {
   assert.equal(wechatPlugin.meta.id, "wechat");
   assert.equal(wechatPlugin.meta.inboundMode, "poll");
   assert.equal(wechatPlugin.meta.binding, "qr");
-  assert.deepEqual(wechatPlugin.meta.capabilities, { cards: 0, media: 0, liveUpdates: 0, typing: 1, fileButtons: 0 });
+  assert.deepEqual(wechatPlugin.meta.capabilities, { cards: 0, media: 0, liveUpdates: 0, milestones: 1, typing: 1, fileButtons: 0 });
   for (const fn of ["createDriver", "createAdapter", "createRuntime", "createRenderer", "normalizeConfig", "publicConfig"]) {
     assert.equal(typeof wechatPlugin[fn], "function");
   }

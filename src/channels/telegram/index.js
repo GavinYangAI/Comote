@@ -50,7 +50,7 @@ const telegramPlugin = {
     displayName: "Telegram",
     inboundMode: "push",
     binding: "token",
-    capabilities: { cards: 1, media: 1, liveUpdates: 1, typing: 1, fileButtons: 1 },
+    capabilities: { cards: 1, media: 1, liveUpdates: 1, milestones: 0, typing: 1, fileButtons: 1 },
     descriptionKey: "web.channel.telegram.desc",
     icon: "TG",
     configFields: [

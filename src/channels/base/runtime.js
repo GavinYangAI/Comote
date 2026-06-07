@@ -75,6 +75,16 @@ export class BaseChannelRuntime {
               await this.handleInbound(payload);
             } catch (error) {
               this.eventLog?.error?.(`${this.channelId} 入站处理失败`, { error: error.message });
+              // Don't leave a private sender in silence on a backend hiccup: let
+              // the adapter reply with a generic error for direct messages. This
+              // must never throw (it's already the error path), and we still drain
+              // the queue so that fallback reply is actually delivered.
+              try {
+                await this.adapter.handleInboundFailure?.(payload, error);
+                await this.deliverQueued();
+              } catch {
+                // swallow — the original error is already logged above
+              }
             }
           },
           onAction: this.onAction ?? (async () => ({})),
@@ -155,11 +165,29 @@ export class BaseChannelRuntime {
       for (const update of result.updates ?? []) {
         const payload = this.driver.normalizeUpdate(update);
         const id = this.dedupKeyOf(payload);
-        if (id != null && !this._dedup.add(id)) {
+        if (id != null && this._dedup.has(id)) {
           continue;
         }
-        await this.adapter.handleInbound(payload);
-        inbound += 1;
+        try {
+          await this.adapter.handleInbound(payload);
+          if (id != null) this._dedup.add(id);
+          inbound += 1;
+        } catch (error) {
+          this.eventLog?.error?.(`${this.channelId} 入站处理失败`, { error: error.message });
+          // Wechat is the only poll channel; a backend hiccup here used to leave
+          // the sender in silence. Mirror the push path: let the adapter reply
+          // with a generic error and drain so it's actually delivered. Keep the
+          // loop going so later updates still process. If both the handler and
+          // the fallback fail we deliberately leave the id out of dedup, so the
+          // same update can be retried on the next poll instead of vanishing.
+          try {
+            await this.adapter.handleInboundFailure?.(payload, error);
+            if (id != null) this._dedup.add(id);
+            await this.deliverQueued();
+          } catch {
+            // swallow — the original error is already logged above
+          }
+        }
       }
       const { outbound } = await this.deliverQueued();
       this.lastError = null;

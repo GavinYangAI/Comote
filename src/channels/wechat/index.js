@@ -55,7 +55,7 @@ const wechatPlugin = {
     displayName: "微信 / WeChat",
     inboundMode: "poll",
     binding: "qr",
-    capabilities: { cards: 0, media: 0, liveUpdates: 0, typing: 1, fileButtons: 0 },
+    capabilities: { cards: 0, media: 0, liveUpdates: 0, milestones: 1, typing: 1, fileButtons: 0 },
     descriptionKey: "web.channel.wechat.desc",
     icon: "微",
     configFields: [

@@ -7,13 +7,14 @@ import { t } from "../../core/i18n/index.js";
 // senderStaffId (oToMessages batchSend userIds / card openSpaceId), so we use it
 // as the conversationId.
 export class DingTalkChannelAdapter extends BaseChannelAdapter {
-  constructor({ commandRouter, sendReply, onDetectedIdentity = null, allowGroups = false, downloadAttachment = null }) {
+  constructor({ commandRouter, sendReply, onDetectedIdentity = null, allowGroups = false, downloadAttachment = null, supportsMedia = null }) {
     super({
       channelId: "dingtalk",
       commandRouter,
       sendReply,
       onDetectedIdentity,
       downloadAttachment,
+      supportsMedia,
       allowGroups,
       noProjectMessage: () => t("dingtalk.attachment.noProject"),
     });

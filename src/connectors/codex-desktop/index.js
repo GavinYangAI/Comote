@@ -165,6 +165,14 @@ export class CodexDesktopConnector {
     if (method === "item/fileChange/patchUpdated" && params.itemId) {
       this.fileChangesByItem.set(params.itemId, params.changes ?? []);
       this.#accumulateChangedPaths(params.threadId, params.changes);
+      // A discrete "file edited" milestone for the IM return path. Label is the
+      // first changed file's basename; null-safe degrade to a generic milestone.
+      this.#emit({
+        type: "milestone",
+        kind: "file",
+        label: firstChangePathBasename(params.changes),
+        threadId: params.threadId ?? null,
+      });
       return;
     }
     if (method === "item/agentMessage/delta" && params.itemId) {
@@ -228,6 +236,32 @@ export class CodexDesktopConnector {
       const itemType = params.item?.type;
       if (itemType === "commandExecution" || itemType === "fileChange") {
         this.#emit({ type: "progress", threadId: params.threadId ?? null, itemType });
+      }
+      // A command starting is a discrete milestone for the IM return path: label
+      // is the command's first word (the program), null-safe when absent.
+      if (itemType === "commandExecution") {
+        this.#emit({
+          type: "milestone",
+          kind: "command",
+          label: commandLabel(params.item?.command),
+          threadId: params.threadId ?? null,
+        });
+      }
+      return;
+    }
+    if (method === "item/completed" && params.item?.type === "commandExecution") {
+      // Only surface a milestone when the command FAILED — a non-zero exit is the
+      // signal worth interrupting the user for. Successful commands stay silent
+      // so the IM return path is not flooded with every shell step.
+      const exitCode = params.item.exitCode ?? params.item.exit_code ?? 0;
+      if (exitCode !== 0) {
+        this.#emit({
+          type: "milestone",
+          kind: "command",
+          label: commandLabel(params.item.command),
+          status: "failed",
+          threadId: params.threadId ?? null,
+        });
       }
       return;
     }
@@ -484,6 +518,22 @@ export function extractChangePaths(changes) {
     return Object.keys(changes);
   }
   return [];
+}
+
+// Pure helper: the program word of a shell command, used as a milestone label.
+// Takes the first whitespace-delimited token of the command string. Returns null
+// (a generic milestone downstream) when the command is missing or empty.
+export function commandLabel(command) {
+  if (typeof command !== "string") return null;
+  const first = command.trim().split(/\s+/)[0];
+  return first || null;
+}
+
+// Pure helper: basename of the first changed path in a patch update, used as a
+// file-milestone label. Returns null (generic) when no path can be extracted.
+export function firstChangePathBasename(changes) {
+  const [first] = extractChangePaths(changes);
+  return first ? basename(first) : null;
 }
 
 // Resolves the codex executable per platform. On macOS, prefer the binary

@@ -186,6 +186,139 @@ test("handleInbound routes through adapter then drains the queue", async () => {
   assert.deepEqual(rendered.map((r) => r.text), ["z"]);
 });
 
+test("push inbound failure sends a fallback reply via the adapter (not silently swallowed)", async () => {
+  let handlers = null;
+  const failures = [];
+  const queue = new OutboundQueue();
+  const errs = [];
+  const runtime = new BaseChannelRuntime({
+    channelId: "test",
+    inboundMode: "push",
+    adapter: {
+      handleInbound: async () => { throw new Error("inbound boom"); },
+      handleInboundFailure: async (payload, error) => { failures.push({ payload, error: error.message }); },
+    },
+    outboundQueue: queue,
+    renderer: { render: async () => {} },
+    driver: {
+      getStatus: () => ({ state: "configured" }),
+      startEventStream: async (h) => { handlers = h; return { ok: true }; },
+      stopEventStream: () => {},
+    },
+    eventLog: { error: (...a) => errs.push(a) },
+  });
+  await runtime.start();
+  await handlers.onEvent({ id: "m1" });
+  await waitFor(() => failures.length >= 1);
+  assert.equal(failures[0].error, "inbound boom");
+  // The existing eventLog.error path is preserved too.
+  assert.ok(errs.length >= 1);
+});
+
+test("push inbound failure fallback never crashes when the adapter has no failure hook", async () => {
+  let handlers = null;
+  const queue = new OutboundQueue();
+  const runtime = new BaseChannelRuntime({
+    channelId: "test",
+    inboundMode: "push",
+    adapter: { handleInbound: async () => { throw new Error("inbound boom"); } },
+    outboundQueue: queue,
+    renderer: { render: async () => {} },
+    driver: {
+      getStatus: () => ({ state: "configured" }),
+      startEventStream: async (h) => { handlers = h; return { ok: true }; },
+      stopEventStream: () => {},
+    },
+    eventLog: { error: () => {} },
+  });
+  await runtime.start();
+  await assert.doesNotReject(() => handlers.onEvent({ id: "m1" }));
+});
+
+test("poll inbound failure sends a fallback reply via the adapter and keeps polling", async () => {
+  const failures = [];
+  const rendered = [];
+  const queue = new OutboundQueue();
+  const errs = [];
+  const updates = [{ raw: 1 }, { raw: 2 }]; // first throws, second must still process
+  const runtime = new BaseChannelRuntime({
+    channelId: "test",
+    inboundMode: "poll",
+    adapter: {
+      handleInbound: async (payload) => {
+        if (payload.message.id === "1") throw new Error("inbound boom");
+        queue.enqueue({ channel: "test", conversationId: "c1", kind: "text", text: `r${payload.message.id}`, dedupeKey: `t:${payload.message.id}` });
+      },
+      handleInboundFailure: async (payload, error) => {
+        failures.push({ id: payload.message.id, error: error.message });
+        queue.enqueue({ channel: "test", conversationId: "c1", kind: "text", text: `fallback${payload.message.id}`, dedupeKey: `t:f${payload.message.id}` });
+      },
+    },
+    outboundQueue: queue,
+    renderer: { render: async (r) => rendered.push(r.text) },
+    driver: {
+      getStatus: () => ({ state: "configured" }),
+      fetchUpdates: async () => ({ updates, nextCursor: "cur2" }),
+      normalizeUpdate: (u) => ({ message: { id: String(u.raw) } }),
+    },
+    eventLog: { error: (...a) => errs.push(a) },
+  });
+  const result = await runtime.pollOnce();
+  // The throwing update doesn't count as routed inbound, but the next one does.
+  assert.equal(result.inbound, 1);
+  assert.equal(failures.length, 1);
+  assert.equal(failures[0].id, "1");
+  // Both the fallback reply for the failed update and the real reply got delivered.
+  assert.deepEqual(rendered.sort(), ["fallback1", "r2"]);
+  // The fetch-error path's lastError reset still applied (loop completed cleanly).
+  assert.equal(runtime.lastError, null);
+  assert.ok(errs.length >= 1);
+});
+
+test("poll inbound failure fallback never crashes when the adapter has no failure hook", async () => {
+  const queue = new OutboundQueue();
+  const runtime = new BaseChannelRuntime({
+    channelId: "test",
+    inboundMode: "poll",
+    adapter: { handleInbound: async () => { throw new Error("inbound boom"); } },
+    outboundQueue: queue,
+    renderer: { render: async () => {} },
+    driver: {
+      getStatus: () => ({ state: "configured" }),
+      fetchUpdates: async () => ({ updates: [{ raw: 1 }], nextCursor: null }),
+      normalizeUpdate: (u) => ({ message: { id: String(u.raw) } }),
+    },
+    eventLog: { error: () => {} },
+  });
+  await assert.doesNotReject(() => runtime.pollOnce());
+});
+
+test("poll inbound failure whose fallback also throws does not poison dedup (message retried next poll)", async () => {
+  const queue = new OutboundQueue();
+  let attempts = 0;
+  const runtime = new BaseChannelRuntime({
+    channelId: "test",
+    inboundMode: "poll",
+    adapter: {
+      handleInbound: async () => { attempts += 1; throw new Error("inbound boom"); },
+      handleInboundFailure: async () => { throw new Error("fallback boom too"); },
+    },
+    outboundQueue: queue,
+    renderer: { render: async () => {} },
+    driver: {
+      getStatus: () => ({ state: "configured" }),
+      fetchUpdates: async () => ({ updates: [{ raw: 1 }], nextCursor: null }),
+      normalizeUpdate: (u) => ({ message: { id: String(u.raw) } }),
+    },
+    eventLog: { error: () => {} },
+  });
+  await assert.doesNotReject(() => runtime.pollOnce());
+  await assert.doesNotReject(() => runtime.pollOnce());
+  // Both the original and the fallback failed, so the id was never confirmed —
+  // the same update is allowed to be processed again on the next poll.
+  assert.equal(attempts, 2);
+});
+
 test("pollOnce calls _handleFetchError on a fetch failure (override point)", async () => {
   const queue = new OutboundQueue();
   const seen = [];

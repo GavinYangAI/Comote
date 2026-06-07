@@ -27,7 +27,7 @@ const MAX_PAIRING_PROMPTS = 3;
 // unauthorized messages, so without this an unpaired user could never bind). Once
 // authorized, delegate to the base pipeline (route → enqueue semantic reply).
 export class TelegramChannelAdapter extends BaseChannelAdapter {
-  constructor({ commandRouter, sendReply, onDetectedIdentity = null, downloadAttachment = null, allowGroups = false,
+  constructor({ commandRouter, sendReply, onDetectedIdentity = null, downloadAttachment = null, allowGroups = false, supportsMedia = null,
     isAuthorized = () => false, getPairingState = () => ({ pairingCode: null, linkedChatId: null }), onPaired = async () => {} }) {
     super({
       channelId: "telegram",
@@ -35,6 +35,7 @@ export class TelegramChannelAdapter extends BaseChannelAdapter {
       sendReply,
       onDetectedIdentity,
       downloadAttachment,
+      supportsMedia,
       allowGroups,
       noProjectMessage: () => t("telegram.attachment.noProject"),
     });

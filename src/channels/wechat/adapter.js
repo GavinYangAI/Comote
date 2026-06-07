@@ -9,8 +9,8 @@ export const WECHAT_DRIVER = "tencent-ilink-json-api";
 // subclass only normalizes a raw ilink payload and reports status. WeChat has
 // no attachment download and no display-name resolution.
 export class WeChatChannelAdapter extends BaseChannelAdapter {
-  constructor({ commandRouter, sendReply, onDetectedIdentity = null, allowGroups = false }) {
-    super({ channelId: "wechat", commandRouter, sendReply, onDetectedIdentity, allowGroups });
+  constructor({ commandRouter, sendReply, onDetectedIdentity = null, allowGroups = false, supportsMedia = null }) {
+    super({ channelId: "wechat", commandRouter, sendReply, onDetectedIdentity, allowGroups, supportsMedia });
     this.startedAt = new Date().toISOString();
   }
 

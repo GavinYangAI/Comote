@@ -111,6 +111,32 @@ test("can keep WeChat runtime stopped for tests and diagnostics", () => {
   assert.equal(state.runtime.wechat.getStatus().state, "configured");
 });
 
+// Finding #9 (abstraction): state.js wires each adapter's media support from the
+// plugin's EXPLICIT capabilities.media bit (single source of truth), not from
+// whether a downloadAttachment closure was passed. wechat declares media=0, so
+// its adapter must take the unsupported-attachment path for a pure image.
+test("the wechat adapter is wired with capabilities.media=0 and rejects a pure image", async () => {
+  const sent = [];
+  const state = createComoteState({
+    autoStartWeChatRuntime: false,
+    autoStartFeishuRuntime: false,
+    autoStartDingTalkRuntime: false,
+    autoStartTelegramRuntime: false,
+    persisted: {},
+  });
+  // The adapter enqueues its reply through the shared outbound queue; intercept
+  // it so we can assert the unsupported reply without standing up a runtime.
+  const wechatAdapter = state.channels.wechat;
+  wechatAdapter.sendReply = async (r) => { sent.push(r); return { ok: true }; };
+  const out = await wechatAdapter.handleInbound({
+    accountId: "default",
+    peer: { id: "u1", name: "U1" },
+    message: { id: "m1", text: "", attachments: [{ type: "image", name: "pic.png" }] },
+  });
+  assert.equal(out.kind, "ignored", "pure image on a media=0 channel is not submitted");
+  assert.ok(sent.some((r) => (r.text ?? "").length > 0), "expected an unsupported-channel reply");
+});
+
 // Polls until a condition holds. Auto-start and the live-card open are
 // fire-and-forget, so a fixed timeout races on slow/CI machines. Waiting on the
 // actual post-condition makes the test deterministic.

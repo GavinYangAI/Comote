@@ -30,6 +30,17 @@ import { setLocale as setI18nLocale, DEFAULT_LOCALE, t } from "../core/i18n/inde
 // (they predate i18n); this mirrors that wording so the card matches the log.
 const DISCONNECT_NOTICE = "与 Codex Desktop 的连接已断开";
 
+// Workflow B — turn-progress milestones returned to IM. Push channels already
+// render a live status card, so milestones default OFF there to avoid two
+// sources of truth; wechat has no live card, so it defaults ON. The throttle
+// gates are: drop identical consecutive milestones; coalesce within a hard
+// interval into one "+N, latest: x" flush; cap distinct deliveries per turn.
+// A quiet-watchdog backstops a long stretch with no milestone with one minimal
+// heartbeat. All three intervals are injectable for deterministic tests.
+const MILESTONE_MIN_INTERVAL_MS = 8_000;
+const MILESTONE_MAX_PER_TURN = 6;
+const HEARTBEAT_MS = 90_000;
+
 export function createComoteState({
   persisted = {},
   stateStore = null,
@@ -41,6 +52,7 @@ export function createComoteState({
   desktop: desktopOverride = null,
   currentVersion = null,
   versionChecker = null,
+  milestoneOptions = {},
 } = {}) {
   // Route the persisted value through i18n's validation so a hand-edited or
   // stale state.json can't desync settings.locale from the locale actually served.
@@ -156,8 +168,13 @@ export function createComoteState({
 
   const perChannelWiring = {
     wechat: {
-      buildAdapterOpts: (_stack) => ({
+      buildAdapterOpts: (stack) => ({
         commandRouter,
+        // Source the media-support decision from the plugin's EXPLICIT
+        // capabilities.media bit (single source of truth) rather than letting the
+        // adapter infer it from a missing downloadAttachment. wechat declares
+        // media=0, so its adapter takes the unsupported-attachment path.
+        supportsMedia: Boolean(stack.plugin.meta.capabilities?.media),
         onDetectedIdentity: (identity) => authorization.detectIdentity(identity),
         sendReply: async (reply) => {
           outboundReplies.enqueue(reply);
@@ -210,6 +227,7 @@ export function createComoteState({
     feishu: {
       buildAdapterOpts: (stack) => ({
         commandRouter,
+        supportsMedia: Boolean(stack.plugin.meta.capabilities?.media),
         onDetectedIdentity: (identity) => authorization.detectIdentity(identity),
         resolveDisplayName: (openId) => stack.runtime?.driver?.resolveUserName?.(openId) ?? null,
         downloadAttachment: makeDownloadAttachment(stack, ({ driver, attachment, destPath }) =>
@@ -281,6 +299,7 @@ export function createComoteState({
     dingtalk: {
       buildAdapterOpts: (stack) => ({
         commandRouter,
+        supportsMedia: Boolean(stack.plugin.meta.capabilities?.media),
         onDetectedIdentity: (identity) => authorization.detectIdentity(identity),
         downloadAttachment: makeDownloadAttachment(stack, ({ driver, attachment, destPath }) =>
           driver.downloadMessageResource({
@@ -305,6 +324,7 @@ export function createComoteState({
     telegram: {
       buildAdapterOpts: (stack) => ({
         commandRouter,
+        supportsMedia: Boolean(stack.plugin.meta.capabilities?.media),
         onDetectedIdentity: (identity) => authorization.detectIdentity(identity),
         isAuthorized: (identity) => authorization.isAuthorized(identity),
         getPairingState: () => ({ pairingCode: stack.config.pairingCode, linkedChatId: stack.config.linkedChatId }),
@@ -403,6 +423,7 @@ export function createComoteState({
     streamTextByThread.clear();
     progressByThread.clear();
     changedFilesDeliveredThreads.clear();
+    teardownAllMilestoneState();
   }
 
   // Per-channel re-drain timer guard, so overlapping deliverIfPush calls don't
@@ -611,6 +632,9 @@ export function createComoteState({
         clearTimeout(timer);
       }
       pushRedrainTimers.clear();
+      // Clear any per-thread milestone flush/heartbeat timers (workflow B) so the
+      // daemon can exit cleanly without leaked timers holding the event loop.
+      teardownAllMilestoneState();
       versionChecker?.stop?.();
       await Promise.allSettled(
         [...channelStacks.values()].map((stack) =>
@@ -631,6 +655,56 @@ export function createComoteState({
   // dedupeKey stamp would slip past the outbound queue's dedup and deliver the
   // changed files twice. Cleared on turnStarted and turnCompleted.
   const changedFilesDeliveredThreads = new Set();
+
+  // Workflow B milestone state, keyed by threadId. Each entry tracks the running
+  // sequence (dedupeKey source), the per-turn delivery count, the last delivered
+  // {kind,label} (consecutive-dedup), the throttle timestamp + a pending coalesce
+  // slot ({latest, count, flushTimer}), the heartbeat watchdog timer, and the
+  // time of the last delivered milestone (the heartbeat's quiet-clock). Created
+  // on turnStarted, torn down on every turn-ending event.
+  const milestoneByThread = new Map();
+  // Monotonic per-thread turn nonce, SEPARATE from milestoneByThread because it
+  // must survive each turn's teardown. Two dedupeKeys fold it in:
+  //   • milestones — ms:<thread>:<turn>:<seq>; without the nonce, seq resets to 0
+  //     every turn so turn N+1's first milestone collides with turn N's still-
+  //     retained key in the outbound queue and gets silently dropped.
+  //   • the agent: fallback — when codex omits itemId, agent:<thread> repeats every
+  //     turn, so turn N+1's final agentMessage reuses turn N's retained key and is
+  //     dropped. agent:<thread>:<turn> keeps them distinct (turnNonce() below).
+  // A monotonic counter (not a wall clock) keeps both keys cross-turn unique AND
+  // deterministic. Advanced in turnStarted for EVERY channel (push channels use
+  // the agent: fallback too, not just milestone channels). Cleared on full
+  // teardown only — per-turn teardown must preserve it.
+  const turnNonceByThread = new Map();
+  // The current turn nonce for a thread, used by the agent: fallback key when
+  // itemId is absent. Defaults to 0 for a thread with no turn yet.
+  const turnNonce = (threadId) => turnNonceByThread.get(threadId) ?? 0;
+  // Milestone/heartbeat persist coalescer. Milestone state is never serialized,
+  // so each delivered line used to trigger a full state.json write for nothing —
+  // ~7 writes on a chatty turn. Instead, deliveries just SET this flag; the
+  // turn-ending teardown flushes a single persist when it's set. The persisted
+  // shape (outboundReplies snapshot, etc.) still gets one write per turn, just not
+  // one per line.
+  let milestonePersistDirty = false;
+  const markMilestonePersistDirty = () => {
+    milestonePersistDirty = true;
+  };
+  // The agentMessage dedupeKey. Keyed on the codex itemId when present (so an
+  // actual same-item retry still collapses to one delivery); when codex omits it,
+  // fall back to <thread>:<turnNonce> instead of bare <thread>. Without the nonce
+  // the fallback repeats every turn, so turn N+1's final agentMessage reuses turn
+  // N's still-retained key and the outbound queue silently drops it.
+  const agentDedupeKey = (event) =>
+    `agent:${event.itemId ?? `${event.threadId}:${turnNonce(event.threadId)}`}`;
+  const flushMilestonePersist = () => {
+    if (!milestonePersistDirty) return;
+    milestonePersistDirty = false;
+    persistInBackground();
+  };
+  const msMinInterval = milestoneOptions.minIntervalMs ?? MILESTONE_MIN_INTERVAL_MS;
+  const msMaxPerTurn = milestoneOptions.maxPerTurn ?? MILESTONE_MAX_PER_TURN;
+  const msHeartbeatMs = milestoneOptions.heartbeatMs ?? HEARTBEAT_MS;
+
   desktop.onEvent = (event) => {
     try {
       routeDesktopEvent(event);
@@ -652,6 +726,12 @@ export function createComoteState({
   function routeDesktopEvent(event) {
     if (event.type === "turnStarted") {
       changedFilesDeliveredThreads.delete(event.threadId);
+      // Advance the per-thread turn nonce for EVERY channel — both the milestone
+      // key and the agent: fallback key fold it in, and push channels (milestones
+      // off) still rely on the latter. Must precede initMilestoneState, which
+      // snapshots the current nonce into the milestone state.
+      turnNonceByThread.set(event.threadId, turnNonce(event.threadId) + 1);
+      initMilestoneState(event.threadId);
       sleepGuard.acquire(event.threadId);
       const startedBinding = commandRouter.getThreadBinding(event.threadId);
       if (startedBinding?.channel === "wechat") {
@@ -676,6 +756,7 @@ export function createComoteState({
     }
     if (event.type === "turnCompleted") {
       progressByThread.delete(event.threadId);
+      teardownMilestoneState(event.threadId);
       const completedBinding = commandRouter.getThreadBinding(event.threadId);
       const completedLive = liveCardRuntime(completedBinding?.channel);
       if (completedLive && completedLive.hasThreadCard(event.threadId)) {
@@ -770,6 +851,11 @@ export function createComoteState({
       return;
     }
 
+    if (event.type === "milestone") {
+      handleMilestone(event);
+      return;
+    }
+
     if (event.type === "agentMessageDelta") {
       const binding = commandRouter.getThreadBinding(event.threadId);
       const deltaLive = liveCardRuntime(binding?.channel);
@@ -814,7 +900,7 @@ export function createComoteState({
             ...(binding.accountId ? { accountId: binding.accountId } : {}),
             kind: "text",
             text: event.text ?? "",
-            dedupeKey: `agent:${event.itemId ?? event.threadId}`,
+            dedupeKey: agentDedupeKey(event),
           });
           deliverIfPush(binding.channel);
           persistInBackground();
@@ -839,7 +925,7 @@ export function createComoteState({
         ...(binding.accountId ? { accountId: binding.accountId } : {}),
         kind: "text",
         text: event.text ?? "",
-        dedupeKey: `agent:${event.itemId ?? event.threadId}`,
+        dedupeKey: agentDedupeKey(event),
       });
       deliverIfPush(binding.channel);
       persistInBackground();
@@ -881,6 +967,7 @@ export function createComoteState({
       // changed-files marker for the same reason.
       sleepGuard.release(event.threadId);
       changedFilesDeliveredThreads.delete(event.threadId);
+      teardownMilestoneState(event.threadId);
       const binding = commandRouter.getThreadBinding(event.threadId);
       const errLive = liveCardRuntime(binding?.channel);
       if (errLive && errLive.hasThreadCard(event.threadId)) {
@@ -918,6 +1005,205 @@ export function createComoteState({
       persistInBackground();
       return;
     }
+  }
+
+  // Workflow B — milestones --------------------------------------------------
+
+  // Whether a channel wants milestone progress lines. Driven by the EXPLICIT
+  // capabilities.milestones bit each plugin declares (single source of truth),
+  // not inferred from !liveUpdates. Channels that render a live status card
+  // declare milestones=0 to avoid double truth; channels without a live card
+  // (wechat) declare milestones=1.
+  function milestonesEnabledFor(channel) {
+    const stack = channelStacks.get(channel);
+    if (!stack) return false;
+    return Boolean(stack.plugin.meta.capabilities?.milestones);
+  }
+
+  // turnStarted hook: fresh per-turn milestone state with seq=0 and a quiet-
+  // watchdog that backstops a long silent stretch with one heartbeat reply. The
+  // heartbeat interval is armed ONLY when the bound channel actually wants
+  // milestones — on a milestones-off channel (push channels, which render a live
+  // card instead) the watchdog could only ever no-op, so spinning a 90s interval
+  // every turn is pure waste. The lightweight state + turn nonce are kept for all
+  // channels regardless (the agent: fallback key needs the nonce).
+  function initMilestoneState(threadId) {
+    teardownMilestoneState(threadId);
+    const state = {
+      turn: turnNonce(threadId), // per-thread turn nonce, folded into the dedupeKey
+      seq: 0, // per-turn delivery counter — feeds the dedupeKey AND gates the cap
+      last: null, // last delivered {kind,label} for consecutive-dedup
+      lastSentAt: 0, // throttle clock
+      lastMilestoneAt: Date.now(), // heartbeat quiet-clock
+      pending: null, // { latest:{kind,label}, count }
+      flushTimer: null,
+      heartbeatTimer: null,
+      heartbeatSent: false,
+    };
+    const binding = commandRouter.getThreadBinding(threadId);
+    if (binding && milestonesEnabledFor(binding.channel)) {
+      state.heartbeatTimer = setInterval(() => runHeartbeat(threadId), msHeartbeatMs);
+      state.heartbeatTimer.unref?.();
+    }
+    milestoneByThread.set(threadId, state);
+  }
+
+  // Any turn-ending event: flush a residual pending milestone, clear both timers,
+  // and drop the per-thread entry so neither the Map nor the timers leak. The
+  // residual flush above may deliver one last milestone (which only marks the
+  // persist dirty), so flush the coalesced persist here — at most one full
+  // state.json write per turn for the whole milestone/heartbeat path.
+  function teardownMilestoneState(threadId) {
+    const state = milestoneByThread.get(threadId);
+    if (!state) return;
+    if (state.flushTimer) {
+      clearTimeout(state.flushTimer);
+      state.flushTimer = null;
+    }
+    flushPendingMilestone(threadId, state);
+    if (state.heartbeatTimer) {
+      clearInterval(state.heartbeatTimer);
+      state.heartbeatTimer = null;
+    }
+    milestoneByThread.delete(threadId);
+    flushMilestonePersist();
+  }
+
+  function teardownAllMilestoneState() {
+    for (const threadId of [...milestoneByThread.keys()]) {
+      teardownMilestoneState(threadId);
+    }
+    // Full teardown (close/shutdown) is the only point the turn nonce resets;
+    // per-turn teardown must preserve it so keys stay cross-turn unique.
+    turnNonceByThread.clear();
+  }
+
+  // Routes one milestone event through the three throttle gates and (when it
+  // passes) enqueues a text reply on the bound channel. No-ops when the thread
+  // has no milestone state, no binding, the channel has milestones disabled, or
+  // the per-turn cap is already hit.
+  function handleMilestone(event) {
+    const state = milestoneByThread.get(event.threadId);
+    if (!state) return;
+    const binding = commandRouter.getThreadBinding(event.threadId);
+    if (!binding || !milestonesEnabledFor(binding.channel)) return;
+    if (state.seq >= msMaxPerTurn) return;
+
+    const item = { kind: event.kind, label: event.label ?? null, status: event.status ?? null };
+    // Gate (a): drop a milestone identical to the last one delivered.
+    if (state.last && state.last.kind === item.kind && state.last.label === item.label) {
+      return;
+    }
+    const now = Date.now();
+    // Gate (b): inside the hard interval, coalesce into a single pending slot
+    // (keep only the latest + a count) and arm one flush timer.
+    if (now - state.lastSentAt < msMinInterval) {
+      state.pending = state.pending
+        ? { latest: item, count: state.pending.count + 1 }
+        : { latest: item, count: 1 };
+      if (!state.flushTimer) {
+        const delay = Math.max(0, msMinInterval - (now - state.lastSentAt));
+        state.flushTimer = setTimeout(() => {
+          state.flushTimer = null;
+          flushPendingMilestone(event.threadId, state);
+        }, delay);
+        state.flushTimer.unref?.();
+      }
+      return;
+    }
+    deliverMilestone(event.threadId, state, binding, milestoneText(item), item);
+  }
+
+  // Emits the coalesced pending milestone (if any) as one merged line. Called by
+  // the flush timer and synchronously on teardown so a residual is never lost.
+  function flushPendingMilestone(threadId, state) {
+    if (!state.pending) return;
+    if (state.seq >= msMaxPerTurn) {
+      state.pending = null;
+      return;
+    }
+    const binding = commandRouter.getThreadBinding(threadId);
+    if (!binding || !milestonesEnabledFor(binding.channel)) {
+      state.pending = null;
+      return;
+    }
+    const { latest, count } = state.pending;
+    state.pending = null;
+    const text =
+      count > 1
+        ? t("state.milestone.merged", { count, label: milestoneLabelText(latest) })
+        : milestoneText(latest);
+    deliverMilestone(threadId, state, binding, text, latest);
+  }
+
+  // Enqueues one milestone text reply with an ms:<thread>:<turn>:<seq> dedupeKey
+  // (turn is the monotonic per-thread nonce, seq the per-turn counter — together
+  // cross-turn unique without a wall-clock stamp; seq also gates the per-turn cap)
+  // and resets the throttle/dedup/heartbeat bookkeeping. Deliberately does NOT
+  // persist: milestone state isn't serialized, so a per-line full state.json write
+  // (up to ~7 per chatty turn) buys nothing. The turn-ending teardown persists
+  // once instead (markMilestonePersistDirty / flushMilestonePersist).
+  function deliverMilestone(threadId, state, binding, text, item) {
+    state.seq += 1;
+    state.last = { kind: item.kind, label: item.label };
+    state.lastSentAt = Date.now();
+    state.lastMilestoneAt = state.lastSentAt;
+    state.heartbeatSent = false;
+    outboundReplies.enqueue({
+      channel: binding.channel,
+      conversationId: binding.conversationId,
+      ...(binding.accountId ? { accountId: binding.accountId } : {}),
+      kind: "text",
+      text,
+      dedupeKey: `ms:${threadId}:${state.turn}:${state.seq}`,
+    });
+    deliverIfPush(binding.channel);
+    markMilestonePersistDirty();
+  }
+
+  // Quiet-watchdog tick: if the turn has been silent (no milestone) longer than
+  // the heartbeat window, send ONE minimal "still working" reply. Re-armed on the
+  // next milestone (heartbeatSent reset in deliverMilestone). One per quiet
+  // stretch, so a stuck-but-alive turn never spams the chat.
+  function runHeartbeat(threadId) {
+    const state = milestoneByThread.get(threadId);
+    if (!state || state.heartbeatSent) return;
+    if (Date.now() - state.lastMilestoneAt < msHeartbeatMs) return;
+    const binding = commandRouter.getThreadBinding(threadId);
+    if (!binding || !milestonesEnabledFor(binding.channel)) return;
+    state.heartbeatSent = true;
+    const minutes = Math.max(1, Math.round((Date.now() - state.lastMilestoneAt) / 60_000));
+    outboundReplies.enqueue({
+      channel: binding.channel,
+      conversationId: binding.conversationId,
+      ...(binding.accountId ? { accountId: binding.accountId } : {}),
+      kind: "text",
+      text: t("state.heartbeat.quiet", { minutes }),
+      dedupeKey: `heartbeat:${threadId}:${state.turn}:${state.seq}`,
+    });
+    deliverIfPush(binding.channel);
+    markMilestonePersistDirty();
+  }
+
+  // Renders a milestone item to its localized line. Falls back to the generic
+  // "working" line when the connector could not extract a usable label.
+  function milestoneText(item) {
+    if (!item.label) return t("state.milestone.generic");
+    if (item.kind === "command") {
+      return item.status === "failed"
+        ? t("state.milestone.commandFailed", { label: item.label })
+        : t("state.milestone.command", { label: item.label });
+    }
+    if (item.kind === "file") {
+      return t("state.milestone.file", { label: item.label });
+    }
+    return t("state.milestone.generic");
+  }
+
+  // The bare label text used inside the merged "+N, latest: x" line. Degrades to
+  // the generic line (sans the ▸ prefix would be odd, so reuse the full line).
+  function milestoneLabelText(item) {
+    return item.label ?? t("state.milestone.generic");
   }
 
   // Splits a completed turn's changed files (Task 3) and delivers them: small
@@ -962,7 +1248,7 @@ export function createComoteState({
         ...(binding.accountId ? { accountId: binding.accountId } : {}),
         kind: "text",
         text: event.text ?? "",
-        dedupeKey: `agent:${event.itemId ?? event.threadId}`,
+        dedupeKey: agentDedupeKey(event),
       });
     }
     deliverIfPush(channel);

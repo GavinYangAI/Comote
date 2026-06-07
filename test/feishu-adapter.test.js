@@ -397,7 +397,7 @@ test("no-project attachment reply localizes to en", async () => {
   setLocale("zh");
 });
 
-test("handleInbound gracefully skips an attachment when download fails (non-NO_PROJECT)", async () => {
+test("handleInbound reports a download failure and does not route an empty turn (non-NO_PROJECT)", async () => {
   const calls = [];
   const replies = [];
   const adapter = new FeishuChannelAdapter({
@@ -428,10 +428,10 @@ test("handleInbound gracefully skips an attachment when download fails (non-NO_P
 
   // (a) no /open reply is sent for a non-NO_PROJECT failure
   assert.ok(!replies.some((r) => /\/open/.test(r.text ?? "")));
-  // (b) routing still proceeds
-  assert.equal(calls.length, 1);
-  // (c) the failed attachment contributes no `[attachment: …]` prefix
-  assert.ok(!/\[attachment:/.test(calls[0].text ?? ""));
+  // (b) the failure is no longer silently swallowed — the file is named back to the user
+  assert.ok(replies.some((r) => /x\.pdf/.test(r.text ?? "")), "expected a failure reply naming x.pdf");
+  // (c) a lone failed attachment with no text does NOT submit an empty turn
+  assert.equal(calls.length, 0);
 });
 
 test("normalizeInbound drops image attachment when image_key is missing", () => {
