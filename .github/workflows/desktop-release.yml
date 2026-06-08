@@ -102,6 +102,40 @@ jobs:
           path: release/Comote-Setup-*-x64.exe
           if-no-files-found: error
 
+  publish-npm:
+    name: Publish to npm
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write # required for npm provenance (OIDC)
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: 22
+          cache: npm
+          registry-url: "https://registry.npmjs.org"
+      - run: npm ci
+      - run: npm test
+      - name: Publish if token is present and version is new
+        env:
+          # Generate an npm "Automation" access token (bypasses 2FA, for CI) at
+          # npmjs.com → Access Tokens, then add it as the NPM_TOKEN repo secret.
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${NODE_AUTH_TOKEN:-}" ]; then
+            echo "NPM_TOKEN not set — skipping npm publish (e.g. a fork)."
+            exit 0
+          fi
+          VERSION="$(node -p "require('./package.json').version")"
+          if npm view "comote@${VERSION}" version >/dev/null 2>&1; then
+            echo "comote@${VERSION} is already on npm — nothing to publish."
+            exit 0
+          fi
+          npm publish --provenance --access public
+
   publish-release:
     name: Publish GitHub Release
     needs: [mac-arm64, windows-x64]
