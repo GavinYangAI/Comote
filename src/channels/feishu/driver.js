@@ -376,11 +376,23 @@ export class FeishuDriver {
     if (this.wsClient) {
       this.stopEventStream();
     }
+    // Diagnostic switch: set COMOTE_FEISHU_WS_DEBUG=1 to raise the Lark SDK to
+    // debug logging. On a card-button click this reveals whether a frame even
+    // arrives and its message_type — the decisive evidence for why Feishu
+    // approval buttons may not reach Comote:
+    //   - "receive message, message_type: event ... no card.action.trigger handle"
+    //       → frame arrives as an event but the type key doesn't match (SDK/parse).
+    //   - "receive message, message_type: card"
+    //       → card-type frame the WSClient drops (old-style card callback).
+    //   - no frame logged on click
+    //       → the app isn't delivering card callbacks over the long connection
+    //         (Events & Callbacks subscription / delivery-mode not configured).
+    const wsDebug = Boolean(process.env.COMOTE_FEISHU_WS_DEBUG);
     this.wsClient = new Lark.WSClient({
       appId: this.appId,
       appSecret: this.appSecret,
       domain: this.sdkDomain(Lark),
-      loggerLevel: Lark.LoggerLevel.info,
+      loggerLevel: wsDebug ? Lark.LoggerLevel.debug : Lark.LoggerLevel.info,
     });
     Promise.resolve(this.wsClient.start({ eventDispatcher: dispatcher })).catch((error) => {
       onError?.(error);

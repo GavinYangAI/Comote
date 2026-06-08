@@ -65,6 +65,20 @@ test("approvalCard carries approve/decline button values", () => {
   assert.ok(action.actions.every((b) => b.value.kind === "approval" && b.value.code === "a1"));
 });
 
+test("approvalCard includes the /approve text-command fallback (works when buttons can't)", () => {
+  // Feishu card-action button callbacks can fail to reach Comote (transport/
+  // subscription dependent), but the /approve|/deny text command always works
+  // over the message-event path. The card MUST surface that fallback so a user
+  // is never stuck with dead buttons and forced to the Comote desktop.
+  const card = approvalCard({ shortCode: "a1", detail: "rm -rf build" });
+  const body = card.elements
+    .filter((el) => el.tag === "markdown")
+    .map((el) => el.content)
+    .join("\n");
+  assert.match(body, /\/approve a1/);
+  assert.match(body, /\/deny a1/);
+});
+
 test("approvalResolvedCard reflects the decision", () => {
   assert.match(approvalResolvedCard({ code: "a1", decision: "accept" }).header.title.content, /已批准/);
   assert.match(approvalResolvedCard({ code: "a1", decision: "decline" }).header.title.content, /已拒绝/);

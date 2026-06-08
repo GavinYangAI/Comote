@@ -124,6 +124,12 @@ export function approvalCard({ shortCode, detail }) {
     },
     elements: [
       { tag: "markdown", content: String(detail ?? t("card.approval.detailFallback")) },
+      // Text-command fallback: card-action button callbacks are not guaranteed to
+      // reach Comote (Feishu long-connection delivery of `card.action.trigger` is
+      // app-config dependent), but `/approve|/deny <code>` always works over the
+      // message-event path. Surfacing it here means a user is never stuck with
+      // dead buttons and forced back to the Comote desktop to approve.
+      { tag: "markdown", content: t("state.approval.instructions", { code: shortCode }) },
       {
         tag: "action",
         actions: [

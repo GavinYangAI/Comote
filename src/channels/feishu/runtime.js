@@ -306,6 +306,15 @@ export class FeishuRuntimeService extends BaseChannelRuntime {
   // Handles a Feishu `card.action.trigger` callback. Returns a toast payload.
   async handleCardAction(payload) {
     const action = normalizeCardAction(payload);
+    // Arrival breadcrumb: if a real button click never logs this line (while
+    // messages still work), the `card.action.trigger` callback isn't reaching
+    // Comote at all — point the investigation at Feishu callback delivery, not
+    // at the resolve wiring below. See COMOTE_FEISHU_WS_DEBUG in driver.js.
+    this.eventLog?.info?.("飞书卡片回调已到达", {
+      kind: action.value?.kind ?? null,
+      hasValue: Boolean(action.value),
+      openId: action.openId ?? null,
+    });
     if (!action.value) {
       return {};
     }
