@@ -74,7 +74,8 @@
         <section id="updateNotice" class="system-notice" hidden>
           <div>
             <strong><span data-i18n="web.update.available">有新版本可用：</span><span id="updateLatestVersion"></span></strong>
-            <p><span data-i18n="web.update.currentPrefix">当前版本 </span><span id="updateCurrentVersion"></span><span data-i18n="web.update.currentSuffix">。点击下载并替换本机的 Comote。</span></p>
+            <p id="updateCurrentLine"><span data-i18n="web.update.currentPrefix">当前版本 </span><span id="updateCurrentVersion"></span><span id="updateCurrentSuffix" data-i18n="web.update.currentSuffix">。点击下载并替换本机的 Comote。</span></p>
+            <p id="updateCommandLine" hidden><span data-i18n="web.update.runHint">在终端运行以下命令升级：</span><code id="updateCommandText"></code></p>
           </div>
           <a id="updateDownloadLink" class="secondary-button" href="#" target="_blank" rel="noopener" data-i18n="web.update.download">下载新版</a>
         </section>

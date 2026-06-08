@@ -79,11 +79,70 @@ test("checkNow falls back to the release page when no assets match", async () =>
     currentVersion: "0.2.0",
     fetchImpl,
     now: () => 1000,
+    platform: "darwin",
   });
 
   const result = await checker.checkNow();
 
   assert.equal(result.downloadUrl, "https://example.com/release");
+});
+
+test("checkNow on Linux carries updateCommand and a null downloadUrl", async () => {
+  const fetchImpl = makeFetch(
+    jsonResponse({
+      tag_name: "v0.3.0",
+      html_url: "https://github.com/GavinYangAI/comote/releases/tag/v0.3.0",
+      // Even if a release somehow carried assets, Linux installs come from npm,
+      // so we never offer a download link on Linux.
+      assets: [{ name: "Comote-0.3.0.AppImage", browser_download_url: "u-appimage" }],
+    }),
+  );
+  const checker = new VersionChecker({
+    currentVersion: "0.2.0",
+    fetchImpl,
+    now: () => 1000,
+    platform: "linux",
+  });
+
+  const result = await checker.checkNow();
+
+  assert.equal(result.hasUpdate, true);
+  assert.equal(result.downloadUrl, null);
+  assert.equal(result.updateCommand, "npm i -g comote@latest");
+  assert.equal(result.platform, "linux");
+});
+
+test("Linux empty/initial result still carries the npm updateCommand", () => {
+  const checker = new VersionChecker({
+    currentVersion: "0.2.0",
+    fetchImpl: makeFetch(jsonResponse({ tag_name: "v0.2.0", html_url: "x" })),
+    platform: "linux",
+  });
+  const result = checker.getLastResult();
+  assert.equal(result.downloadUrl, null);
+  assert.equal(result.updateCommand, "npm i -g comote@latest");
+});
+
+test("non-Linux platforms leave updateCommand null and keep the download link", async () => {
+  const fetchImpl = makeFetch(
+    jsonResponse({
+      tag_name: "v0.3.0",
+      html_url: "https://example.com/release",
+      assets: [{ name: "Comote-0.3.0-arm64.dmg", browser_download_url: "u-dmg" }],
+    }),
+  );
+  const checker = new VersionChecker({
+    currentVersion: "0.2.0",
+    fetchImpl,
+    now: () => 1000,
+    platform: "darwin",
+    arch: "arm64",
+  });
+
+  const result = await checker.checkNow();
+
+  assert.equal(result.updateCommand, null);
+  assert.equal(result.downloadUrl, "u-dmg");
 });
 
 test("compareSemver orders semantic versions numerically", () => {

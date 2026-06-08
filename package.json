@@ -1,9 +1,17 @@
 {
   "name": "comote",
   "version": "0.5.2",
-  "private": true,
+  "private": false,
   "type": "module",
   "description": "Comote local remote companion for Codex Desktop.",
+  "bin": {
+    "comote": "bin/comote.js"
+  },
+  "files": [
+    "src",
+    "public",
+    "bin"
+  ],
   "scripts": {
     "app:build": "node scripts/build-macos-app.mjs",
     "desktop:icons": "node scripts/generate-desktop-assets.mjs",
@@ -18,7 +26,7 @@
     "test": "node --test"
   },
   "engines": {
-    "node": ">=20"
+    "node": ">=22"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.11.1"

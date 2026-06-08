@@ -463,7 +463,17 @@ function formatVersionResponse(state) {
   // be stopped on quit (B3b PID adoption). Always expose the daemon's own pid.
   const pid = process.pid;
   if (!state.versionChecker) {
-    return { version, pid, latest: null, hasUpdate: false, releaseUrl: null, downloadUrl: null, checkedAt: null };
+    return {
+      version,
+      pid,
+      latest: null,
+      hasUpdate: false,
+      releaseUrl: null,
+      downloadUrl: null,
+      updateCommand: process.platform === "linux" ? "npm i -g comote@latest" : null,
+      platform: process.platform,
+      checkedAt: null,
+    };
   }
   const result = state.versionChecker.getLastResult();
   return {
@@ -473,6 +483,10 @@ function formatVersionResponse(state) {
     hasUpdate: Boolean(result.hasUpdate),
     releaseUrl: result.releaseUrl,
     downloadUrl: result.downloadUrl ?? null,
+    // On Linux the daemon is installed via npm, so the frontend renders a
+    // copy-pasteable command instead of a (nonexistent) download link.
+    updateCommand: result.updateCommand ?? null,
+    platform: result.platform ?? process.platform,
     releaseNotes: result.releaseNotes,
     checkedAt: result.checkedAt,
     error: result.error,

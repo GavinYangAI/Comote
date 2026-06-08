@@ -1000,3 +1000,37 @@ test("resolveCodexCommand prefers the bundled Codex.app binary on macOS", () => 
     "codex",
   );
 });
+
+test("resolveCodexCommand finds ~/.local/bin/codex on Linux", () => {
+  const local = "/home/gavin/.local/bin/codex";
+  assert.equal(
+    resolveCodexCommand({
+      platform: "linux",
+      env: { HOME: "/home/gavin" },
+      exists: (c) => c === local,
+    }),
+    local,
+  );
+});
+
+test("resolveCodexCommand probes system Linux install locations", () => {
+  assert.equal(
+    resolveCodexCommand({
+      platform: "linux",
+      env: { HOME: "/home/gavin" },
+      exists: (c) => c === "/snap/bin/codex",
+    }),
+    "/snap/bin/codex",
+  );
+});
+
+test("resolveCodexCommand falls back to bare 'codex' on Linux when none exist", () => {
+  assert.equal(
+    resolveCodexCommand({
+      platform: "linux",
+      env: { HOME: "/home/gavin" },
+      exists: () => false,
+    }),
+    "codex",
+  );
+});

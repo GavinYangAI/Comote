@@ -580,7 +580,21 @@ export function resolveCodexCommand({
     return pathCodex ?? "codex";
   }
   const bundled = "/Applications/Codex.app/Contents/Resources/codex";
-  return exists(bundled) ? bundled : "codex";
+  if (exists(bundled)) {
+    return bundled;
+  }
+  // On Linux the binary often lands outside the spawn PATH (e.g. ~/.local/bin
+  // from a user install, or /snap/bin from a snap), so probe the common install
+  // locations before falling back to bare "codex" for PATH resolution.
+  const home = env.HOME;
+  const linuxCandidates = [
+    home ? `${home}/.local/bin/codex` : null,
+    "/usr/local/bin/codex",
+    "/usr/bin/codex",
+    "/snap/bin/codex",
+  ].filter(Boolean);
+  const linuxCodex = linuxCandidates.find((candidate) => exists(candidate));
+  return linuxCodex ?? "codex";
 }
 
 // Bounded depth-first search for codex.exe under a directory, used on Windows

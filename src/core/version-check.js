@@ -5,6 +5,9 @@ const DEFAULT_REPO = "GavinYangAI/comote";
 const DEFAULT_INTERVAL_MS = 6 * 60 * 60 * 1000;
 const DEFAULT_INITIAL_DELAY_MS = 30_000;
 const CACHE_TTL_MS = 60 * 60 * 1000;
+// On Linux the daemon is installed from npm and CI ships no downloadable asset,
+// so the update affordance points the operator at npm instead of a dead link.
+export const LINUX_UPDATE_COMMAND = "npm i -g comote@latest";
 
 export function compareSemver(a, b) {
   const parse = (value) =>
@@ -23,13 +26,15 @@ function normalizeTag(tag) {
   return tag.startsWith("v") ? tag.slice(1) : tag;
 }
 
-function emptyResult(currentVersion) {
+function emptyResult(currentVersion, platform = process.platform) {
   return {
     current: currentVersion,
     latest: null,
     hasUpdate: false,
     releaseUrl: null,
     downloadUrl: null,
+    updateCommand: platform === "linux" ? LINUX_UPDATE_COMMAND : null,
+    platform,
     releaseNotes: null,
     checkedAt: null,
     error: null,
@@ -93,7 +98,7 @@ export class VersionChecker {
     this.now = now;
     this.platform = platform;
     this.arch = arch;
-    this.lastResult = emptyResult(currentVersion);
+    this.lastResult = emptyResult(currentVersion, platform);
     this._initialTimer = null;
     this._timer = null;
   }
@@ -129,7 +134,7 @@ export class VersionChecker {
       );
       if (response.status === 404) {
         // No published release yet — valid state, not an error.
-        this.lastResult = { ...emptyResult(this.currentVersion), checkedAt: this.now() };
+        this.lastResult = { ...emptyResult(this.currentVersion, this.platform), checkedAt: this.now() };
       } else if (!response.ok) {
         this.lastResult = {
           ...this.lastResult,
@@ -140,16 +145,23 @@ export class VersionChecker {
         const data = await response.json();
         const latest = normalizeTag(data.tag_name);
         const hasUpdate = latest ? compareSemver(latest, this.currentVersion) > 0 : false;
+        const isLinux = this.platform === "linux";
         this.lastResult = {
           current: this.currentVersion,
           latest,
           hasUpdate,
           releaseUrl: data.html_url ?? null,
-          downloadUrl: selectDownloadUrl(data.assets, {
-            platform: this.platform,
-            arch: this.arch,
-            releasesUrl: data.html_url ?? `https://github.com/${this.repo}/releases`,
-          }),
+          // Linux installs come from npm and CI ships no downloadable asset, so
+          // point the operator at an npm command instead of a dead download link.
+          downloadUrl: isLinux
+            ? null
+            : selectDownloadUrl(data.assets, {
+                platform: this.platform,
+                arch: this.arch,
+                releasesUrl: data.html_url ?? `https://github.com/${this.repo}/releases`,
+              }),
+          updateCommand: isLinux ? LINUX_UPDATE_COMMAND : null,
+          platform: this.platform,
           releaseNotes: data.body ?? null,
           checkedAt: this.now(),
           error: null,

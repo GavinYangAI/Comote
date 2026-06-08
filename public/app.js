@@ -1555,6 +1555,9 @@ async function onLangChange(event) {
   }
   setWebLocale(locale);
   applyTranslations(document);
+  // Re-render the version banner too: it sets some strings dynamically (e.g. the
+  // Linux npm-command hint) that applyTranslations would otherwise revert.
+  await refreshVersionStatus().catch(() => {});
   await render(); // re-run the main render so dynamic tWeb() strings update
 }
 
@@ -1617,10 +1620,25 @@ async function refreshVersionStatus() {
       const latestEl = document.querySelector("#updateLatestVersion");
       const currentEl = document.querySelector("#updateCurrentVersion");
       const linkEl = document.querySelector("#updateDownloadLink");
+      const suffixEl = document.querySelector("#updateCurrentSuffix");
+      const commandLine = document.querySelector("#updateCommandLine");
+      const commandText = document.querySelector("#updateCommandText");
       if (latestEl) latestEl.textContent = data.latest;
       if (currentEl) currentEl.textContent = current ?? tWeb("web.version.unknown");
-      if (linkEl) {
-        linkEl.href = data.downloadUrl ?? data.releaseUrl ?? "https://github.com/GavinYangAI/comote/releases";
+      // Linux installs come from npm: render a copy-pasteable command instead of
+      // a download link (CI ships no Linux asset). mac/win keep the link.
+      if (data.updateCommand) {
+        if (linkEl) linkEl.hidden = true;
+        if (suffixEl) suffixEl.textContent = tWeb("web.update.currentSuffixNpm");
+        if (commandText) commandText.textContent = data.updateCommand;
+        if (commandLine) commandLine.hidden = false;
+      } else {
+        if (commandLine) commandLine.hidden = true;
+        if (linkEl) {
+          linkEl.hidden = false;
+          linkEl.href = data.downloadUrl ?? data.releaseUrl ?? "https://github.com/GavinYangAI/comote/releases";
+        }
+        if (suffixEl) suffixEl.textContent = tWeb("web.update.currentSuffix");
       }
     } else {
       banner.hidden = true;

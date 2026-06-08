@@ -1,8 +1,18 @@
+import { assertSafeBind } from "./bind-safety.js";
 import { createServer } from "./app.js";
 import { createPersistentComoteState } from "./state.js";
 
 const port = Number(process.env.PORT ?? 16208);
-const host = "127.0.0.1";
+const host = process.env.HOST ?? "127.0.0.1";
+
+// Fail closed before listening: binding a non-loopback host with no API token
+// would expose unauthenticated Codex approval to anyone who can reach it.
+try {
+  assertSafeBind({ host, hasToken: Boolean(process.env.COMOTE_LOCAL_API_TOKEN) });
+} catch (error) {
+  console.error(`Comote daemon refusing to start:\n${error.message}`);
+  process.exit(1);
+}
 
 const state = await createPersistentComoteState({
   ...(process.env.COMOTE_STATE_PATH ? { filePath: process.env.COMOTE_STATE_PATH } : {}),
