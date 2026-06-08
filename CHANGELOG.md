@@ -7,6 +7,20 @@ GitHub Release notes, so keep each version's heading as `## vX.Y.Z`.
 本文件记录 Comote 的更新内容。发版流程会按推送的 `vX.Y.Z` tag 自动抽取对应
 段落作为 GitHub Release 说明，请保持每个版本标题为 `## vX.Y.Z`。
 
+## v0.5.3
+
+### ✨ What's New
+
+- **Run headless on a Linux VPS.** Comote now installs from npm (`npm i -g comote`, Node 22+) and runs as a headless daemon — no GUI or webkit — bridging your IM tools to a locally-installed Codex CLI. The full connector (threads, streaming, exec/applyPatch approvals routed to your IM chat) works on Linux because Comote spawns `codex app-server` itself; there's no separate Codex app to open. Ships a systemd unit template (`deploy/comote.service`) and a "headless VPS" guide. A fail-closed bind guard refuses to start on a non-loopback address without `COMOTE_LOCAL_API_TOKEN`.
+- **A `comote` command-line interface.** Configure and operate the daemon entirely from the shell — no browser or SSH tunnel needed: `comote status / channels / config / start / stop / login / identities / confirm / revoke / approve / deny / pairing / logs / doctor`, plus an interactive `comote onboard` first-run wizard. Feishu `login` prints the URL + an ASCII QR right in the terminal.
+- **In-chat command hints.** A new sender now gets a short onboarding card on first authorization, mistyped `/commands` get a "try /help" nudge, and `/help` is the single command catalog.
+
+### ✨ 更新内容
+
+- **可在 Linux VPS 上无界面运行。** Comote 现在能从 npm 安装（`npm i -g comote`，需 Node 22+）并作为 headless daemon 运行——无 GUI、无 webkit——把你的 IM 工具桥接到本机安装的 Codex CLI。完整连接器（线程、流式、exec/applyPatch 审批推送到 IM 聊天）在 Linux 上照常工作，因为 Comote 自己拉起 `codex app-server` 子进程，没有需要单独打开的 Codex 应用。附带 systemd 单元模板（`deploy/comote.service`）和无界面 VPS 部署指南。绑定安全守卫：非 loopback 地址未设 `COMOTE_LOCAL_API_TOKEN` 时拒绝启动。
+- **`comote` 命令行工具。** 完全在命令行配置和操作 daemon，无需浏览器或 SSH 隧道：`comote status / channels / config / start / stop / login / identities / confirm / revoke / approve / deny / pairing / logs / doctor`，外加交互式 `comote onboard` 首次配置向导。飞书 `login` 会把链接 + ASCII 二维码直接打到终端。
+- **聊天内命令提示。** 新用户首次授权时收到简短的上手卡片，误打的 `/命令` 会提示"试试 /help"，`/help` 是唯一命令目录。
+
 ## v0.5.2
 
 ### ✨ What's New
