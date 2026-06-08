@@ -220,10 +220,20 @@ npm i -g comote   # needs Node 22+
 
 **Run**
 
-Two ways:
+Use **systemd** — that's what makes it **start on boot, restart on crash, and keep running across a reboot**. (`comote &` / `nohup comote &` survives an SSH disconnect but **not** a reboot — the process is gone after a restart, so don't use it for a long-lived deployment.)
 
-- **As a systemd service** (recommended): use the [`deploy/comote.service`](deploy/comote.service) template in the repo, edit the user / paths per its comments, then `systemctl enable --now comote`.
-- **Directly in the foreground**: `comote`.
+```bash
+# Use the deploy/comote.service template; edit User / paths per its comments
+sudo cp deploy/comote.service /etc/systemd/system/comote.service
+sudo systemctl daemon-reload
+sudo systemctl enable --now comote     # start now + on every boot
+systemctl status comote                # check it's active (running)
+journalctl -u comote -f                # follow the logs
+```
+
+> ⚠️ **Run the daemon as the user that ran `codex login`.** Codex's sign-in lives in that user's `~/.codex`; if systemd runs it as a dedicated `comote` user, log in as that user first (`sudo -u comote codex login`), or the app-server can't read the credentials and won't connect.
+
+Comote **launches `codex app-server` as a child process and connects automatically** on startup — there's no separate Codex app to open or keep running on Linux. For a quick try you can also run `comote` in the foreground (but it stops when you close the terminal / reboot).
 
 **Access the web console**
 

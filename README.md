@@ -220,10 +220,20 @@ npm i -g comote   # 需要 Node 22+
 
 **运行**
 
-两种方式：
+推荐用 **systemd**——这样它会**开机自启、崩溃自动重启、系统重启后照常在后台跑**。（`comote &` 或 `nohup comote &` 能扛住 SSH 断开，但**扛不住系统重启**，重启后进程就没了——所以别用它做长期部署。）
 
-- **作为 systemd 服务**（推荐）：参考仓库里的 [`deploy/comote.service`](deploy/comote.service) 模板，按注释改好用户 / 路径后 `systemctl enable --now comote`。
-- **直接前台跑**：`comote`。
+```bash
+# 参考 deploy/comote.service 模板，按注释改好 User / 路径
+sudo cp deploy/comote.service /etc/systemd/system/comote.service
+sudo systemctl daemon-reload
+sudo systemctl enable --now comote     # 立即启动 + 开机自启
+systemctl status comote                # 看是否 active (running)
+journalctl -u comote -f                # 跟日志
+```
+
+> ⚠️ **daemon 必须用跑过 `codex login` 的那个用户来运行。** codex 的登录态在该用户的 `~/.codex` 下；如果 systemd 用一个专用 `comote` 用户跑，就得先用那个用户登录（`sudo -u comote codex login`），否则 app-server 读不到认证、连不上 Codex。
+
+Comote 会**自己把 `codex app-server` 作为子进程拉起并自动连接**——Linux 上**没有**需要你单独"打开"或常驻的 Codex 应用。快速试用也可以直接前台跑 `comote`（但关掉终端 / 重启就停了）。
 
 **访问 Web 控制台**
 
