@@ -35,18 +35,21 @@ export class UsageError extends Error {
 // generated help catalog. Keeping the table here (not scattered across the
 // command files) makes `comote help` a single source of truth.
 // Only commands with a built handler module under commands/ are listed, so the
-// generated `comote help` never advertises a stub. (onboard/pairing/logs/doctor
-// from the design are planned follow-ups and intentionally omitted until built.)
+// generated `comote help` never advertises a stub.
 export const COMMANDS = {
+  onboard: { module: "onboard.js", summary: "Interactive first-run wizard: connect Codex, pick + configure + start a channel" },
   status: { module: "status.js", summary: "Daemon + per-channel health at a glance" },
+  doctor: { module: "doctor.js", summary: "Preflight health checks (works even when the daemon is down)" },
   channels: { module: "channels.js", summary: "list / status [<id>] [--probe] across all channels" },
   config: { module: "config.js", summary: "<channel> [field=value ...] — read/write channel config" },
   start: { module: "runtime.js", summary: "<channel> — start a channel runtime" },
   stop: { module: "runtime.js", summary: "<channel> — stop a channel runtime" },
   login: { module: "login.js", summary: "<channel> — QR/credential pairing in the terminal" },
+  pairing: { module: "pairing.js", summary: "list / show <channel> — inbound-sender pairing codes (token channels)" },
   identities: { module: "identities.js", summary: "list / pending senders" },
   confirm: { module: "identities.js", summary: "<channel>:<id> [--name <n>] — authorize a sender" },
   revoke: { module: "identities.js", summary: "<channel>:<id> — revoke an authorized sender" },
+  logs: { module: "logs.js", summary: "[--limit N] [--offset N] — tail the daemon event log" },
   approvals: { module: "approvals.js", summary: "List pending Codex approvals" },
   approve: { module: "approvals.js", summary: "Approve a pending Codex command by code" },
   deny: { module: "approvals.js", summary: "Decline a pending Codex command by code" },
