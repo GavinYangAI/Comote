@@ -7,6 +7,18 @@ GitHub Release notes, so keep each version's heading as `## vX.Y.Z`.
 本文件记录 Comote 的更新内容。发版流程会按推送的 `vX.Y.Z` tag 自动抽取对应
 段落作为 GitHub Release 说明，请保持每个版本标题为 `## vX.Y.Z`。
 
+## v0.6.1
+
+### 🐛 Fixes
+
+- **Codex Desktop workspace labels.** Labeled worktrees now show their Desktop name in the project picker instead of the directory basename, and labeled workspaces are prioritized so they stay within the first page of picker buttons. Thanks @philonis.
+- **Stuck outbound replies after a restart.** A restored outbound queue now allocates the next id after the highest existing one instead of `entries.length + 1`. The old logic could reuse a historical id, so delivery marked the old entry and left the real queued reply stuck pending. Thanks @philonis.
+
+### 🐛 修复
+
+- **Codex Desktop 工作区标签。** 带标签的 worktree 现在在项目选择器里显示 Desktop 名称而非目录名，带标签的工作区会优先排序，保证落在选择器第一页按钮内。感谢 @philonis。
+- **重启后排队回复卡住。** 恢复的 outbound 队列现在按“现有最大 id + 1”分配新 id，而非 `entries.length + 1`。旧逻辑会复用历史 id，导致投递时标记了旧条目、真正排队的回复一直卡在 pending。感谢 @philonis。
+
 ## v0.6.0
 
 ### ✨ What's New

@@ -1,6 +1,6 @@
 {
   "name": "comote",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "private": false,
   "type": "module",
   "description": "Comote local remote companion for Codex Desktop.",
