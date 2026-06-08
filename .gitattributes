@@ -1,0 +1,7 @@
+# Shebang entrypoints must stay LF — a trailing CRLF turns the shebang into
+# `#!/usr/bin/env node\r`, which breaks execution on Unix and fails the
+# package-bin test on Windows checkouts (core.autocrlf=true).
+bin/comote.js text eol=lf
+*.sh text eol=lf
+*.mjs text eol=lf
+*.js text eol=lf
