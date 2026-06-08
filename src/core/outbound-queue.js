@@ -135,6 +135,26 @@ export class OutboundQueue {
   }
 
   /**
+   * Snapshot for on-disk persistence. Keeps EVERY active (queued/retrying) entry
+   * — losing an undelivered reply across a restart would drop real work — but
+   * only the most recent `maxTerminal` delivered/failed entries. Terminal
+   * entries are historical (kept in memory up to maxTerminalEntries mainly for
+   * dedup within a session); persisting all ~200 of them is what made state.json
+   * 150KB and dominated the per-event rewrite cost. Order is preserved.
+   */
+  persistSnapshot({ maxTerminal = 30 } = {}) {
+    const keptTerminalIds = new Set(
+      this.entries
+        .filter((entry) => TERMINAL_STATUSES.has(entry.status))
+        .slice(-maxTerminal)
+        .map((entry) => entry.id),
+    );
+    return this.entries
+      .filter((entry) => !TERMINAL_STATUSES.has(entry.status) || keptTerminalIds.has(entry.id))
+      .map((entry) => ({ ...entry }));
+  }
+
+  /**
    * Prune terminal (delivered/failed) entries down to `maxTerminalEntries`,
    * keeping the most recent ones. Active entries are never dropped.
    */

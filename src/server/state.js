@@ -591,7 +591,7 @@ export function createComoteState({
         identities: authorization.listIdentities(),
         detectedIdentities: authorization.listDetectedIdentities(),
         sessions: sessions.snapshot(),
-        outboundReplies: outboundReplies.snapshot(),
+        outboundReplies: outboundReplies.persistSnapshot(),
         channelConfigs: Object.fromEntries(
           [...channelStacks].map(([id, stack]) => [id, stack.config]),
         ),
@@ -641,6 +641,10 @@ export function createComoteState({
           Promise.resolve(stack.runtime.stop?.()).catch(() => {}),
         ),
       );
+      // Persistence is throttled, so a trailing snapshot may still be queued
+      // behind the throttle timer. Flush it before the process exits, otherwise
+      // the last state change (incl. the synced telegram offset) is lost.
+      await Promise.resolve(stateStore?.flush?.()).catch(() => {});
     },
   };
   // --- Codex Desktop return path: route thread events back to the phone ---

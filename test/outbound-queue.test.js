@@ -124,3 +124,29 @@ test("media replies dedupe on path, not just channel+conversation", () => {
   const dup = queue.enqueue({ channel: "feishu", conversationId: "c1", kind: "media", mediaKind: "file", path: "/p/a.txt" });
   assert.equal(dup.id, a.id);
 });
+
+test("persistSnapshot keeps all active entries but caps terminal history", () => {
+  const queue = new OutboundQueue();
+  // 3 active (undelivered) entries that MUST survive a restart.
+  const active = [];
+  for (let i = 0; i < 3; i++) {
+    active.push(queue.enqueue({ channel: "feishu", conversationId: `c${i}`, inReplyTo: `a${i}`, text: `active ${i}` }));
+  }
+  // 50 delivered (terminal) entries — historical, only the most recent few are worth persisting.
+  for (let i = 0; i < 50; i++) {
+    const e = queue.enqueue({ channel: "feishu", conversationId: `t${i}`, inReplyTo: `t${i}`, text: `done ${i}` });
+    queue.markDelivered(e.id);
+  }
+
+  const snap = queue.persistSnapshot({ maxTerminal: 30 });
+  const snapActive = snap.filter((e) => e.status === "queued" || e.status === "retrying");
+  const snapTerminal = snap.filter((e) => e.status === "delivered" || e.status === "failed");
+
+  assert.equal(snapActive.length, 3, "every active entry must be persisted");
+  assert.equal(snapTerminal.length, 30, "terminal history is capped");
+  // The retained terminal entries are the most recent ones.
+  assert.equal(snapTerminal.at(-1).text, "done 49");
+  assert.equal(snapTerminal[0].text, "done 20");
+  // Order is preserved: actives precede the terminal tail as inserted.
+  assert.deepEqual(snap.slice(0, 3).map((e) => e.text), ["active 0", "active 1", "active 2"]);
+});
