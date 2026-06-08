@@ -1,0 +1,70 @@
+# Comote headless daemon — systemd unit template.
+#
+# Runs the Comote daemon on a VPS with no GUI. It binds 127.0.0.1:16208 by
+# default and talks to a `codex app-server` child process, so the full
+# IM<->Codex bridge (threads, streaming, exec/applyPatch approvals) works
+# without any desktop GUI.
+#
+# Before enabling, customize every line marked  # CUSTOMIZE  below.
+#
+# Install:
+#   1. Create the service user and state dir:
+#        sudo useradd --system --home /var/lib/comote --shell /usr/sbin/nologin comote
+#        sudo mkdir -p /var/lib/comote && sudo chown comote:comote /var/lib/comote
+#   2. Make sure `codex` is on PATH for that user AND that `codex login` has run
+#      once (device-auth / API key on a headless box — see the README). Without
+#      it the app-server won't start.
+#   3. Copy this file:
+#        sudo cp deploy/comote.service /etc/systemd/system/comote.service
+#        sudo systemctl daemon-reload
+#        sudo systemctl enable --now comote
+#   4. Tail logs:  journalctl -u comote -f
+
+[Unit]
+Description=Comote headless daemon (IM <-> Codex bridge)
+Documentation=https://github.com/GavinYangAI/comote
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+
+# CUSTOMIZE: run as a dedicated non-root service account — never run this as
+# root. Replace with the user/group you created.
+User=comote
+Group=comote
+
+# Listen port. The loopback bind (127.0.0.1) is the default and is safe.
+Environment=PORT=16208
+
+# CUSTOMIZE: persistent state (auth bindings, tokens, session history). Point it
+# at a path the service user owns, and back this file up.
+Environment=COMOTE_STATE_PATH=/var/lib/comote/state.json
+
+# Leave HOST unset to keep the safe loopback default (127.0.0.1) and reach the
+# web console over an SSH tunnel. ONLY set a non-loopback HOST if you also set
+# COMOTE_LOCAL_API_TOKEN — the daemon refuses to start otherwise. To do that,
+# CUSTOMIZE and uncomment BOTH of these:
+# Environment=HOST=0.0.0.0
+# Environment=COMOTE_LOCAL_API_TOKEN=replace-with-a-strong-secret
+
+# CUSTOMIZE: run the globally-installed `comote` binary (npm i -g comote). Use an
+# absolute path instead if `env` can't resolve it, e.g. /usr/local/bin/comote.
+ExecStart=/usr/bin/env comote
+# Alternatively run the entrypoint directly from a source checkout — CUSTOMIZE
+# the path and use this line instead of the one above:
+# ExecStart=/usr/bin/node /opt/comote/src/server/index.js
+
+Restart=on-failure
+RestartSec=5
+
+# Modest hardening. Loosen if codex needs to write outside the state dir.
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+# CUSTOMIZE: must be the directory holding COMOTE_STATE_PATH above.
+ReadWritePaths=/var/lib/comote
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

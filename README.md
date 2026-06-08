@@ -201,9 +201,62 @@ Comote 支持全局界面语言切换：中文（默认）、English、日本語
 - Codex Desktop 挂了：daemon 自动重连，期间消息排队。
 - daemon 挂了：你发的消息在 IM 服务器侧停留，daemon 起来后会拿到。
 
+## Linux / 无界面服务器（headless VPS）
+
+想把 Comote 跑在一台没有显示器、没有桌面环境的 Linux VPS 上？可以。Comote 有一个**纯命令行的 headless daemon**，不依赖任何 GUI / webkit。
+
+**它是什么** —— 完整的 app-server connector（threads、流式回复、exec / applyPatch 审批）照常工作，因为 Comote 是跟 `codex app-server`（codex CLI 的一个子命令）说话，**不是** Codex Desktop 那个图形界面。所以没有桌面环境也完全没问题。
+
+**前置条件**
+
+- 装好 **Codex CLI**，并确保 `codex` 在 PATH 上。
+- ⚠️ **先跑 `codex login`** —— 这是第一次部署最容易踩的坑。没有显示器、没浏览器的 VPS 上，用 **device-auth（设备码登录）或 API key** 完成登录。**没登录过，app-server 起不来，Comote 也就连不上 Codex。**
+
+**安装**
+
+```bash
+npm i -g comote   # 需要 Node 22+
+```
+
+**运行**
+
+两种方式：
+
+- **作为 systemd 服务**（推荐）：参考仓库里的 [`deploy/comote.service`](deploy/comote.service) 模板，按注释改好用户 / 路径后 `systemctl enable --now comote`。
+- **直接前台跑**：`comote`。
+
+**访问 Web 控制台**
+
+daemon 默认绑 `127.0.0.1:16208`，**不对公网暴露**。通过 SSH 隧道访问：
+
+```bash
+ssh -L 16208:localhost:16208 your-vps
+# 然后在本地浏览器打开 http://localhost:16208
+```
+
+**安全**
+
+默认的 loopback 绑定（`127.0.0.1`）是安全的，建议就用 SSH 隧道。
+
+如果你确实要把 `HOST` 设成非 loopback 地址（比如 `0.0.0.0`），你**必须**同时设置 `COMOTE_LOCAL_API_TOKEN` —— 否则 daemon 会**拒绝启动**（任何能连到这个地址的人否则就能无认证地批准 Codex 执行命令）。设了之后，所有 `/api/*` 请求都要带 `x-comote-token` 头。即便如此，仍然优先用 SSH 隧道。
+
+**审批**
+
+Codex 的权限审批会推送到你的 IM 聊天里，在那边用 `/approve <code>` · `/deny <code>` 处理（支持卡片的渠道也可以直接点按钮）。注意 codex 默认的 workspace-write 沙箱会**自动放行**工作区内的改动，只有要逃逸沙箱的操作才会弹审批。
+
+**更新**
+
+```bash
+npm i -g comote@latest   # 然后重启服务：systemctl restart comote
+```
+
+Linux 上没有应用内自动下载更新，手动升级即可。
+
+**一点说明** —— Comote 是针对某个较新的 codex 版本验证（certified）过的。app-server 协议历史上变过，如果升级后出问题，先把 codex 钉（pin）回一个已知可用的版本再排查。
+
 ## 从源码构建
 
-要求：Node.js ≥ 20，Rust（Tauri 需要），macOS 12+ 或 Windows 10+。
+要求：Node.js ≥ 22，Rust（Tauri 需要），macOS 12+ 或 Windows 10+。
 
 ```bash
 git clone https://github.com/GavinYangAI/comote.git

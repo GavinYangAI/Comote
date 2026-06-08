@@ -201,9 +201,62 @@ The daemon is single-machine for now. If you have several computers, run a separ
 - Codex Desktop crashes: the daemon reconnects automatically and messages queue in the meantime.
 - The daemon goes down: your messages stay on the IM server side and the daemon picks them up once it's back.
 
+## Linux / headless VPS
+
+Want to run Comote on a headless Linux VPS with no monitor and no desktop environment? You can. Comote ships a **pure command-line headless daemon** that needs no GUI / webkit.
+
+**What it is** — the full app-server connector (threads, streaming, exec / applyPatch approvals) works exactly the same, because Comote talks to `codex app-server` (a subcommand of the Codex CLI), **not** the Codex Desktop GUI. So no desktop environment is required.
+
+**Prerequisites**
+
+- Install the **Codex CLI** and make sure `codex` is on PATH.
+- ⚠️ **Run `codex login` first** — this is the #1 first-run gotcha. On a no-browser VPS, complete login with **device-auth or an API key**. **Without it the app-server won't start, and Comote can't reach Codex.**
+
+**Install**
+
+```bash
+npm i -g comote   # needs Node 22+
+```
+
+**Run**
+
+Two ways:
+
+- **As a systemd service** (recommended): use the [`deploy/comote.service`](deploy/comote.service) template in the repo, edit the user / paths per its comments, then `systemctl enable --now comote`.
+- **Directly in the foreground**: `comote`.
+
+**Access the web console**
+
+The daemon binds `127.0.0.1:16208` by default and is **not exposed to the internet**. Reach it over an SSH tunnel:
+
+```bash
+ssh -L 16208:localhost:16208 your-vps
+# then open http://localhost:16208 in your local browser
+```
+
+**Security**
+
+The default loopback bind (`127.0.0.1`) is safe — prefer the SSH tunnel.
+
+If you do set `HOST` to a non-loopback address (e.g. `0.0.0.0`), you **must** also set `COMOTE_LOCAL_API_TOKEN` — otherwise the daemon **refuses to start** (anyone able to reach the address could otherwise approve Codex command execution unauthenticated). Once set, every `/api/*` request must carry the token in the `x-comote-token` header. Even then, prefer the SSH tunnel.
+
+**Approvals**
+
+Codex permission approvals are pushed to your IM chat — approve / deny them there with `/approve <code>` · `/deny <code>` (or the card buttons on channels that support them). Note codex's default workspace-write sandbox **auto-allows** in-workspace edits; only sandbox-escaping actions prompt.
+
+**Updating**
+
+```bash
+npm i -g comote@latest   # then restart the service: systemctl restart comote
+```
+
+There's no in-app auto-download on Linux — upgrade manually.
+
+**A note** — Comote is certified against a recent codex version. The app-server protocol has changed before, so if something breaks after an upgrade, pin codex back to a known-good version first and then debug.
+
 ## Build from source
 
-Requirements: Node.js ≥ 20, Rust (needed by Tauri), macOS 12+ or Windows 10+.
+Requirements: Node.js ≥ 22, Rust (needed by Tauri), macOS 12+ or Windows 10+.
 
 ```bash
 git clone https://github.com/GavinYangAI/comote.git
