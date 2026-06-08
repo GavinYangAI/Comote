@@ -54,6 +54,22 @@ server.on("error", (error) => {
 
 server.listen(port, host, () => {
   console.log(`Comote settings app running at http://${host}:${port}`);
+  // Connect the Codex app-server on startup. The web UI triggers this on load,
+  // but a headless daemon (systemd on a VPS) has no UI — without this it stays
+  // disconnected until something POSTs /auto-connect. Best-effort: codex may be
+  // absent or not signed in, so log and keep running (initialize() is idempotent
+  // and the UI/CLI can retrigger; the connector reconnects on its own).
+  Promise.resolve(state.connectors?.desktop?.initialize?.())
+    .then((result) => {
+      if (result) {
+        state.eventLog?.info?.("已连接 Codex Desktop（启动自动连接）");
+      }
+    })
+    .catch((error) => {
+      state.eventLog?.warn?.("启动自动连接 Codex 失败，稍后可重试", {
+        error: error?.message ?? String(error),
+      });
+    });
 });
 
 let shuttingDown = false;
