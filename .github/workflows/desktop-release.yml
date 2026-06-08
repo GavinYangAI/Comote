@@ -108,6 +108,7 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: Comote-arm64-dmg
@@ -116,19 +117,28 @@ jobs:
         with:
           name: Comote-win-x64-setup
           path: release-artifacts
+      - name: Build release notes from CHANGELOG
+        run: |
+          set -euo pipefail
+          TAG="${{ github.ref_name }}"
+          # Extract the lines under "## <TAG>" up to (but not including) the next
+          # "## v" heading. Empty when the version isn't in CHANGELOG.md.
+          NOTES="$(awk -v ver="## ${TAG}" '$0==ver{f=1;next} /^## v/{if(f)exit} f' CHANGELOG.md || true)"
+          {
+            if [ -n "$NOTES" ]; then printf '%s\n' "$NOTES"; else printf 'Comote %s\n' "$TAG"; fi
+            printf '\n### Downloads / 下载\n\n'
+            printf -- '- **macOS (Apple Silicon)** — `Comote-*-arm64.dmg`\n'
+            printf -- '- **Windows x64** — `Comote-Setup-*-x64.exe`\n\n'
+            printf 'See the [README](https://github.com/GavinYangAI/comote#readme) for installation and setup. / 安装与配置见 [README](https://github.com/GavinYangAI/comote#readme)。\n'
+          } > RELEASE_BODY.md
+          echo "----- release body -----"
+          cat RELEASE_BODY.md
       - name: Create or update GitHub Release
         uses: softprops/action-gh-release@b4309332981a82ec1c5618f44dd2e27cc8bfbfda # v3
         with:
           files: release-artifacts/*
           name: Comote ${{ github.ref_name }}
-          body: |
-            Comote ${{ github.ref_name }}
-
-            Downloads:
-            - **macOS (Apple Silicon)** — `Comote-*-arm64.dmg`
-            - **Windows x64** — `Comote-Setup-*-x64.exe`
-
-            See [README](https://github.com/GavinYangAI/comote#readme) for installation and setup.
+          body_path: RELEASE_BODY.md
           draft: false
           prerelease: false
           fail_on_unmatched_files: true
