@@ -116,14 +116,14 @@ test("authorized identity is welcomed on the first message only", async () => {
   projects.replaceProjects([{ name: "comote", path: "/repo/comote", source: "codex-desktop", status: "available" }]);
   const router = new CommandRouter({ authorization, projects, sessions });
 
-  // First message: should prepend welcome banner AND contain status output
+  // First message: should prepend the onboarding card AND contain status output
   const first = await router.handleMessageAsync({ identity, text: "/status" });
-  assert.ok(first.text.includes("欢迎使用 Comote"), `expected welcome banner in first reply, got: ${first.text}`);
+  assert.ok(first.text.includes("你已连接到 Comote"), `expected welcome card in first reply, got: ${first.text}`);
   assert.ok(first.text.includes("Comote 状态"), `expected status output in first reply, got: ${first.text}`);
 
-  // Second message: should NOT contain welcome banner
+  // Second message: should NOT contain the onboarding card
   const second = await router.handleMessageAsync({ identity, text: "/status" });
-  assert.ok(!second.text.includes("欢迎使用 Comote"), `expected no welcome banner in second reply, got: ${second.text}`);
+  assert.ok(!second.text.includes("你已连接到 Comote"), `expected no welcome card in second reply, got: ${second.text}`);
 });
 
 test("/file enqueues a media reply for an in-project file and rejects escape", async () => {

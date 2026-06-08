@@ -553,3 +553,106 @@ test("/file with a binary file enqueues a media reply on telegram", async () => 
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+test("/help is the grouped single-source command reference", async () => {
+  const { authorization, router } = makeRouter();
+  const identity = { channel: "wechat", stableId: "wxid_owner", displayName: "Alice" };
+  authorization.confirmIdentity(identity);
+
+  // First message also prepends the welcome card; ask again so we isolate /help.
+  await router.handleMessageAsync({ identity, text: "/help" });
+  const reply = await router.handleMessageAsync({ identity, text: "/help" });
+
+  assert.equal(reply.kind, "text");
+  // Section headers prove the catalog is grouped, not a flat wall.
+  assert.match(reply.text, /项目与对话/);
+  assert.match(reply.text, /文件/);
+  assert.match(reply.text, /Codex 控制/);
+  assert.match(reply.text, /信息/);
+  // Every command still documented (single source of truth).
+  for (const cmd of [
+    "/projects", "/open", "/sessions", "/use", "/switch", "/new", "/current",
+    "/file", "/approve", "/deny", "/cancel", "/tail", "/status",
+  ]) {
+    assert.ok(reply.text.includes(cmd), `expected /help to document ${cmd}`);
+  }
+});
+
+test("an unknown /slash command gets a short nudge, not the full help dump", async () => {
+  const { authorization, router } = makeRouter();
+  const identity = { channel: "wechat", stableId: "wxid_owner", displayName: "Alice" };
+  authorization.confirmIdentity(identity);
+
+  // Burn the one-time welcome card first.
+  await router.handleMessageAsync({ identity, text: "/status" });
+  const reply = await router.handleMessageAsync({ identity, text: "/notacommand" });
+
+  assert.equal(reply.kind, "text");
+  assert.match(reply.text, /\/notacommand/);
+  assert.match(reply.text, /\/help/);
+  // The nudge must NOT be the full catalog: no section headers, and it stays short.
+  assert.ok(!reply.text.includes("项目与对话"), `nudge should not dump full help, got: ${reply.text}`);
+  assert.ok(reply.text.length < 80, `nudge should stay short, got: ${reply.text}`);
+});
+
+test("the sync handleMessage path also nudges unknown /slash commands", () => {
+  const { authorization, router } = makeRouter();
+  const identity = { channel: "wechat", stableId: "wxid_owner", displayName: "Alice" };
+  authorization.confirmIdentity(identity);
+
+  const reply = router.handleMessage({ identity, text: "/bogus" });
+
+  assert.equal(reply.kind, "text");
+  assert.match(reply.text, /\/bogus/);
+  assert.match(reply.text, /\/help/);
+  assert.ok(!reply.text.includes("项目与对话"), "sync nudge should not be the full help body");
+});
+
+test("normal prose is routed to Codex, never treated as a mistyped command", async () => {
+  const authorization = new AuthorizationStore();
+  const projects = new ProjectStore();
+  const sessions = new SessionStore();
+  const identity = { channel: "wechat", stableId: "wxid_owner", displayName: "Alice" };
+  const calls = [];
+  const codexDesktop = {
+    getStatus: () => ({ state: "connected" }),
+    startTurn: async ({ threadId, text, cwd }) => {
+      calls.push({ threadId, text, cwd });
+      return { turnId: "turn_1" };
+    },
+  };
+  const router = new CommandRouter({ authorization, projects, sessions, codexDesktop });
+  authorization.confirmIdentity(identity);
+  projects.replaceProjects([{ name: "comote", path: "/repo", source: "codex-desktop", status: "available" }]);
+
+  router.handleMessage({ identity, text: "/open 1" });
+  sessions.upsertExternalSession({ projectPath: "/repo", id: "thread_1", title: "Existing thread" });
+  sessions.useSession("/repo", "thread_1");
+
+  // Prose that merely mentions a slash mid-sentence must still reach Codex.
+  const reply = await router.handleMessageAsync({ identity, text: "please run a/b test on /repo" });
+
+  assert.match(reply.text, /已发送给 Codex Desktop/);
+  assert.deepEqual(calls, [{ threadId: "thread_1", text: "please run a/b test on /repo", cwd: "/repo" }]);
+  // No nudge leaked into the reply.
+  assert.ok(!reply.text.includes("未知命令"), "prose must not trigger an unknown-command nudge");
+});
+
+test("the first authorized message prepends a short onboarding card, not the full help", async () => {
+  const { authorization, router } = makeRouter();
+  const identity = { channel: "feishu", stableId: "ou_new", displayName: "Newcomer" };
+  authorization.confirmIdentity(identity);
+
+  const first = await router.handleMessageAsync({ identity, text: "/status" });
+
+  // Welcome card surfaces the high-value commands + how to talk...
+  assert.match(first.text, /你已连接到 Comote/);
+  assert.match(first.text, /\/projects/);
+  assert.match(first.text, /\/help/);
+  assert.match(first.text, /直接发消息/);
+  // ...but is NOT the full grouped catalog (no /approve, /deny etc.).
+  assert.ok(!first.text.includes("/approve"), "onboarding card must stay short, not the full catalog");
+  // And it only fires once.
+  const second = await router.handleMessageAsync({ identity, text: "/status" });
+  assert.ok(!second.text.includes("你已连接到 Comote"), "onboarding card must fire only once");
+});

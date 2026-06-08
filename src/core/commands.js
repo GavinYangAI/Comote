@@ -142,6 +142,11 @@ export class CommandRouter {
         case "/new":
           return this.text(this.newSession(message.identity, rest));
         default:
+          // A mistyped slash command gets a short nudge toward /help instead of
+          // the full help wall; anything else falls back to the catalog.
+          if (command.startsWith("/")) {
+            return this.text(this.unknownCommandText(command));
+          }
           return this.text(this.helpText());
       }
     } catch (error) {
@@ -215,6 +220,10 @@ export class CommandRouter {
       if (!command.startsWith("/")) {
         return await this.handlePlainText(message.identity, message.text, message.attachments);
       }
+      // A leading-slash command that matched none of the async handlers above is
+      // an unknown command: nudge toward /help instead of silently routing it or
+      // dumping the whole catalog. (/help, /status, etc. are served by the sync
+      // switch below, so only genuinely-unknown slashes reach the nudge there.)
       // handleMessage re-normalizes; normalizeChannelMessage is idempotent.
       return this.handleMessage(message);
     } catch (error) {
@@ -237,8 +246,26 @@ export class CommandRouter {
     };
   }
 
+  // A short nudge for a mistyped /slash command. Keeps the signal that the
+  // command was wrong without re-printing the full help body every time.
+  unknownCommandText(command) {
+    return t("cmd.unknown.nudge", { command });
+  }
+
+  // The one-time onboarding card shown on an identity's first authorized
+  // message. Deliberately NOT the full 13-line catalog: a "you're connected"
+  // line, the handful of highest-value commands, and how to start a turn (just
+  // type). For Feishu/钉钉/微信 — which have no native command menu — this is the
+  // primary command-discovery surface, so it must stay short and scannable.
   welcomeText() {
-    return [t("cmd.auth.welcome"), "", this.helpText()].join("\n");
+    return [
+      t("cmd.welcome.title"),
+      t("cmd.welcome.intro"),
+      "",
+      t("cmd.welcome.topCommands"),
+      "",
+      t("cmd.welcome.howToTalk"),
+    ].join("\n");
   }
 
   prependWelcome(reply) {
