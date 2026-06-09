@@ -294,7 +294,7 @@ The daemon is single-machine for now. If you have several computers, run a separ
 
 **Q: What happens if the connection drops?**
 
-- IM push service goes down: your messages can't come in for a while; once it recovers, Comote resumes from the cursor.
+- IM push service goes down: your messages can't come in for a while; once it recovers, Comote remembers where it last read and picks up from there, backfilling whatever piled up in the meantime.
 - Codex Desktop crashes: the daemon reconnects automatically and messages queue in the meantime.
 - The daemon goes down: your messages stay on the IM server side and the daemon picks them up once it's back.
 

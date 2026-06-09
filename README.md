@@ -294,7 +294,7 @@ npm run dist:win
 
 **Q：失联了会怎样？**
 
-- IM 推送服务挂了：你发的消息暂时进不来，恢复后 Comote 会从 cursor 续上。
+- IM 推送服务挂了：你发的消息暂时进不来，恢复后 Comote 会记着上次读到的位置接着拉，把这期间积压的消息补回来。
 - Codex Desktop 挂了：daemon 自动重连，期间消息排队。
 - daemon 挂了：你发的消息在 IM 服务器侧停留，daemon 起来后会拿到。
 
