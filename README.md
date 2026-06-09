@@ -40,13 +40,13 @@
 ### 特性
 
 - **强授权模型** —— 没绑定 / 没确认过的聊天身份，连 `/status` 都得不到回复
-- **流式回复** —— Codex 边想边说，IM 卡片实时更新（不是等完整答案再发一坨）
+- **流式回复** —— Codex 边想边说，IM 卡片实时更新（而不是等完整答案生成后再一次性发出）
 - **审批卡片** —— Codex 想跑 `rm -rf` 或者写文件时，IM 里弹卡片让你点批准 / 拒绝
 - **会话恢复** —— 关掉手机过几个小时回来，`/sessions` 继续之前的 thread
-- **多频道并行** —— 飞书、微信、钉钉、Telegram 可以同时绑，互不打架
+- **多频道并行** —— 飞书、微信、钉钉、Telegram 可以同时绑，互不干扰
 - **可扩展** —— 加新 IM 就实现一个 channel adapter；加新 agent 后端就实现一个 connector
 
-> **关于官方 Codex 手机端**：OpenAI 自己出了 ChatGPT/Codex 的手机客户端，但它只服务 ChatGPT 订阅用户 —— 用 API key 跑 Codex CLI / Codex Desktop 的人没法用，因为本机的 thread 它根本看不到。Comote 就是给这类用户的：你的 Codex 在你电脑上跑、用你自己的 key，手机端只是个遥控器。等哪天官方支持了 API 用户远程控制本机 Codex，我们就退役。
+> **关于官方 Codex 手机端**：OpenAI 自己出了 ChatGPT/Codex 的手机客户端，但它只服务 ChatGPT 订阅用户 —— 用 API key 跑 Codex CLI / Codex Desktop 的人没法用，因为它看不到你本机的 thread。Comote 就是给这类用户的：你的 Codex 在你电脑上跑、用你自己的 key，手机端只是个遥控器。等哪天官方支持了 API 用户远程控制本机 Codex，我们就退役。
 
 ## 支持的渠道
 
@@ -65,12 +65,18 @@
 
 ### 1. 下载安装
 
-到 [Releases](https://github.com/GavinYangAI/comote/releases) 下载最新版：
+**桌面版**（带图形界面）—— 到 [Releases](https://github.com/GavinYangAI/comote/releases) 下载最新版：
 
 - macOS：`Comote-x.y.z.dmg`
 - Windows：`Comote-x.y.z-setup.exe`
 
-或从源码编译（见[下面](#从源码构建)）。
+**npm**（命令行版，跨平台，含 Linux）：
+
+```bash
+npm i -g comote   # 需要 Node 22+
+```
+
+Linux / 无界面服务器请看[下面](#linux--无界面服务器headless-vps)的部署说明。也可以[从源码编译](#从源码构建)。
 
 ### 2. 绑定一个 IM
 
@@ -129,7 +135,7 @@
 
 桌面端用 [Tauri](https://tauri.app/) 包了一层壳，Node daemon 作为 sidecar 启动，只监听本机回环地址。
 
-**真·本地优先：整个链路里没有任何一步走公网中转。** daemon 只绑 `127.0.0.1`，所有授权、token、会话历史都存在本机 `~/.comote/` 下，不上传任何服务器。手机端的 IM bot 通过各平台自己的服务推到你的 daemon（飞书是 WebSocket 长连接，钉钉是 Stream 长连接，微信是 iLink getupdates 轮询，Telegram 是 getUpdates 长轮询），daemon 在 localhost 跟 Codex Desktop 说话。
+**真正本地优先：整个链路里没有任何一步走公网中转。** daemon 只绑 `127.0.0.1`，所有授权、token、会话历史都存在本机 `~/.comote/` 下，不上传任何服务器。手机端的 IM bot 通过各平台自己的服务推到你的 daemon（飞书是 WebSocket 长连接，钉钉是 Stream 长连接，微信是 iLink getupdates 轮询，Telegram 是 getUpdates 长轮询），daemon 在 localhost 跟 Codex Desktop 说话。
 
 ## 配置与参考
 
@@ -195,7 +201,7 @@ journalctl -u comote -f                # 跟日志
 
 > ⚠️ **daemon 必须用跑过 `codex login` 的那个用户来运行。** codex 的登录态在该用户的 `~/.codex` 下；如果 systemd 用一个专用 `comote` 用户跑，就得先用那个用户登录（`sudo -u comote codex login`），否则 app-server 读不到认证、连不上 Codex。
 
-Comote 会**自己把 `codex app-server` 作为子进程拉起并自动连接**——Linux 上**没有**需要你单独"打开"或常驻的 Codex 应用。快速试用也可以直接前台跑 `comote`（但关掉终端 / 重启就停了）。
+Comote 会**自己把 `codex app-server` 作为子进程启动并自动连接**——Linux 上**没有**需要你单独"打开"或常驻的 Codex 应用。快速试用也可以直接前台跑 `comote`（但关掉终端 / 重启就停了）。
 
 **访问 Web 控制台**
 

@@ -65,12 +65,18 @@ By the time you're done and back at your desk, that tidy minutes table is alread
 
 ### 1. Download and install
 
-Grab the latest build from [Releases](https://github.com/GavinYangAI/comote/releases):
+**Desktop app** (with GUI) — grab the latest build from [Releases](https://github.com/GavinYangAI/comote/releases):
 
 - macOS: `Comote-x.y.z.dmg`
 - Windows: `Comote-x.y.z-setup.exe`
 
-Or build from source (see [below](#build-from-source)).
+**npm** (command-line, cross-platform, incl. Linux):
+
+```bash
+npm i -g comote   # needs Node 22+
+```
+
+For Linux / headless servers, see the [deployment notes below](#linux--headless-vps). You can also [build from source](#build-from-source).
 
 ### 2. Bind an IM
 
