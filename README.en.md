@@ -12,7 +12,9 @@ Connect the [Codex Desktop](https://openai.com/codex) on your computer to Feishu
 
 ---
 
-## Picture these moments
+## What is Comote
+
+Whether you use Codex to write code or to crunch data, organize documents, run research, and draft — Comote is the same phone remote for all of it. It's built for **anyone running Codex CLI / Codex Desktop locally**, not just programmers.
 
 **Out for lunch**, you remember how to fix that morning's bug. You pull out your phone and message in Feishu:
 
@@ -20,15 +22,13 @@ Connect the [Codex Desktop](https://openai.com/codex) on your computer to Feishu
 
 The Mac at the office receives it, Codex Desktop gets to work, and before you're back at your desk the Feishu card has updated: "Tests pass — want me to commit?" You tap "Approve".
 
-**Lying in bed at night**, lights just off, an idea hits and you don't want to get up and open the laptop:
+**In a meeting / on your commute**, a batch of chores comes to mind and you'd rather not wait until you're back at the computer:
 
-> `Start a new thread — write me a ts-node script that scrapes Rust projects from GitHub trending`
+> `Start a new thread — transcribe that batch of client-interview recordings in downloads and turn them into a timestamped minutes table`
 
-By morning, a full PR link is waiting for your review in the desktop Comote.
+By the time you're done and back at your desk, that tidy minutes table is already waiting for you in the desktop Comote.
 
----
-
-## Why Comote
+### Why Comote
 
 | Scenario | The usual way | Comote |
 |---|---|---|
@@ -37,17 +37,16 @@ By morning, a full PR link is waiting for your review in the desktop Comote.
 | Avoid exposing your machine to the internet | Set up frp / ngrok | None needed — the daemon only listens locally |
 | Use a different IM | Write your own bot | Implement one channel adapter (~200–400 lines) |
 
-> **About the official Codex mobile app**: OpenAI ships its own ChatGPT/Codex mobile clients, but they only serve ChatGPT subscribers — people running Codex CLI / Codex Desktop with an API key can't use them. Comote is for exactly those users: your Codex runs on your computer, on your own key, and the phone is just a remote.
+### Features
 
-## Features
-
-- **Truly local-first** — the daemon binds only to `127.0.0.1`; all tokens live in `~/.comote/`, nothing is uploaded to any server
 - **Strong authorization model** — a chat identity that hasn't been bound / confirmed won't even get a reply to `/status`
 - **Streaming replies** — Codex talks as it thinks, and the IM card updates live (instead of dumping one giant block after it's done)
 - **Approval cards** — when Codex wants to run `rm -rf` or write a file, a card pops up in your IM for you to approve / deny
 - **Session resume** — put your phone away for a few hours, come back, and `/sessions` continues an earlier thread
 - **Multiple channels in parallel** — Feishu, WeChat, DingTalk, and Telegram can all be bound at once without stepping on each other
 - **Extensible** — add a new IM by implementing a channel adapter; add a new agent backend by implementing a connector
+
+> **About the official Codex mobile app**: OpenAI ships its own ChatGPT/Codex mobile clients, but they only serve ChatGPT subscribers — people running Codex CLI / Codex Desktop with an API key can't use them, because the app simply can't see your local threads. Comote is for exactly those users: your Codex runs on your computer, on your own key, and the phone is just a remote. The day the official app supports API users remotely controlling local Codex, we'll retire.
 
 ## Supported channels
 
@@ -60,13 +59,7 @@ By morning, a full PR link is waiting for your review in the desktop Comote.
 
 > 🧪 **Experimental**: implemented and covered by tests, but long-running real-device shakedown is still in progress — expect occasional rough edges. Try it and send feedback.
 
-## Languages
-
-Comote supports a global UI language switch: 中文 (default), English, 日本語, 한국어, Français, Español.
-
-- Switch from the "Language" dropdown on the Web settings page — it **takes effect instantly and persists** (written to `settings.locale` in state.json).
-- It covers all user-facing copy: each IM's chat replies and cards, and the Web settings page. Server runtime logs (eventLog) stay in the original language and don't follow the switch.
-- It's also available over the API: `GET /api/settings` returns `{ locale, supported }`, `PUT /api/settings { locale }` switches.
+> **Languages**: the UI supports six languages — 中文 (default), English, 日本語, 한국어, Français, Español. Switch from the "Language" dropdown on the Web settings page; it **takes effect instantly and persists** (written to `settings.locale` in state.json) and covers all user-facing copy — each IM's chat replies and cards, and the Web settings page (server runtime logs in eventLog stay in the original language and don't follow the switch). It's also available over the API: `GET /api/settings` returns `{ locale, supported }`, `PUT /api/settings { locale }` switches.
 
 ## Quick Start
 
@@ -136,9 +129,9 @@ WeChat / Feishu / DingTalk / Telegram bot
 
 The desktop side is wrapped with [Tauri](https://tauri.app/); the Node daemon launches as a sidecar and listens only on the loopback address.
 
-**No step in the chain relays through the public internet**: the phone-side IM bot pushes to your daemon through each platform's own service (Feishu over a WebSocket long connection, DingTalk over a Stream long connection, WeChat over iLink getupdates polling, Telegram over getUpdates long polling), and the daemon talks to Codex Desktop over localhost.
+**Truly local-first: no step in the chain relays through the public internet.** The daemon binds only to `127.0.0.1`; all authorizations, tokens, and session history live locally under `~/.comote/`, nothing is uploaded to any server. The phone-side IM bot pushes to your daemon through each platform's own service (Feishu over a WebSocket long connection, DingTalk over a Stream long connection, WeChat over iLink getupdates polling, Telegram over getUpdates long polling), and the daemon talks to Codex Desktop over localhost.
 
-## Configuration
+## Configuration and reference
 
 Per-IM details:
 
@@ -156,7 +149,7 @@ Common environment variables:
 | `COMOTE_LOCAL_API_TOKEN` | if set, every `/api/*` call must carry this token |
 | `COMOTE_WECHAT_ACCOUNT_ID` | distinguishes multiple WeChat accounts bound on one machine (default `default`) |
 
-## Command cheat sheet
+Command cheat sheet:
 
 | Command | What it does |
 |---|---|
@@ -169,41 +162,10 @@ Common environment variables:
 | `/deny <code>` | deny a pending operation |
 | plain text | forwarded to the current thread for Codex |
 
-## FAQ
-
-**Q: Does any data get uploaded to a server?**
-
-No. The daemon binds only to `127.0.0.1`; all authorizations, tokens, and session history live locally under `~/.comote/`. Phone-side messages are pushed to your machine by the IM's own servers (Tencent / Feishu / DingTalk / Telegram) — Comote goes through no third-party relay.
-
-**Q: Can several people share one daemon?**
-
-Yes. Each chat identity must be bound / confirmed individually — authorization is per-identity. Note, though: all authorized identities share the same Codex Desktop and can see each other's thread lists.
-
-**Q: Is the WeChat integration compliant?**
-
-We use Tencent's public iLink bot interface (`ilinkai.weixin.qq.com`) — not reverse engineering, not desktop UI automation, and it bypasses no account verification. But Tencent's terms of service can change; you need to assess the current compliance risk yourself, and **the author takes no responsibility for it**.
-
-**Q: Which IMs are supported? Can I add others (Discord / Slack)?**
-
-Four are built in today: **Feishu** and **WeChat** (stable), **DingTalk** and **Telegram** (experimental). Adding a new IM means implementing a `ChannelAdapter` — roughly 200–400 lines of code; a Discord adapter is already on the roadmap. PRs welcome.
-
-**Q: Isn't there an official Codex mobile app?**
-
-There is, but it's only open to ChatGPT subscribers and runs on OpenAI's cloud. If you're an API user (running Codex CLI / Codex Desktop locally on your own API key), the official app can't help you — it simply can't see your local threads. Comote fills that gap. The day the official app supports API users remotely controlling local Codex, we'll retire.
-
-**Q: Can it sync across devices?**
-
-The daemon is single-machine for now. If you have several computers, run a separate Comote instance on each and bind different IM accounts to tell them apart.
-
-**Q: What happens if the connection drops?**
-
-- IM push service goes down: your messages can't come in for a while; once it recovers, Comote resumes from the cursor.
-- Codex Desktop crashes: the daemon reconnects automatically and messages queue in the meantime.
-- The daemon goes down: your messages stay on the IM server side and the daemon picks them up once it's back.
-
 ## Linux / headless VPS
 
-Want to run Comote on a headless Linux VPS with no monitor and no desktop environment? You can. Comote ships a **pure command-line headless daemon** that needs no GUI / webkit.
+<details>
+<summary>Want to run Comote on a headless Linux VPS with no monitor and no desktop environment? You can — there's a pure command-line headless daemon that needs no GUI / webkit.</summary>
 
 **What it is** — the full app-server connector (threads, streaming, exec / applyPatch approvals) works exactly the same, because Comote talks to `codex app-server` (a subcommand of the Codex CLI), **not** the Codex Desktop GUI. So no desktop environment is required.
 
@@ -264,6 +226,8 @@ There's no in-app auto-download on Linux — upgrade manually.
 
 **A note** — Comote is certified against a recent codex version. The app-server protocol has changed before, so if something breaks after an upgrade, pin codex back to a known-good version first and then debug.
 
+</details>
+
 ## Build from source
 
 Requirements: Node.js ≥ 22, Rust (needed by Tauri), macOS 12+ or Windows 10+.
@@ -296,6 +260,39 @@ npm run dist:win
 ```
 
 You can also let GitHub Actions do it (the `windows-latest` runner) — see `.github/workflows/desktop-release.yml`.
+
+## FAQ
+
+**Q: Does any data get uploaded to a server?**
+
+No — purely local. See [How it works](#how-it-works) above for the chain details.
+
+**Q: Can several people share one daemon?**
+
+Yes. Each chat identity must be bound / confirmed individually — authorization is per-identity. Note, though: all authorized identities share the same Codex Desktop and can see each other's thread lists.
+
+**Q: Is the WeChat integration compliant?**
+
+We use Tencent's public iLink bot interface (`ilinkai.weixin.qq.com`) — not reverse engineering, not desktop UI automation, and it bypasses no account verification. But Tencent's terms of service can change; you need to assess the current compliance risk yourself, and **the author takes no responsibility for it**.
+
+**Q: Which IMs are supported? Can I add others (Discord / Slack)?**
+
+Four are built in today: **Feishu** and **WeChat** (stable), **DingTalk** and **Telegram** (experimental) — see the [Supported channels](#supported-channels) table above. Adding a new IM means implementing a `ChannelAdapter` — roughly 200–400 lines of code; a Discord adapter is already on the roadmap. PRs welcome.
+
+<details>
+<summary>More ops-related Q&A (cross-device sync, behavior when the connection drops)</summary>
+
+**Q: Can it sync across devices?**
+
+The daemon is single-machine for now. If you have several computers, run a separate Comote instance on each and bind different IM accounts to tell them apart.
+
+**Q: What happens if the connection drops?**
+
+- IM push service goes down: your messages can't come in for a while; once it recovers, Comote resumes from the cursor.
+- Codex Desktop crashes: the daemon reconnects automatically and messages queue in the meantime.
+- The daemon goes down: your messages stay on the IM server side and the daemon picks them up once it's back.
+
+</details>
 
 ## Project layout
 

@@ -11,52 +11,74 @@ GitHub Release notes, so keep each version's heading as `## vX.Y.Z`.
 
 ### 🐛 Fixes
 
-- **Codex Desktop workspace labels.** Labeled worktrees now show their Desktop name in the project picker instead of the directory basename, and labeled workspaces are prioritized so they stay within the first page of picker buttons. Thanks @philonis.
-- **Stuck outbound replies after a restart.** A restored outbound queue now allocates the next id after the highest existing one instead of `entries.length + 1`. The old logic could reuse a historical id, so delivery marked the old entry and left the real queued reply stuck pending. Thanks @philonis.
+- **Codex Desktop workspace labels.** Labeled worktrees show their Desktop name in the project picker, and surface within the first page of buttons. Thanks @philonis.
+- **Stuck replies after a restart.** Queued replies no longer get stuck pending after a restart — an id collision in the restored send queue could mark the wrong entry as delivered. Thanks @philonis.
 
 ### 🐛 修复
 
-- **Codex Desktop 工作区标签。** 带标签的 worktree 现在在项目选择器里显示 Desktop 名称而非目录名，带标签的工作区会优先排序，保证落在选择器第一页按钮内。感谢 @philonis。
-- **重启后排队回复卡住。** 恢复的 outbound 队列现在按“现有最大 id + 1”分配新 id，而非 `entries.length + 1`。旧逻辑会复用历史 id，导致投递时标记了旧条目、真正排队的回复一直卡在 pending。感谢 @philonis。
+- **Codex Desktop 工作区标签。** 带标签的 worktree 在项目选择器里显示 Desktop 名称，并排到按钮第一页。感谢 @philonis。
+- **重启后排队回复卡住。** 修复重启后排队回复一直卡在 pending 的问题——恢复发送队列时的 id 冲突会把投递标记错条目。感谢 @philonis。
 
 ## v0.6.0
 
 ### ✨ What's New
 
-- **Run headless on a Linux VPS.** Comote now installs from npm (`npm i -g comote`, Node 22+) and runs as a headless daemon — no GUI or webkit — bridging your IM tools to a locally-installed Codex CLI. The full connector (threads, streaming, exec/applyPatch approvals routed to your IM chat) works on Linux because Comote spawns `codex app-server` itself; there's no separate Codex app to open. Ships a systemd unit template (`deploy/comote.service`) and a "headless VPS" guide. A fail-closed bind guard refuses to start on a non-loopback address without `COMOTE_LOCAL_API_TOKEN`.
-- **A `comote` command-line interface.** Configure and operate the daemon entirely from the shell — no browser or SSH tunnel needed: `comote status / channels / config / start / stop / login / identities / confirm / revoke / approve / deny / pairing / logs / doctor`, plus an interactive `comote onboard` first-run wizard. Feishu `login` prints the URL + an ASCII QR right in the terminal.
-- **In-chat command hints.** A new sender now gets a short onboarding card on first authorization, mistyped `/commands` get a "try /help" nudge, and `/help` is the single command catalog.
+- **Headless Linux VPS.** Install from npm (`npm i -g comote`, Node 22+) and run as a GUI-free daemon that bridges your IM chats to a local Codex CLI — the full connector (threads, streaming, exec/applyPatch approvals) works headless.
+- **systemd + bind guard.** Ships a `deploy/comote.service` unit and a headless-VPS guide; refuses to bind a non-loopback address unless `COMOTE_LOCAL_API_TOKEN` is set.
+- **`comote` CLI.** Configure and run the daemon from the shell — status, login, logs, approvals and more (`comote --help`), plus an interactive `comote onboard` wizard.
+- **In-chat command hints.** First-time senders get an onboarding card, typos nudge toward `/help`, and `/help` is the single command catalog.
 
 ### 🐛 Fixes
 
-- **Windows installer build.** Added a `.gitattributes` that pins LF endings for the `bin/comote.js` shebang and shell/JS scripts. Without it the Windows CI runner checked out the entrypoint with CRLF, producing a `#!/usr/bin/env node\r` shebang that broke the bin test (and would break execution on Unix).
+- **Windows installer build.** Pinned LF line endings so the Windows CI runner no longer breaks the `comote` entrypoint shebang.
 
 ### ✨ 更新内容
 
-- **可在 Linux VPS 上无界面运行。** Comote 现在能从 npm 安装（`npm i -g comote`，需 Node 22+）并作为 headless daemon 运行——无 GUI、无 webkit——把你的 IM 工具桥接到本机安装的 Codex CLI。完整连接器（线程、流式、exec/applyPatch 审批推送到 IM 聊天）在 Linux 上照常工作，因为 Comote 自己拉起 `codex app-server` 子进程，没有需要单独打开的 Codex 应用。附带 systemd 单元模板（`deploy/comote.service`）和无界面 VPS 部署指南。绑定安全守卫：非 loopback 地址未设 `COMOTE_LOCAL_API_TOKEN` 时拒绝启动。
-- **`comote` 命令行工具。** 完全在命令行配置和操作 daemon，无需浏览器或 SSH 隧道：`comote status / channels / config / start / stop / login / identities / confirm / revoke / approve / deny / pairing / logs / doctor`，外加交互式 `comote onboard` 首次配置向导。飞书 `login` 会把链接 + ASCII 二维码直接打到终端。
-- **聊天内命令提示。** 新用户首次授权时收到简短的上手卡片，误打的 `/命令` 会提示"试试 /help"，`/help` 是唯一命令目录。
+- **Linux VPS 无界面运行。** 从 npm 安装（`npm i -g comote`，需 Node 22+），作为无 GUI 的 daemon 把 IM 聊天桥接到本机 Codex CLI——完整连接器（线程、流式、exec/applyPatch 审批）在无界面环境照常工作。
+- **systemd 与绑定守卫。** 附带 `deploy/comote.service` 单元和无界面 VPS 指南；未设 `COMOTE_LOCAL_API_TOKEN` 时拒绝绑定非 loopback 地址。
+- **`comote` 命令行。** 在终端配置和运行 daemon——status、login、logs、审批等（见 `comote --help`），外加交互式 `comote onboard` 向导。
+- **聊天内命令提示。** 新用户首次会收到上手卡片，打错命令会提示 `/help`，`/help` 是唯一命令目录。
 
 ### 🐛 修复
 
-- **修复 Windows 安装包构建。** 新增 `.gitattributes`，把 `bin/comote.js` 的 shebang 以及 shell/JS 脚本钉死为 LF 换行。此前 Windows CI runner 会以 CRLF 检出入口文件，shebang 变成 `#!/usr/bin/env node\r`，既挂掉 bin 测试，也会在 Unix 上破坏脚本执行。
+- **Windows 安装包构建。** 钉死 LF 换行，Windows CI runner 不再破坏 `comote` 入口的 shebang。
 
 ## v0.5.2
 
 ### ✨ What's New
 
-- **Approve from Feishu chat.** The approval card now includes a `/approve <code>` · `/deny <code>` text fallback, so you can approve or reject right inside Feishu even when the card buttons don't respond — no need to switch to the Comote desktop app. Added an opt-in diagnostic (`COMOTE_FEISHU_WS_DEBUG`) to investigate the button-callback delivery path.
-- **Much lighter disk usage.** State writes are now throttled, identical snapshots are skipped, and only recent delivered-reply history is persisted. This shrinks the on-disk state file by ~58% (272 KB → 114 KB) and cuts background disk writes by roughly an order of magnitude — resolving the excessive-write process flag on macOS.
+- **Approve from Feishu chat.** The approval card now carries a `/approve <code>` · `/deny <code>` text fallback, so you can approve without leaving Feishu when the buttons don't respond. Adds an opt-in `COMOTE_FEISHU_WS_DEBUG` diagnostic for the button-callback path.
+- **Lighter disk usage.** Throttled state writes shrink the on-disk state file by ~58% (272 KB → 114 KB) — clearing the excessive-write flag on macOS.
 
 ### ✨ 更新内容
 
-- **飞书聊天内即可审批。** 审批卡片新增 `/approve <编号>` · `/deny <编号>` 文本兜底——即使卡片按钮无响应，也能直接在飞书里批准/拒绝，无需切回 Comote 桌面端。同时加入可选诊断开关（`COMOTE_FEISHU_WS_DEBUG`），用于排查按钮回调的投递问题。
-- **大幅降低磁盘占用与写入。** 状态写盘改为节流、内容不变则跳过、只保留最近的投递历史。本地状态文件缩小约 58%（272 KB → 114 KB），后台写盘量降低约一个数量级——解决 macOS 标记的“进程写入过多”问题。
+- **飞书聊天内审批。** 审批卡片新增 `/approve <编号>` · `/deny <编号>` 文本兜底，按钮无响应时也能不离开飞书完成审批。新增可选诊断开关 `COMOTE_FEISHU_WS_DEBUG`，用于排查按钮回调投递。
+- **更轻的磁盘占用。** 状态写盘改为节流，本地状态文件缩小约 58%（272 KB → 114 KB）——解决 macOS 标记的“进程写入过多”。
 
 ## v0.5.1
 
-- **Live Codex progress in IM.** Surface Codex progress and failures to the IM channels and refresh the chat UI live; fix Feishu image sends that returned no response. / 把 Codex 的进度与失败实时反馈到 IM 渠道并即时刷新界面；修复飞书发图无回应的问题。
+### ✨ What's New
+
+- **Live Codex progress in IM.** Codex progress and failures surface to your IM channels with the chat UI refreshing live.
+
+### 🐛 Fixes
+
+- **Feishu image sends.** Fixed Feishu image sends that returned no response.
+
+### ✨ 更新内容
+
+- **IM 内实时显示 Codex 进度。** Codex 的进度与失败实时反馈到 IM 渠道，界面即时刷新。
+
+### 🐛 修复
+
+- **飞书发图无回应。** 修复飞书发图无回应的问题。
 
 ## v0.5.0
 
-- **Codex reads inbound files.** Tell Codex to actually read inbound non-image files instead of only naming their path. / 让 Codex 真正读取收到的非图片文件内容，而不只是提到文件路径。
+### ✨ What's New
+
+- **Codex reads inbound files.** Codex now reads the contents of inbound non-image files instead of only naming their path.
+
+### ✨ 更新内容
+
+- **Codex 读取收到的文件。** Codex 真正读取收到的非图片文件内容，而不只是提到文件路径。

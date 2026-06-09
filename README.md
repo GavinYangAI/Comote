@@ -12,7 +12,9 @@
 
 ---
 
-## 想象一下这些场景
+## 什么是 Comote
+
+不管你用 Codex 写代码，还是拿它处理数据、整理文档、做调研和起草 —— Comote 都是同一个手机遥控器。它面向**所有在本机跑 Codex CLI / Codex Desktop 的人**，不只是程序员。
 
 **中午外出就餐时**，你想起上午那个 bug 的修法，掏出手机在飞书里发：
 
@@ -20,15 +22,13 @@
 
 公司里的 Mac 收到，Codex Desktop 直接开干，吃完饭回到工位之前，飞书卡片已经更新："测试通过，要不要 commit？" 你点"批准"。
 
-**晚上躺在床上**，刚关灯，突然想到一个 idea，不想再爬起来开电脑：
+**开会途中 / 通勤路上**，临时想起一批活儿要处理，不想等回到电脑前：
 
-> `新建一个 thread，帮我用 ts-node 写个脚本，从 GitHub trending 抓 Rust 项目`
+> `新建 thread：把 downloads 里那批客户访谈录音转成文字，整理成一份带时间戳的纪要表`
 
-第二天起床，桌面 Comote 里已经有完整的 PR 链接等着你 review。
+等你忙完回到工位，桌面 Comote 里那份整理好的纪要表已经在等你了。
 
----
-
-## 为什么用 Comote
+### 为什么用 Comote
 
 | 场景 | 一般做法 | Comote |
 |---|---|---|
@@ -37,17 +37,16 @@
 | 不想把电脑暴露公网 | 装 frp / ngrok | 不用，daemon 只听本机 |
 | 想用别的 IM | 自己写 bot | 实现一个 channel adapter（约 200-400 行） |
 
-> **关于官方 Codex 手机端**：OpenAI 自己出了 ChatGPT/Codex 的手机客户端，但它只服务 ChatGPT 订阅用户 —— 用 API key 跑 Codex CLI / Codex Desktop 的人没法用。Comote 就是给这类用户的：你的 Codex 在你电脑上跑、用你自己的 key，手机端只是个遥控器。
+### 特性
 
-## 特性
-
-- **真·本地优先** —— daemon 只绑 `127.0.0.1`，所有 token 落在 `~/.comote/`，不上传任何服务器
 - **强授权模型** —— 没绑定 / 没确认过的聊天身份，连 `/status` 都得不到回复
 - **流式回复** —— Codex 边想边说，IM 卡片实时更新（不是等完整答案再发一坨）
 - **审批卡片** —— Codex 想跑 `rm -rf` 或者写文件时，IM 里弹卡片让你点批准 / 拒绝
 - **会话恢复** —— 关掉手机过几个小时回来，`/sessions` 继续之前的 thread
 - **多频道并行** —— 飞书、微信、钉钉、Telegram 可以同时绑，互不打架
 - **可扩展** —— 加新 IM 就实现一个 channel adapter；加新 agent 后端就实现一个 connector
+
+> **关于官方 Codex 手机端**：OpenAI 自己出了 ChatGPT/Codex 的手机客户端，但它只服务 ChatGPT 订阅用户 —— 用 API key 跑 Codex CLI / Codex Desktop 的人没法用，因为本机的 thread 它根本看不到。Comote 就是给这类用户的：你的 Codex 在你电脑上跑、用你自己的 key，手机端只是个遥控器。等哪天官方支持了 API 用户远程控制本机 Codex，我们就退役。
 
 ## 支持的渠道
 
@@ -60,13 +59,7 @@
 
 > 🧪 **实验性**：功能已实现并有测试覆盖，但真机长期联调还在进行中，可能有边角坑。欢迎试用并反馈。
 
-## 多语言
-
-Comote 支持全局界面语言切换：中文（默认）、English、日本語、한국어、Français、Español。
-
-- 在 Web 设置页的「语言」下拉切换，**即时生效并持久化**（写入 state.json 的 `settings.locale`）。
-- 覆盖所有用户可见文案：各 IM 的聊天回复与卡片、Web 设置页。服务端运行日志（eventLog）保持原文，不随语言切换。
-- 也可经 API 读写：`GET /api/settings` 返回 `{ locale, supported }`，`PUT /api/settings { locale }` 切换。
+> **多语言**：界面支持中文（默认）、English、日本語、한국어、Français、Español 六种语言。在 Web 设置页的「语言」下拉切换，**即时生效并持久化**（写入 state.json 的 `settings.locale`）；覆盖所有用户可见文案 —— 各 IM 的聊天回复与卡片、Web 设置页（服务端运行日志 eventLog 保持原文，不随语言切换）。也可经 API 读写：`GET /api/settings` 返回 `{ locale, supported }`，`PUT /api/settings { locale }` 切换。
 
 ## 快速开始
 
@@ -136,9 +129,9 @@ Comote 支持全局界面语言切换：中文（默认）、English、日本語
 
 桌面端用 [Tauri](https://tauri.app/) 包了一层壳，Node daemon 作为 sidecar 启动，只监听本机回环地址。
 
-整个链路里**没有任何一步走公网中转**：手机端的 IM bot 通过各平台自己的服务推到你的 daemon（飞书是 WebSocket 长连接，钉钉是 Stream 长连接，微信是 iLink getupdates 轮询，Telegram 是 getUpdates 长轮询），daemon 在 localhost 跟 Codex Desktop 说话。
+**真·本地优先：整个链路里没有任何一步走公网中转。** daemon 只绑 `127.0.0.1`，所有授权、token、会话历史都存在本机 `~/.comote/` 下，不上传任何服务器。手机端的 IM bot 通过各平台自己的服务推到你的 daemon（飞书是 WebSocket 长连接，钉钉是 Stream 长连接，微信是 iLink getupdates 轮询，Telegram 是 getUpdates 长轮询），daemon 在 localhost 跟 Codex Desktop 说话。
 
-## 配置
+## 配置与参考
 
 不同 IM 的细节：
 
@@ -156,7 +149,7 @@ Comote 支持全局界面语言切换：中文（默认）、English、日本語
 | `COMOTE_LOCAL_API_TOKEN` | 设了之后所有 `/api/*` 调用必须带这个 token |
 | `COMOTE_WECHAT_ACCOUNT_ID` | 同机绑多个微信号时区分用（默认 `default`） |
 
-## 命令速查
+命令速查：
 
 | 命令 | 作用 |
 |---|---|
@@ -169,41 +162,10 @@ Comote 支持全局界面语言切换：中文（默认）、English、日本語
 | `/deny <code>` | 拒绝一个待审批的操作 |
 | 普通文本 | 转给当前 thread 给 Codex |
 
-## FAQ
-
-**Q：数据会上传到任何服务器吗？**
-
-不会。daemon 只绑 `127.0.0.1`，所有授权、token、会话历史都存在本机 `~/.comote/` 下。手机端消息也是 IM 自己的服务器（腾讯 / 飞书 / 钉钉 / Telegram）推到你本机，Comote 不经过任何第三方中转。
-
-**Q：可以多人共用一台 daemon 吗？**
-
-可以。每个聊天身份都需要单独绑定 / 确认，授权颗粒度是按身份的。但请注意：所有授权身份共享同一台 Codex Desktop，互相之间能看到彼此的 thread 列表。
-
-**Q：微信集成合规吗？**
-
-我们用的是腾讯 iLink 公开的 bot 接口（`ilinkai.weixin.qq.com`），不是逆向、不是桌面 UI 自动化、不绕过任何账号验证。但腾讯的服务条款会变，你需要自己评估当前的合规风险，**作者不为此承担责任**。
-
-**Q：支持哪些 IM？还能加别的吗（Discord / Slack）？**
-
-目前内置四个：**飞书**和**微信**（稳定），**钉钉**和**Telegram**（实验性）。新增一个 IM 需要实现一个 `ChannelAdapter` —— 大概 200-400 行代码，Discord 的适配已在规划中。欢迎 PR。
-
-**Q：官方不是有 Codex 手机端吗？**
-
-有的，但官方手机端只对 ChatGPT 订阅用户开放，跑在 OpenAI 的云上。如果你是 API 用户（用自己的 API key 在本机跑 Codex CLI / Codex Desktop），官方手机端帮不到你 —— 因为本机的 thread 它根本看不到。Comote 就是补这个空缺的。等哪天官方支持了 API 用户远程控制本机 Codex，我们就退役。
-
-**Q：能跨设备同步吗？**
-
-目前 daemon 是单机的。如果你有多台电脑，建议每台各跑一个 Comote 实例，分别绑不同的 IM 账号区分。
-
-**Q：失联了会怎样？**
-
-- IM 推送服务挂了：你发的消息暂时进不来，恢复后 Comote 会从 cursor 续上。
-- Codex Desktop 挂了：daemon 自动重连，期间消息排队。
-- daemon 挂了：你发的消息在 IM 服务器侧停留，daemon 起来后会拿到。
-
 ## Linux / 无界面服务器（headless VPS）
 
-想把 Comote 跑在一台没有显示器、没有桌面环境的 Linux VPS 上？可以。Comote 有一个**纯命令行的 headless daemon**，不依赖任何 GUI / webkit。
+<details>
+<summary>想把 Comote 跑在一台没有显示器、没有桌面环境的 Linux VPS 上？可以 —— 有一个纯命令行的 headless daemon，不依赖任何 GUI / webkit。</summary>
 
 **它是什么** —— 完整的 app-server connector（threads、流式回复、exec / applyPatch 审批）照常工作，因为 Comote 是跟 `codex app-server`（codex CLI 的一个子命令）说话，**不是** Codex Desktop 那个图形界面。所以没有桌面环境也完全没问题。
 
@@ -264,6 +226,8 @@ Linux 上没有应用内自动下载更新，手动升级即可。
 
 **一点说明** —— Comote 是针对某个较新的 codex 版本验证（certified）过的。app-server 协议历史上变过，如果升级后出问题，先把 codex 钉（pin）回一个已知可用的版本再排查。
 
+</details>
+
 ## 从源码构建
 
 要求：Node.js ≥ 22，Rust（Tauri 需要），macOS 12+ 或 Windows 10+。
@@ -296,6 +260,39 @@ npm run dist:win
 ```
 
 也可以让 GitHub Actions 帮忙（`windows-latest` runner）—— 参考 `.github/workflows/desktop-release.yml`。
+
+## FAQ
+
+**Q：数据会上传到任何服务器吗？**
+
+不会，纯本地。链路细节见上面[怎么工作的](#怎么工作的)。
+
+**Q：可以多人共用一台 daemon 吗？**
+
+可以。每个聊天身份都需要单独绑定 / 确认，授权颗粒度是按身份的。但请注意：所有授权身份共享同一台 Codex Desktop，互相之间能看到彼此的 thread 列表。
+
+**Q：微信集成合规吗？**
+
+我们用的是腾讯 iLink 公开的 bot 接口（`ilinkai.weixin.qq.com`），不是逆向、不是桌面 UI 自动化、不绕过任何账号验证。但腾讯的服务条款会变，你需要自己评估当前的合规风险，**作者不为此承担责任**。
+
+**Q：支持哪些 IM？还能加别的吗（Discord / Slack）？**
+
+目前内置四个：**飞书**和**微信**（稳定），**钉钉**和**Telegram**（实验性），见上面[支持的渠道](#支持的渠道)表。新增一个 IM 只需实现一个 `ChannelAdapter`（约 200-400 行），Discord 的适配已在规划中。欢迎 PR。
+
+<details>
+<summary>更多运维相关问答（跨设备同步、失联行为）</summary>
+
+**Q：能跨设备同步吗？**
+
+目前 daemon 是单机的。如果你有多台电脑，建议每台各跑一个 Comote 实例，分别绑不同的 IM 账号区分。
+
+**Q：失联了会怎样？**
+
+- IM 推送服务挂了：你发的消息暂时进不来，恢复后 Comote 会从 cursor 续上。
+- Codex Desktop 挂了：daemon 自动重连，期间消息排队。
+- daemon 挂了：你发的消息在 IM 服务器侧停留，daemon 起来后会拿到。
+
+</details>
 
 ## 项目结构
 
