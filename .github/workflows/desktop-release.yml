@@ -104,11 +104,13 @@ jobs:
 
   publish-npm:
     name: Publish to npm
-    if: startsWith(github.ref, 'refs/tags/v')
+    # Only the canonical repo can publish — forks lack the trusted-publisher
+    # config on npmjs.com, so skip there instead of failing.
+    if: startsWith(github.ref, 'refs/tags/v') && github.repository == 'GavinYangAI/Comote'
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      id-token: write # required for npm provenance (OIDC)
+      id-token: write # required for OIDC trusted publishing (and provenance)
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
@@ -116,25 +118,25 @@ jobs:
           node-version: 22
           cache: npm
           registry-url: "https://registry.npmjs.org"
+      # Trusted publishing (OIDC) needs npm >= 11.5.1; Node 22 still ships npm 10.
+      - name: Upgrade npm for trusted publishing
+        run: npm install -g npm@latest
       - run: npm ci
       - run: npm test
-      - name: Publish if token is present and version is new
-        env:
-          # Generate an npm "Automation" access token (bypasses 2FA, for CI) at
-          # npmjs.com → Access Tokens, then add it as the NPM_TOKEN repo secret.
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+      - name: Publish via OIDC trusted publishing if version is new
+        # No NODE_AUTH_TOKEN: the npm CLI auto-detects the GitHub Actions OIDC
+        # environment and exchanges a short-lived token with the registry. The
+        # package's trusted publisher (GitHub Actions → GavinYangAI/Comote →
+        # desktop-release.yml) is configured on npmjs.com. Provenance is emitted
+        # automatically, so no --provenance flag is needed.
         run: |
           set -euo pipefail
-          if [ -z "${NODE_AUTH_TOKEN:-}" ]; then
-            echo "NPM_TOKEN not set — skipping npm publish (e.g. a fork)."
-            exit 0
-          fi
           VERSION="$(node -p "require('./package.json').version")"
           if npm view "comote@${VERSION}" version >/dev/null 2>&1; then
             echo "comote@${VERSION} is already on npm — nothing to publish."
             exit 0
           fi
-          npm publish --provenance --access public
+          npm publish --access public
 
   publish-release:
     name: Publish GitHub Release
