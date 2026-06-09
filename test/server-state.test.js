@@ -205,3 +205,88 @@ test("routeDesktopEvent drives a dingtalk live status card", async (t) => {
 
   state.runtime.dingtalk.stop();
 });
+
+const NO_AUTOSTART = {
+  autoStartWeChatRuntime: false,
+  autoStartFeishuRuntime: false,
+  autoStartDingTalkRuntime: false,
+  autoStartTelegramRuntime: false,
+};
+
+test("discoverProjects falls back to a local scan when desktop has no projects", async () => {
+  const desktop = { onEvent: null, async listProjects() { return []; } };
+  const scanned = [
+    { name: "repo", path: "/work/repo", source: "local-scan", status: "available" },
+  ];
+  const state = createComoteState({
+    ...NO_AUTOSTART,
+    desktop,
+    stateStore: null,
+    persisted: {},
+    scanLocalProjects: () => scanned,
+  });
+
+  const list = await state.discoverProjects();
+
+  assert.deepEqual(list.map((p) => p.path), ["/work/repo"]);
+});
+
+test("discoverProjects prefers desktop projects over the local scan", async () => {
+  const desktop = {
+    onEvent: null,
+    async listProjects() {
+      return [{ name: "d", path: "/d", source: "codex-desktop", status: "available" }];
+    },
+  };
+  const state = createComoteState({
+    ...NO_AUTOSTART,
+    desktop,
+    stateStore: null,
+    persisted: {},
+    scanLocalProjects: () => [{ name: "s", path: "/s", source: "local-scan", status: "available" }],
+  });
+
+  const list = await state.discoverProjects();
+
+  assert.deepEqual(list.map((p) => p.path), ["/d"]);
+});
+
+test("discoverProjects clears stale projects when reachable desktop reports none and scan is empty", async () => {
+  const desktop = { onEvent: null, async listProjects() { return []; } };
+  const state = createComoteState({
+    ...NO_AUTOSTART,
+    desktop,
+    stateStore: null,
+    persisted: {},
+    scanLocalProjects: () => [],
+  });
+
+  // Seed a stale project, then a reachable desktop says there are none.
+  state.projects.replaceProjects([
+    { name: "stale", path: "/stale", source: "codex-desktop", status: "available" },
+  ]);
+  const list = await state.discoverProjects();
+
+  assert.deepEqual(list, []);
+});
+
+test("discoverProjects keeps the last known list when desktop is offline and scan is empty", async () => {
+  const desktop = {
+    onEvent: null,
+    async listProjects() { throw new Error("offline"); },
+  };
+  const state = createComoteState({
+    ...NO_AUTOSTART,
+    desktop,
+    stateStore: null,
+    persisted: {},
+    scanLocalProjects: () => [],
+  });
+
+  state.projects.replaceProjects([
+    { name: "known", path: "/known", source: "codex-desktop", status: "available" },
+  ]);
+  const list = await state.discoverProjects();
+
+  assert.deepEqual(list.map((p) => p.path), ["/known"]);
+});

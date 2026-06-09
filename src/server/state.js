@@ -8,6 +8,7 @@ import { planChangedFileDelivery } from "../core/changed-files-delivery.js";
 import { AuthorizationStore } from "../core/authorization.js";
 import { CommandRouter } from "../core/commands.js";
 import { ProjectStore } from "../core/projects.js";
+import { scanLocalProjects as defaultScanLocalProjects } from "../core/local-projects.js";
 import { SessionStore } from "../core/sessions.js";
 import { CodexDesktopConnector } from "../connectors/codex-desktop/index.js";
 import { CodexCliConnector } from "../connectors/codex-cli/index.js";
@@ -53,6 +54,7 @@ export function createComoteState({
   currentVersion = null,
   versionChecker = null,
   milestoneOptions = {},
+  scanLocalProjects = defaultScanLocalProjects,
 } = {}) {
   // Route the persisted value through i18n's validation so a hand-edited or
   // stale state.json can't desync settings.locale from the locale actually served.
@@ -96,6 +98,7 @@ export function createComoteState({
     outboundQueue: outboundReplies,
     persisted: persisted.router ?? {},
     transcript,
+    scanLocalProjects,
   });
   const registry = createRegistry([feishuPlugin, wechatPlugin, dingtalkPlugin, telegramPlugin]);
 
@@ -602,12 +605,27 @@ export function createComoteState({
       });
     },
     async discoverProjects() {
+      let desktopReached = false;
       try {
         const list = await desktop.listProjects();
-        projects.replaceProjects(list);
+        desktopReached = true;
+        if (list.length > 0) {
+          projects.replaceProjects(list);
+          return projects.listProjects();
+        }
       } catch {
-        // Desktop connector offline — leave project list as-is (empty on first
-        // load, or the previously loaded set if called after connect).
+        // Desktop connector offline — fall through to the local scan below.
+      }
+      // No desktop projects (offline, or a fresh headless/Linux box): scan the
+      // local project root so the desktop UI and IM both have something to show.
+      const local = scanLocalProjects();
+      if (local.length > 0) {
+        projects.replaceProjects(local);
+      } else if (desktopReached) {
+        // Desktop is authoritative and reports none, and the scan found nothing
+        // either — clear any stale list. (When desktop is offline we instead
+        // keep the last known set.)
+        projects.replaceProjects([]);
       }
       return projects.listProjects();
     },

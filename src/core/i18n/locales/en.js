@@ -73,7 +73,7 @@ export default {
   "cmd.status.project": "Project: {project}",
   "cmd.status.session": "Conversation: {session}",
   "cmd.status.none": "none",
-  "cmd.projects.none": "No projects found yet.",
+  "cmd.projects.none": "No projects found yet.\nJust send /open <absolute project path> to start, e.g. /open /home/you/myapp\n(Or set COMOTE_PROJECT_ROOT to your projects folder, and /projects will list what's inside.)",
   "cmd.projects.chooseDesktop": "Pick a Codex Desktop project to work on:",
   "cmd.projects.noDesktop": "No Codex Desktop projects found. Open a project in Codex Desktop first.",
   "cmd.projects.available": "Available projects:",

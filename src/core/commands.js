@@ -3,6 +3,7 @@ import { normalizeChannelMessage } from "./channel.js";
 import { t } from "./i18n/index.js";
 import { classifyMedia, resolveWithinProject } from "./paths.js";
 import { buildFileDeliveries } from "./file-delivery.js";
+import { scanLocalProjects as defaultScanLocalProjects } from "./local-projects.js";
 
 function isAbsolutePath(value) {
   return typeof value === "string" && value.startsWith("/");
@@ -19,6 +20,7 @@ export class CommandRouter {
     persisted = {},
     maxTurnsPerHour = 60,
     transcript = null,
+    scanLocalProjects = defaultScanLocalProjects,
   }) {
     this.authorization = authorization;
     this.projects = projects;
@@ -27,6 +29,9 @@ export class CommandRouter {
     this.codexCli = codexCli;
     this.outboundQueue = outboundQueue;
     this.transcript = transcript;
+    // Headless/Linux fallback project source: enumerates folders under a root
+    // when there is no Codex Desktop to list workspaces. Injectable for tests.
+    this.scanLocalProjects = scanLocalProjects;
     // Routing state is restored from disk so a daemon restart does not lose
     // the phone user's current project / session context.
     this.currentProjectByIdentity = new Map(persisted.currentProjectByIdentity ?? []);
@@ -340,15 +345,22 @@ export class CommandRouter {
       this.pendingByIdentity.delete(key);
       return this.text(t("cmd.projects.noDesktop"));
     }
-    const localProjects = this.projects.listProjects();
     const key = this.identityKey(identity);
-    if (localProjects.length > 0) {
-      this.lastProjectsByIdentity.set(key, localProjects);
-      this.pendingByIdentity.set(key, { type: "choose_project" });
+    let localProjects = this.projects.listProjects();
+    // No desktop and an empty store (typical on a fresh headless/Linux box):
+    // scan the local project root so /projects is a real list, not a dead end.
+    if (localProjects.length === 0) {
+      const scanned = this.scanLocalProjects?.() ?? [];
+      if (scanned.length > 0) {
+        this.projects.replaceProjects(scanned);
+        localProjects = this.projects.listProjects();
+      }
     }
     if (localProjects.length === 0) {
       return this.text(this.projectsText());
     }
+    this.lastProjectsByIdentity.set(key, localProjects);
+    this.pendingByIdentity.set(key, { type: "choose_project" });
     return this.pickerFromProjects(localProjects, t("cmd.projects.available"));
   }
 

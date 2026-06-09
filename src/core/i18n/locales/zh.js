@@ -73,7 +73,7 @@ export default {
   "cmd.status.project": "项目：{project}",
   "cmd.status.session": "对话：{session}",
   "cmd.status.none": "无",
-  "cmd.projects.none": "还没有发现任何项目。",
+  "cmd.projects.none": "还没有发现任何项目。\n直接发 /open <项目绝对路径> 就能开始，例如：/open /home/you/myapp\n（也可以设置环境变量 COMOTE_PROJECT_ROOT 指向你的项目目录，之后 /projects 会自动列出其中的项目。）",
   "cmd.projects.chooseDesktop": "请选择要操作的 Codex Desktop 项目：",
   "cmd.projects.noDesktop": "没有找到 Codex Desktop 项目。请先在 Codex Desktop 里打开一个项目。",
   "cmd.projects.available": "可用项目：",

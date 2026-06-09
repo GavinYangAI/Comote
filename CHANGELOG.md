@@ -7,6 +7,16 @@ GitHub Release notes, so keep each version's heading as `## vX.Y.Z`.
 本文件记录 Comote 的更新内容。发版流程会按推送的 `vX.Y.Z` tag 自动抽取对应
 段落作为 GitHub Release 说明，请保持每个版本标题为 `## vX.Y.Z`。
 
+## v0.6.2
+
+### ✨ What's New
+
+- **Cold-start project discovery.** On a fresh headless/Linux box with no Codex Desktop, `/projects` now scans your projects folder — `COMOTE_PROJECT_ROOT` if set, otherwise your home directory — so the picker is a real, selectable list instead of a dead end. When nothing is found, the empty state spells out the next step (`/open <absolute path>`) instead of just saying "no projects".
+
+### ✨ 新功能
+
+- **冷启动项目发现。** 在没有 Codex Desktop 的全新 headless/Linux 机器上，`/projects` 现在会扫描你的项目目录（设了 `COMOTE_PROJECT_ROOT` 就用它，否则用 home 目录），让项目选择器变成可点选的真实列表，而不是死路。找不到项目时，空状态会直接给出下一步（`/open <绝对路径>`），不再只是干巴巴一句"还没有项目"。
+
 ## v0.6.1
 
 ### 🐛 Fixes
