@@ -1552,8 +1552,15 @@ document.querySelector("#threadsLoadMore")?.addEventListener("click", async (eve
   button.disabled = true;
   const original = button.textContent;
   button.textContent = tWeb("web.threads.loading");
+  // Capture which project this request belongs to: if the user switches
+  // projects while the request is in flight, the stale response must be
+  // dropped, not appended to the new project's list.
+  const requestedPath = threadsLoadedProject.path;
   try {
-    const result = await safeGet(threadsUrl(threadsLoadedProject.path, threadsCursor), null);
+    const result = await safeGet(threadsUrl(requestedPath, threadsCursor), null);
+    if (threadsLoadedProject?.path !== requestedPath) {
+      return;
+    }
     if (result.ok && result.value) {
       const page = result.value?.data ?? result.value?.threads ?? [];
       const known = new Set(threadsItems.map(threadKey));

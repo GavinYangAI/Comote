@@ -195,7 +195,18 @@ export class TelegramRuntimeService extends BaseChannelRuntime {
 
     if (params.action === "approve" || params.action === "reject") {
       const decision = params.action === "approve" ? "accept" : "decline";
-      await router?.resolveApproval?.(params.code, decision);
+      // Pass the clicker identity so the router's thread-owner check applies —
+      // approval callbacks carry only the code (no threadId), so the card
+      // session owner gate above never covers them.
+      try {
+        await router?.resolveApproval?.(params.code, decision, identity);
+      } catch (error) {
+        this.eventLog?.warn?.("telegram 审批被拒绝", {
+          code: params.code,
+          clickerId,
+          error: error?.message ?? String(error),
+        });
+      }
       return;
     }
     if (params.action === "cancel") {

@@ -66,6 +66,17 @@ test("approval callback resolves the approval and returns a card update", async 
   assert.ok(res.cardData?.cardParamMap, "returns an in-frame card update");
 });
 
+test("review-2 (B-4): approval callback forwards the clicker identity to the router", async () => {
+  const captured = [];
+  const { runtime } = makeRuntime({
+    resolveApproval: async (code, decision, identity) => captured.push([code, decision, identity]),
+  });
+  await runtime.handleCardAction(cardPayload({ params: { action: "approve", code: "a1" } }));
+  assert.equal(captured.length, 1);
+  assert.equal(captured[0][2]?.channel, "dingtalk");
+  assert.equal(captured[0][2]?.stableId, OPERATOR_STAFF_ID);
+});
+
 test("reject maps to decline", async () => {
   const { runtime, resolved } = makeRuntime();
   await runtime.handleCardAction(cardPayload({ params: { action: "reject", code: "a2" } }));

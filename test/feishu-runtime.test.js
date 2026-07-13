@@ -361,7 +361,7 @@ test("handleCardAction resolves an approval and refreshes the card", async () =>
       handleInbound: async () => ({ kind: "text" }),
       commandRouter: {
         authorization: { isAuthorized: () => true },
-        resolveApproval: async (code, decision) => resolved.push([code, decision]),
+        resolveApproval: async (code, decision, identity) => resolved.push([code, decision, identity]),
       },
     },
     outboundQueue: new OutboundQueue(),
@@ -380,9 +380,39 @@ test("handleCardAction resolves an approval and refreshes the card", async () =>
     action: { value: { kind: "approval", code: "a1", decision: "accept" } },
   });
 
-  assert.deepEqual(resolved, [["a1", "accept"]]);
+  assert.equal(resolved.length, 1);
+  assert.equal(resolved[0][0], "a1");
+  assert.equal(resolved[0][1], "accept");
+  // review-2 (B-4): the clicker identity must reach the router so its
+  // thread-owner check applies to card buttons, not only text commands.
+  assert.equal(resolved[0][2]?.channel, "feishu");
+  assert.ok(resolved[0][2]?.stableId, "clicker stableId forwarded");
   assert.equal(updated[0].messageId, "om_approval");
   assert.match(result.toast.content, /已批准/);
+});
+
+test("review-2 (B-4): a not-owner rejection from the router becomes a denied toast", async () => {
+  const runtime = makeRuntime({
+    adapter: {
+      handleInbound: async () => ({ kind: "text" }),
+      commandRouter: {
+        authorization: { isAuthorized: () => true },
+        resolveApproval: async () => {
+          throw new Error("只有该任务的发起人可以处理这条审批。");
+        },
+      },
+    },
+    outboundQueue: new OutboundQueue(),
+    driver: { getStatus: () => ({ state: "configured" }), verifyEvent: () => true },
+  });
+
+  const result = await runtime.handleCardAction({
+    open_id: "ou_other",
+    open_message_id: "om_approval",
+    action: { value: { kind: "approval", code: "a1", decision: "accept" } },
+  });
+  assert.ok(result.toast, "returns a toast instead of crashing the callback");
+  assert.doesNotMatch(result.toast.content ?? "", /已批准/);
 });
 
 test("handleCardAction cancels a thread", async () => {

@@ -247,3 +247,34 @@ async function waitFor(predicate, { timeout = 3000, interval = 5 } = {}) {
     await new Promise((resolve) => setTimeout(resolve, interval));
   }
 }
+
+// ---------------------------------------------------------------------------
+// codex review round-2: shed-notice cascade (B-11). A full queue that sheds
+// must NOT enqueue failure notices — each notice would evict the next real
+// reply until nothing but notices remain.
+// ---------------------------------------------------------------------------
+import { OutboundQueue } from "../src/core/outbound-queue.js";
+
+test("review-2: shedding a full queue never replaces real replies with failure notices", async () => {
+  const shed = [];
+  const queue = new OutboundQueue({ maxActiveEntries: 3, onShed: (e) => shed.push(e) });
+  for (let i = 1; i <= 4; i += 1) {
+    queue.enqueue({ channel: "wechat", conversationId: "c1", kind: "text", text: `msg ${i}` });
+  }
+  // Let any (buggy) deferred enqueues run.
+  await new Promise((resolve) => setImmediate(resolve));
+  const active = queue.list().filter((e) => e.status === "queued" || e.status === "retrying");
+  assert.equal(shed.length, 1, "exactly one oldest entry shed");
+  assert.equal(active.length, 3);
+  for (const entry of active) {
+    assert.match(entry.text, /^msg /, `real reply survived, got: ${entry.text}`);
+  }
+});
+
+test("review-2: hasCapacity reflects active headroom", () => {
+  const queue = new OutboundQueue({ maxActiveEntries: 2 });
+  assert.equal(queue.hasCapacity(), true);
+  queue.enqueue({ channel: "wechat", conversationId: "c1", kind: "text", text: "a" });
+  queue.enqueue({ channel: "wechat", conversationId: "c1", kind: "text", text: "b" });
+  assert.equal(queue.hasCapacity(), false);
+});

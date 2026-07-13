@@ -5,6 +5,7 @@
 // card text, and pairing-code generation. Config-free, no I/O.
 import { randomInt } from "node:crypto";
 import { t } from "../../core/i18n/index.js";
+import { chunkTextByLines } from "../base/chunk.js";
 
 // Telegram caps a text message at 4096 chars. Reserve room for a card title +
 // step line (and any "(i/n)" chunk prefix) so a split body never overflows once
@@ -126,29 +127,13 @@ export function clampStatusBody(text, limit = STATUS_BODY_LIMIT) {
   return `${ellipsis}\n${value.slice(value.length - keep)}`;
 }
 
-// Splits a long reply into Telegram-sized chunks at line boundaries where possible,
-// hard-splitting any single line longer than the limit. Mirrors the WeChat/Feishu
-// chunkers so a final answer that overflows editMessageText survives as fresh sends.
+// Splits a long reply into Telegram-sized chunks at line boundaries where
+// possible. Delegates to the shared code-point-safe chunker: the old regex
+// hard-split counted UTF-16 code units and could sever an emoji surrogate
+// pair at a chunk boundary. fenceAware keeps code blocks renderable per chunk
+// (markdownToTelegramHtml converts each chunk's fences independently).
 export function chunkMessage(text, limit = TELEGRAM_MESSAGE_LIMIT) {
-  const value = String(text ?? "");
-  if (!value) return [];
-  if (value.length <= limit) return [value];
-  const chunks = [];
-  let current = "";
-  for (const rawLine of value.split("\n")) {
-    const pieces = rawLine.length > limit ? (rawLine.match(new RegExp(`[\\s\\S]{1,${limit}}`, "g")) ?? [rawLine]) : [rawLine];
-    for (const piece of pieces) {
-      const candidate = current ? `${current}\n${piece}` : piece;
-      if (current && candidate.length > limit) {
-        chunks.push(current);
-        current = piece;
-      } else {
-        current = candidate;
-      }
-    }
-  }
-  if (current) chunks.push(current);
-  return chunks;
+  return chunkTextByLines(text, limit, { fenceAware: true });
 }
 
 // HTML-escapes the three characters Telegram's HTML parse mode treats specially.

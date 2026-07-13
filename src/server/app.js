@@ -10,6 +10,10 @@ import { createComoteState } from "./state.js";
 
 const ROOT = fileURLToPath(new URL("../../", import.meta.url));
 const PUBLIC_DIR = join(ROOT, "public");
+// Upper bound on how much desktop thread history the transcript fallback pulls
+// in one thread/read pass — enough for any realistic scroll-back, bounded so a
+// pathological thread cannot balloon the response pipeline.
+const DESKTOP_TRANSCRIPT_FETCH_CAP = 1000;
 
 const MIME_TYPES = {
   ".html": "text/html; charset=utf-8",
@@ -208,15 +212,23 @@ async function handleApi(request, response, state) {
       const offset = Number(url.searchParams.get("offset") || 0);
       const local = state.transcript?.listThread?.(threadId, { limit, offset })
         ?? { threadId, messages: [], total: 0, hasMore: false };
-      if ((local.messages?.length ?? 0) === 0) {
-        // No local record — a genuine Codex thread Comote never relayed (the
-        // local transcript only holds phone-bridge traffic). Fall back to
+      if ((local.total ?? 0) === 0) {
+        // No local record AT ALL — a genuine Codex thread Comote never relayed
+        // (the local transcript only holds phone-bridge traffic). Fall back to
         // reading the thread history straight from the connector (thread/read).
-        // Any failure (not connected, RPC error) degrades to the empty local
-        // result instead of a 500. `source` lets the frontend label the origin.
+        // Gated on total===0, not an empty page: a paginated-past-the-end local
+        // request must not silently switch sources mid-scroll. Any failure (not
+        // connected, RPC error) degrades to the empty local result instead of a
+        // 500. `source` lets the frontend label the origin.
         try {
-          const recent = await state.connectors?.desktop?.listRecentMessages?.({ threadId, limit });
-          const messages = (recent?.messages ?? [])
+          // Fetch the whole history once (listRecentMessages walks every turn
+          // regardless; the limit only slices) so total/offset/hasMore describe
+          // the real thread, mirroring the local transcript's paging contract.
+          const recent = await state.connectors?.desktop?.listRecentMessages?.({
+            threadId,
+            limit: DESKTOP_TRANSCRIPT_FETCH_CAP,
+          });
+          const all = (recent?.messages ?? [])
             .map((message) => ({
               role: message?.role === "user" ? "user" : "assistant",
               text: message?.text ?? "",
@@ -225,12 +237,12 @@ async function handleApi(request, response, state) {
             // The local transcript pages newest-first and the frontend
             // reverses for display — match that order.
             .reverse();
-          if (messages.length > 0) {
+          if (all.length > 0) {
             sendJson(response, 200, {
               threadId,
-              messages,
-              total: messages.length,
-              hasMore: false,
+              messages: all.slice(offset, offset + limit),
+              total: all.length,
+              hasMore: offset + limit < all.length,
               source: "desktop",
             });
             return;

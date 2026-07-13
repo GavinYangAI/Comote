@@ -608,7 +608,50 @@ test("transcript API falls back to the connector's thread history when local is 
     hasMore: false,
     source: "desktop",
   });
-  assert.deepEqual(calls, [{ threadId: "thread_9", limit: 7 }]);
+  // review-2: the fallback fetches the WHOLE history once (thread/read walks
+  // every turn regardless) so total/offset/hasMore describe the real thread.
+  assert.deepEqual(calls, [{ threadId: "thread_9", limit: 1000 }]);
+});
+
+test("review-2: desktop transcript fallback pages with offset and real total", async () => {
+  const state = createFakeState();
+  state.transcript = {
+    listThread: (threadId, { offset = 0 } = {}) => ({ threadId, messages: [], total: 0, hasMore: false, offset }),
+  };
+  // 5 messages oldest→newest: m1..m5
+  state.connectors.desktop.listRecentMessages = async () => ({
+    messages: [1, 2, 3, 4, 5].map((n) => ({ role: "assistant", text: `m${n}` })),
+  });
+
+  const first = await fetchTranscript(state, "threadId=t&limit=2&offset=0");
+  assert.deepEqual(first.body.messages.map((m) => m.text), ["m5", "m4"], "newest first");
+  assert.equal(first.body.total, 5);
+  assert.equal(first.body.hasMore, true);
+
+  const second = await fetchTranscript(state, "threadId=t&limit=2&offset=2");
+  assert.deepEqual(second.body.messages.map((m) => m.text), ["m3", "m2"]);
+  assert.equal(second.body.hasMore, true);
+
+  const last = await fetchTranscript(state, "threadId=t&limit=2&offset=4");
+  assert.deepEqual(last.body.messages.map((m) => m.text), ["m1"]);
+  assert.equal(last.body.hasMore, false);
+});
+
+test("review-2: a paged-past-the-end LOCAL transcript never switches source mid-scroll", async () => {
+  const state = createFakeState();
+  let desktopCalled = false;
+  state.transcript = {
+    // total > 0 but the requested page is empty (offset beyond end).
+    listThread: (threadId) => ({ threadId, messages: [], total: 3, hasMore: false }),
+  };
+  state.connectors.desktop.listRecentMessages = async () => {
+    desktopCalled = true;
+    return { messages: [{ role: "assistant", text: "desktop" }] };
+  };
+
+  const { body } = await fetchTranscript(state, "threadId=t&limit=20&offset=40");
+  assert.equal(desktopCalled, false, "local total>0 must stay local");
+  assert.equal(body.source, "local");
 });
 
 test("transcript API serves the local transcript when it has messages", async () => {

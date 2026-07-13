@@ -103,6 +103,14 @@ export class OutboundQueue {
     );
   }
 
+  // Whether the queue can take another active entry without shedding one.
+  // Failure notices consult this: a notice that would evict a real pending
+  // reply is worse than no notice.
+  hasCapacity() {
+    const active = this.entries.filter((entry) => !TERMINAL_STATUSES.has(entry.status));
+    return active.length < this.maxActiveEntries;
+  }
+
   ack(id) {
     return this.markDelivered(id);
   }

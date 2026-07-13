@@ -11,7 +11,7 @@ import { encodeCallback } from "../src/channels/telegram/cards.js";
 function makeRuntime(overrides = {}) {
   const router = { authorization: { isAuthorized: () => true }, resolveApproval: async () => {}, cancelThread: async () => {}, chooseProject: async () => "chosen", useSessionAsync: async () => "used" };
   const calls = { resolve: [], cancel: [], answer: [] };
-  router.resolveApproval = async (code, decision) => { calls.resolve.push([code, decision]); };
+  router.resolveApproval = async (code, decision, identity) => { calls.resolve.push([code, decision, identity]); };
   router.cancelThread = async (tid) => { calls.cancel.push(tid); };
   const driver = {
     async answerCallbackQuery(a) { calls.answer.push(a); },
@@ -33,14 +33,29 @@ function makeRuntime(overrides = {}) {
 test("approve callback resolves the approval + answers the callback query", async () => {
   const { rt, calls } = makeRuntime();
   await rt.handleCallbackQuery({ id: "cq1", data: "ap:A1", message: { chat: { id: 9 }, message_id: 5 }, from: { id: 9 } });
-  assert.deepEqual(calls.resolve[0], ["A1", "accept"]);
+  assert.equal(calls.resolve[0][0], "A1");
+  assert.equal(calls.resolve[0][1], "accept");
+  // review-2 (B-4): approval callbacks carry no threadId, so the clicker
+  // identity must be forwarded for the router's thread-owner check.
+  assert.deepEqual(calls.resolve[0][2], { channel: "telegram", stableId: "9" });
   assert.equal(calls.answer[0].callbackQueryId, "cq1");
+});
+
+test("review-2 (B-4): a not-owner rejection from the router is swallowed gracefully", async () => {
+  const { rt, calls } = makeRuntime();
+  calls.resolve.length = 0;
+  rt.adapter.commandRouter.resolveApproval = async () => {
+    throw new Error("只有该任务的发起人可以处理这条审批。");
+  };
+  await rt.handleCallbackQuery({ id: "cq9", data: "ap:A1", message: { chat: { id: 9 }, message_id: 5 }, from: { id: 777 } });
+  assert.equal(calls.answer.at(-1).callbackQueryId, "cq9", "callback still answered, no crash");
 });
 
 test("reject callback resolves with decline", async () => {
   const { rt, calls } = makeRuntime();
   await rt.handleCallbackQuery({ id: "cq2", data: "rj:A1", message: { chat: { id: 9 }, message_id: 5 }, from: { id: 9 } });
-  assert.deepEqual(calls.resolve[0], ["A1", "decline"]);
+  assert.equal(calls.resolve[0][0], "A1");
+  assert.equal(calls.resolve[0][1], "decline");
 });
 
 test("cancel callback cancels the thread", async () => {

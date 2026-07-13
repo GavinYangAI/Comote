@@ -82,17 +82,18 @@ export function createComoteState({
 
   const outboundReplies = new OutboundQueue({
     entries: persisted.outboundReplies ?? [],
+    // Shed = the queue is at capacity and dropping its oldest to make room.
+    // Deliberately log-only: a shed happens exactly when the queue is FULL, so
+    // enqueuing a failure notice here evicts the next-oldest real reply, whose
+    // shed enqueues another notice … until every pending reply has been
+    // replaced by notices. (Confirmed by review: cap 3 + a 4th message wiped
+    // all four real replies.) Terminal delivery failures below still notify.
     onShed: (entry) => {
       eventLog.error("出站队列积压，丢弃最旧的未投递回复", {
         id: entry.id,
         channel: entry.channel,
         attempts: entry.attempts,
       });
-      // Deferred: onShed fires INSIDE enqueue()'s shedActive pass, and enqueuing
-      // the notice synchronously there would race the survivor filter (the fresh
-      // entry isn't in keptIds and would be silently dropped). A microtask-later
-      // enqueue is safe.
-      setImmediate(() => notifyDeliveryFailure(entry));
     },
     // A reply that exhausted its retries is gone for good; surface that to the
     // user instead of only writing an event-log line (B-11).
@@ -107,11 +108,17 @@ export function createComoteState({
   });
 
   // Enqueues one SHORT failure notice into the same conversation whose reply was
-  // lost (terminal failure or shed). The notice itself is stamped noFailureNotice
-  // so its own failure can only ever log — never loop. Keyed on the lost entry's
-  // id so retries of this path stay idempotent.
+  // lost (terminal failure). The notice itself is stamped noFailureNotice so its
+  // own failure can only ever log — never loop. Keyed on the lost entry's id so
+  // retries of this path stay idempotent. Skipped when the queue is full: a
+  // notice that evicts a real pending reply (whose shed is log-only) is a net
+  // loss, not feedback.
   function notifyDeliveryFailure(entry) {
     if (!entry || entry.noFailureNotice || !entry.channel || !entry.conversationId) {
+      return;
+    }
+    if (!outboundReplies.hasCapacity()) {
+      eventLog.warn("队列已满，跳过投递失败通知", { id: entry.id, channel: entry.channel });
       return;
     }
     const source = entry.kind === "media" ? (entry.fileName ?? entry.path ?? "") : (entry.text ?? "");

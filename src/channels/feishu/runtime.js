@@ -333,7 +333,17 @@ export class FeishuRuntimeService extends BaseChannelRuntime {
       return this.deniedToast();
     }
     if (action.value.kind === "approval") {
-      await router?.resolveApproval(action.value.code, action.value.decision);
+      // Pass the clicker identity so the router's thread-owner check applies —
+      // an authorized user still may not resolve another user's approval.
+      try {
+        await router?.resolveApproval(action.value.code, action.value.decision, identity);
+      } catch (error) {
+        this.eventLog?.warn?.("飞书卡片审批被拒绝", {
+          code: action.value.code,
+          error: error?.message ?? String(error),
+        });
+        return this.deniedToast();
+      }
       if (action.messageId && this.driver?.updateCard) {
         await this.driver
           .updateCard({

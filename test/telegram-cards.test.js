@@ -12,6 +12,7 @@ import {
   markdownToTelegramHtml,
   escapeHtml,
   BOT_COMMANDS,
+  chunkMessage,
 } from "../src/channels/telegram/cards.js";
 
 test("BOT_COMMANDS lists the main commands in Telegram's required shape (B-8)", () => {
@@ -102,4 +103,19 @@ test("generatePairingCode is 8 chars from the safe alphabet, deterministic under
   assert.equal(code.length, 8);
   assert.match(code, /^[0-9A-Z]+$/);
   assert.equal(code, code[0].repeat(8));
+});
+
+test("review-2: chunkMessage never splits an emoji surrogate pair at a boundary", () => {
+  const limit = 40;
+  const text = "\u{1F600}".repeat(60); // 60 emoji = 120 UTF-16 units, no newlines
+  const chunks = chunkMessage(text, limit);
+  assert.ok(chunks.length > 1);
+  for (const chunk of chunks) {
+    assert.ok(chunk.length <= limit, `chunk within limit (${chunk.length})`);
+    const first = chunk.charCodeAt(0);
+    const last = chunk.charCodeAt(chunk.length - 1);
+    assert.ok(!(first >= 0xdc00 && first <= 0xdfff), "chunk must not start on a low surrogate");
+    assert.ok(!(last >= 0xd800 && last <= 0xdbff), "chunk must not end on a high surrogate");
+  }
+  assert.equal(chunks.join(""), text, "no content lost");
 });

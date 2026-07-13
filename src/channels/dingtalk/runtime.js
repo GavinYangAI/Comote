@@ -146,7 +146,18 @@ export class DingTalkRuntimeService extends BaseChannelRuntime {
 
     if (params.action === "approve" || params.action === "reject") {
       const decision = params.action === "approve" ? "accept" : "decline";
-      await router?.resolveApproval?.(params.code, decision);
+      // Pass the clicker identity so the router's thread-owner check applies —
+      // an authorized user still may not resolve another user's approval.
+      try {
+        await router?.resolveApproval?.(params.code, decision, identity);
+      } catch (error) {
+        this.eventLog?.warn?.("钉钉卡片审批被拒绝", {
+          code: params.code,
+          operator: operatorStaffId ?? null,
+          error: error?.message ?? String(error),
+        });
+        return {};
+      }
       const resolved = approvalResolvedCardData({ code: params.code, decision });
       // In-frame card update: flip the card to its resolved face.
       return { cardUpdateOptions: { updateCardDataByKey: true }, cardData: { cardParamMap: toParamMap({ title: resolved.title, body: resolved.body, done: true }) } };
