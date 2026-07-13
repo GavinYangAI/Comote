@@ -17,12 +17,20 @@
 //   3. Daemon       — GET /api/version; reachable → PASS (version/pid);
 //                     DaemonUnreachable → WARN (start with `comote`), not a
 //                     hard fail so doctor still works offline.
-//   4. Connector    — only when the daemon is reachable: GET /api/status and
-//                     report connectors.desktop.state. (Whether `codex` is on
-//                     PATH is out of scope — we never shell out.)
+//   4. Codex binary — resolve the codex executable the same way the daemon
+//                     does (resolveCodexCommand: ChatGPT.app / Codex.app /
+//                     Homebrew / nvm / COMOTE_CODEX_PATH) and verify it exists
+//                     on disk. Pure filesystem probing — we never shell out.
+//   5. Codex login  — ~/.codex/auth.json (or $CODEX_HOME/auth.json) present.
+//   6. Connector    — only when the daemon is reachable: GET /api/status and
+//                     report connectors.desktop.state plus its lastError.
 
+import { existsSync } from "node:fs";
 import { stat } from "node:fs/promises";
+import { homedir } from "node:os";
+import { isAbsolute, join } from "node:path";
 
+import { resolveCodexCommand } from "../../connectors/codex-desktop/index.js";
 import { JsonFileStore } from "../../core/persistence.js";
 import { assertSafeBind } from "../../server/bind-safety.js";
 import { createRenderer } from "../render.js";
@@ -114,13 +122,50 @@ async function checkDaemon({ client }) {
   }
 }
 
-// --- check 4: codex connector (only when daemon reachable) ---------------
+// --- check 4: codex binary ------------------------------------------------
+// The exact failure doctor exists for: a codex the daemon cannot spawn. Uses
+// the daemon's own resolver so doctor reports the same path the daemon will
+// try, and only touches the filesystem (never shells out).
+function checkCodexBinary({ env = {}, exists = existsSync, resolve = resolveCodexCommand } = {}) {
+  const command = resolve({ env, exists });
+  if (isAbsolute(command)) {
+    if (exists(command)) {
+      return makeCheck("pass", "Codex binary", `resolved at ${command}`);
+    }
+    // resolveCodexCommand only returns unverified absolute paths for an
+    // explicit COMOTE_CODEX_PATH override — a broken override is a hard fail.
+    return makeCheck("fail", "Codex binary", `${command} does not exist (check COMOTE_CODEX_PATH)`);
+  }
+  return makeCheck(
+    "warn",
+    "Codex binary",
+    "not found in common install locations; relying on PATH. Install the ChatGPT desktop app " +
+      "or `npm install -g @openai/codex`, or set COMOTE_CODEX_PATH",
+  );
+}
+
+// --- check 5: codex login ---------------------------------------------------
+function checkCodexLogin({ env = {}, exists = existsSync, home = homedir } = {}) {
+  const codexHome = env.CODEX_HOME || join(home(), ".codex");
+  const authPath = join(codexHome, "auth.json");
+  if (exists(authPath)) {
+    return makeCheck("pass", "Codex login", `credentials at ${authPath}`);
+  }
+  return makeCheck("warn", "Codex login", `${authPath} not found; run \`codex login\``);
+}
+
+// --- check 6: codex connector (only when daemon reachable) ---------------
 async function checkConnector({ client }) {
   try {
     const status = await client.get("/api/status");
-    const state = status?.connectors?.desktop?.state ?? "unknown";
-    const level = state === "connected" ? "pass" : "warn";
-    return makeCheck(level, "Codex connector", `desktop ${state}`);
+    const desktop = status?.connectors?.desktop ?? {};
+    const state = desktop.state ?? "unknown";
+    if (state === "connected") {
+      return makeCheck("pass", "Codex connector", `desktop ${state}`);
+    }
+    // Show WHY it is not connected when the daemon knows.
+    const reason = desktop.lastError ? ` — ${desktop.lastError}` : "";
+    return makeCheck("warn", "Codex connector", `desktop ${state}${reason}`);
   } catch (error) {
     return makeCheck("fail", "Codex connector", error.message);
   }
@@ -147,6 +192,8 @@ export async function run({ parsed, client, env, write }) {
   const checks = [];
   checks.push(await checkStateFile({ statePath }));
   checks.push(checkBindSafety({ env }));
+  checks.push(checkCodexBinary({ env }));
+  checks.push(checkCodexLogin({ env }));
 
   const daemon = await checkDaemon({ client });
   checks.push(daemon.check);
@@ -179,4 +226,11 @@ export async function run({ parsed, client, env, write }) {
   return 0;
 }
 
-export const __test__ = { resolveStatePath, checkBindSafety, checkStateFile, DEFAULT_STATE_PATH };
+export const __test__ = {
+  resolveStatePath,
+  checkBindSafety,
+  checkStateFile,
+  checkCodexBinary,
+  checkCodexLogin,
+  DEFAULT_STATE_PATH,
+};

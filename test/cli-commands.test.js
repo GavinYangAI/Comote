@@ -8,6 +8,7 @@ import { run } from "../src/cli/index.js";
 import { matchApproval } from "../src/cli/commands/approvals.js";
 import { parseTarget } from "../src/cli/commands/identities.js";
 import { runWizard } from "../src/cli/commands/onboard.js";
+import { __test__ as doctorInternals } from "../src/cli/commands/doctor.js";
 import { renderQr } from "../src/cli/qr.js";
 
 // ---------------------------------------------------------------------------
@@ -990,6 +991,80 @@ test("doctor --json: array of checks passthrough", async () => {
     const names = parsed.map((c) => c.name);
     assert.ok(names.includes("Daemon"));
     assert.ok(names.includes("Codex connector"));
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// doctor: codex binary / login checks (pure filesystem, injectable)
+// ---------------------------------------------------------------------------
+
+test("doctor codex binary: resolved absolute path that exists → PASS", () => {
+  const bundled = "/Applications/ChatGPT.app/Contents/Resources/codex";
+  const check = doctorInternals.checkCodexBinary({
+    env: {},
+    exists: (c) => c === bundled,
+    resolve: () => bundled,
+  });
+  assert.equal(check.level, "pass");
+  assert.match(check.detail, /ChatGPT\.app/);
+});
+
+test("doctor codex binary: broken COMOTE_CODEX_PATH override → FAIL", () => {
+  const check = doctorInternals.checkCodexBinary({
+    env: { COMOTE_CODEX_PATH: "/custom/gone/codex" },
+    exists: () => false,
+  });
+  assert.equal(check.level, "fail");
+  assert.match(check.detail, /COMOTE_CODEX_PATH/);
+});
+
+test("doctor codex binary: nothing resolved → WARN with install hint", () => {
+  const check = doctorInternals.checkCodexBinary({
+    env: {},
+    exists: () => false,
+    resolve: () => "codex",
+  });
+  assert.equal(check.level, "warn");
+  assert.match(check.detail, /@openai\/codex/);
+});
+
+test("doctor codex login: auth.json presence drives PASS/WARN and honors CODEX_HOME", () => {
+  const present = doctorInternals.checkCodexLogin({
+    env: {},
+    exists: (c) => c.endsWith("auth.json"),
+    home: () => "/Users/you",
+  });
+  assert.equal(present.level, "pass");
+
+  const missing = doctorInternals.checkCodexLogin({
+    env: { CODEX_HOME: "/srv/codex-home" },
+    exists: () => false,
+    home: () => "/Users/you",
+  });
+  assert.equal(missing.level, "warn");
+  assert.match(missing.detail, /\/srv\/codex-home/);
+  assert.match(missing.detail, /codex login/);
+});
+
+test("doctor connector: disconnected state surfaces the daemon's lastError", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "comote-doctor-"));
+  const statePath = join(dir, "state.json");
+  await writeFile(statePath, "{}", { mode: 0o600 });
+  await chmod(statePath, 0o600);
+  try {
+    const { out } = await runCli(["doctor", "--state-path", statePath, "--plain"], {
+      "GET /api/version": { body: { version: "0.6.2", pid: 1 } },
+      "GET /api/status": {
+        body: {
+          connectors: {
+            desktop: { state: "not_connected", lastError: "找不到 codex 可执行文件（codex）" },
+          },
+        },
+      },
+    });
+    assert.match(out, /WARN\s+Codex connector: desktop not_connected — 找不到 codex 可执行文件/);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
