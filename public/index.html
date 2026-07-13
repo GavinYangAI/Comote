@@ -82,8 +82,10 @@
 
         <section id="codexNotice" class="system-notice" hidden>
           <div>
-            <strong data-i18n="web.codexNotice.title">需要打开 Codex Desktop</strong>
-            <p data-i18n="web.codexNotice.body">请先在本机打开 Codex Desktop，然后重试。</p>
+            <strong data-i18n="web.codexNotice.title">无法连接 Codex</strong>
+            <p data-i18n="web.codexNotice.body">Comote 需要本机的 Codex：请安装 ChatGPT 桌面应用或 Codex CLI（npm install -g @openai/codex），然后重试。</p>
+            <p id="codexNoticeError" hidden></p>
+            <p id="codexNoticeCommand" hidden><span data-i18n="web.codexNotice.commandLabel">检测到的 codex 路径：</span><code id="codexNoticeCommandText"></code></p>
           </div>
           <button id="retryCodexConnection" class="secondary-button" data-default-label="重试" type="button" data-i18n="web.button.retry">重试</button>
         </section>

@@ -22,6 +22,7 @@ export class CodexDesktopConnector {
     this.transportFactory =
       transportFactory ?? (() => this.transport ?? new StdioTransport({ command: this.command }));
     this.state = "not_connected";
+    this.lastError = null;
     this.pendingApprovals = new Map();
     this.shortCodeToKey = new Map();
     this.approvalCounter = 0;
@@ -326,6 +327,11 @@ export class CodexDesktopConnector {
       state: this.state,
       protocol: "app-server",
       endpoint: "codex app-server (stdio)",
+      // Diagnostics: which binary we resolved to and why the last connection
+      // attempt failed — so the UI/doctor can show an actionable reason
+      // instead of a bare "not connected".
+      command: this.command,
+      lastError: this.lastError ?? null,
     };
   }
 
@@ -359,12 +365,15 @@ export class CodexDesktopConnector {
       // so adopt it as a successful connection rather than surface as an error.
       if (/already initialized/i.test(error?.message ?? "")) {
         this.state = "connected";
+        this.lastError = null;
         this.startHeartbeat();
         return { alreadyInitialized: true };
       }
+      this.lastError = error?.message ?? String(error);
       throw error;
     }
     this.state = "connected";
+    this.lastError = null;
     this.startHeartbeat();
     return result;
   }

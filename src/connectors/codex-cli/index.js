@@ -1,5 +1,7 @@
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import { existsSync } from "node:fs";
+import { isAbsolute } from "node:path";
 import { promisify } from "node:util";
 
 import { resolveCodexCommand } from "../codex-desktop/index.js";
@@ -10,16 +12,21 @@ const defaultExecFileAsync = promisify(execFile);
 export class CodexCliConnector {
   // Shares the desktop connector's executable resolution: a GUI-launched app
   // has a minimal PATH, so bare "codex" misses nvm/Homebrew installs.
-  constructor({ execFileAsync = defaultExecFileAsync, command = null } = {}) {
+  constructor({ execFileAsync = defaultExecFileAsync, command = null, exists = existsSync } = {}) {
     this.execFileAsync = execFileAsync;
     this.command = command ?? resolveCodexCommand();
+    this.exists = exists;
   }
 
   getStatus() {
+    // A resolved absolute path can be verified on disk; a bare command can
+    // only be resolved by the OS at spawn time, so it stays optimistic.
+    const missing = isAbsolute(this.command) && !this.exists(this.command);
     return {
       name: "Codex CLI",
       role: "fallback",
-      state: "available",
+      state: missing ? "not_found" : "available",
+      command: this.command,
     };
   }
 

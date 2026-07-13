@@ -52,7 +52,7 @@ function flushAsyncWork() {
 }
 
 test("desktop connector is the primary Codex connector", () => {
-  const connector = new CodexDesktopConnector();
+  const connector = new CodexDesktopConnector({ command: "codex" });
 
   assert.deepEqual(connector.getStatus(), {
     name: "Codex Desktop",
@@ -60,7 +60,21 @@ test("desktop connector is the primary Codex connector", () => {
     state: "not_connected",
     protocol: "app-server",
     endpoint: "codex app-server (stdio)",
+    command: "codex",
+    lastError: null,
   });
+});
+
+test("desktop connector surfaces the failure reason through getStatus", async () => {
+  const connector = new CodexDesktopConnector({
+    command: "codex",
+    transportFactory: () => new FailingTransport(),
+  });
+
+  await assert.rejects(connector.initialize(), /ECONNREFUSED/);
+  const status = connector.getStatus();
+  assert.equal(status.state, "not_connected");
+  assert.match(status.lastError, /ECONNREFUSED/);
 });
 
 test("desktop connector initializes through app-server JSON-RPC", async () => {
@@ -935,13 +949,28 @@ test("handleDisconnect clears the agentMessage delta map", async () => {
 });
 
 test("cli connector is explicitly fallback", () => {
-  const connector = new CodexCliConnector();
+  const connector = new CodexCliConnector({ command: "codex" });
 
   assert.deepEqual(connector.getStatus(), {
     name: "Codex CLI",
     role: "fallback",
     state: "available",
+    command: "codex",
   });
+});
+
+test("cli connector reports not_found when the resolved binary is missing", () => {
+  const missing = new CodexCliConnector({
+    command: "/resolved/but/gone/codex",
+    exists: () => false,
+  });
+  assert.equal(missing.getStatus().state, "not_found");
+
+  const present = new CodexCliConnector({
+    command: "/resolved/and/present/codex",
+    exists: (c) => c === "/resolved/and/present/codex",
+  });
+  assert.equal(present.getStatus().state, "available");
 });
 
 test("resolveCodexCommand finds codex.exe in LOCALAPPDATA on Windows", () => {

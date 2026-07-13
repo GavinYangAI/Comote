@@ -213,14 +213,22 @@ async function renderOnce() {
   hideLoadError();
   setBridgeStatus(status.value.bridge === "running" ? tWeb("web.status.ready") : tWeb("web.status.starting"));
 
-  renderCodexNotice(status.value.connectors.desktop.state);
+  renderCodexNotice(status.value.connectors.desktop);
   // Hide the retry button when there is nothing to retry.
   document.querySelector("#connectDesktop").hidden = status.value.connectors.desktop.state === "connected";
-  document.querySelector("#connections").innerHTML = [
-    ["Codex Desktop", humanConnectorState(status.value.connectors.desktop.state)],
-    [tWeb("web.connectors.phoneCommands"), status.value.connectors.desktop.state === "connected" ? tWeb("web.connectors.available") : tWeb("web.connectors.waitingDesktop")],
+  const desktopConnector = status.value.connectors.desktop;
+  const connectionRows = [
+    ["Codex Desktop", humanConnectorState(desktopConnector.state)],
+    [tWeb("web.connectors.phoneCommands"), desktopConnector.state === "connected" ? tWeb("web.connectors.available") : tWeb("web.connectors.waitingDesktop")],
     [tWeb("web.connectors.cliFallback"), status.value.connectors.cli.state === "available" ? tWeb("web.connectors.available") : tWeb("web.connectors.unavailable")],
-  ]
+  ];
+  if (desktopConnector.command) {
+    connectionRows.push([tWeb("web.codexNotice.commandLabel"), escapeHtml(desktopConnector.command)]);
+  }
+  if (desktopConnector.state !== "connected" && desktopConnector.lastError) {
+    connectionRows.push([tWeb("web.codexNotice.title"), escapeHtml(desktopConnector.lastError)]);
+  }
+  document.querySelector("#connections").innerHTML = connectionRows
     .map(([label, value]) => `<dt>${label}</dt><dd>${value}</dd>`)
     .join("");
 
@@ -1059,9 +1067,24 @@ async function guardedAction(action) {
   }
 }
 
-function renderCodexNotice(state) {
+function renderCodexNotice(desktop) {
+  const state = desktop?.state ?? desktop;
   const notice = document.querySelector("#codexNotice");
   notice.hidden = state === "connected" || state === "available";
+  if (notice.hidden) {
+    return;
+  }
+  // Show the connector's real failure reason (e.g. "codex executable not
+  // found at <path>") instead of only the generic install hint — the reason
+  // is what tells the user which of the two fixes applies.
+  const errorLine = document.querySelector("#codexNoticeError");
+  const lastError = typeof desktop === "object" ? desktop?.lastError : null;
+  errorLine.textContent = lastError ?? "";
+  errorLine.hidden = !lastError;
+  const commandLine = document.querySelector("#codexNoticeCommand");
+  const command = typeof desktop === "object" ? desktop?.command : null;
+  document.querySelector("#codexNoticeCommandText").textContent = command ?? "";
+  commandLine.hidden = !command;
 }
 
 // --- Generic QR login: ONE poller for every qr-binding channel (replaces the
