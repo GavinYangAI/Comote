@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
 
 import {
   CodexDesktopConnector,
@@ -10,6 +10,7 @@ import {
   resolveCodexCommand,
 } from "../src/connectors/codex-desktop/index.js";
 import { CodexCliConnector } from "../src/connectors/codex-cli/index.js";
+import { spawnEnvFor, StdioTransport } from "../src/connectors/codex-desktop/json-rpc.js";
 
 class MemoryTransport {
   constructor() {
@@ -293,6 +294,7 @@ test("desktop connector forwards images as localImage input items", async () => 
 test("cli connector passes images via a comma-separated --image flag", async () => {
   const calls = [];
   const connector = new CodexCliConnector({
+    command: "codex",
     execFileAsync: async (file, args) => {
       calls.push({ file, args });
       return { stdout: "ok", stderr: "" };
@@ -314,6 +316,7 @@ test("cli connector passes images via a comma-separated --image flag", async () 
 test("cli connector omits --image when there are no images", async () => {
   const calls = [];
   const connector = new CodexCliConnector({
+    command: "codex",
     execFileAsync: async (file, args) => {
       calls.push({ file, args });
       return { stdout: "ok", stderr: "" };
@@ -994,15 +997,136 @@ test("resolveCodexCommand falls back to bare 'codex' when only the WindowsApps s
   assert.equal(command, "codex");
 });
 
-test("resolveCodexCommand prefers the bundled Codex.app binary on macOS", () => {
+test("resolveCodexCommand prefers the ChatGPT.app bundled binary on macOS", () => {
+  // Codex Desktop was renamed to ChatGPT.app; its bundled codex is a native
+  // binary at a fixed absolute path — the most robust choice for a GUI app.
+  const chatgpt = "/Applications/ChatGPT.app/Contents/Resources/codex";
+  const legacy = "/Applications/Codex.app/Contents/Resources/codex";
+  assert.equal(
+    resolveCodexCommand({
+      platform: "darwin",
+      env: {},
+      exists: (c) => c === chatgpt || c === legacy,
+      readdir: () => [],
+    }),
+    chatgpt,
+  );
+});
+
+test("resolveCodexCommand still honors the legacy Codex.app binary on macOS", () => {
   const bundled = "/Applications/Codex.app/Contents/Resources/codex";
   assert.equal(
     resolveCodexCommand({ platform: "darwin", exists: (c) => c === bundled }),
     bundled,
   );
   assert.equal(
-    resolveCodexCommand({ platform: "darwin", exists: () => false }),
+    resolveCodexCommand({ platform: "darwin", env: {}, exists: () => false, readdir: () => [] }),
     "codex",
+  );
+});
+
+test("resolveCodexCommand honors the COMOTE_CODEX_PATH override on every platform", () => {
+  for (const platform of ["darwin", "linux", "win32"]) {
+    assert.equal(
+      resolveCodexCommand({
+        platform,
+        env: { COMOTE_CODEX_PATH: "/custom/bin/codex" },
+        exists: () => false,
+        readdir: () => [],
+      }),
+      "/custom/bin/codex",
+    );
+  }
+});
+
+test("resolveCodexCommand probes Homebrew and user bins on macOS when Codex.app is gone", () => {
+  const brew = "/opt/homebrew/bin/codex";
+  assert.equal(
+    resolveCodexCommand({
+      platform: "darwin",
+      env: { HOME: "/Users/you" },
+      exists: (c) => c === brew,
+      readdir: () => [],
+    }),
+    brew,
+  );
+  const local = "/Users/you/.local/bin/codex";
+  assert.equal(
+    resolveCodexCommand({
+      platform: "darwin",
+      env: { HOME: "/Users/you" },
+      exists: (c) => c === local,
+      readdir: () => [],
+    }),
+    local,
+  );
+});
+
+test("resolveCodexCommand finds an nvm-installed codex on macOS, newest node first", () => {
+  const dirEntry = (name) => ({ name, isDirectory: () => true });
+  const versionsDir = "/Users/you/.nvm/versions/node";
+  const newest = `${versionsDir}/v22.22.2/bin/codex`;
+  const older = `${versionsDir}/v18.20.0/bin/codex`;
+  assert.equal(
+    resolveCodexCommand({
+      platform: "darwin",
+      env: { HOME: "/Users/you" },
+      exists: (c) => c === newest || c === older,
+      readdir: (dir) =>
+        dir === versionsDir ? [dirEntry("v18.20.0"), dirEntry("v22.22.2")] : [],
+    }),
+    newest,
+  );
+});
+
+test("spawnEnvFor prepends an absolute command's directory to PATH", () => {
+  // An npm-installed codex is a `#!/usr/bin/env node` script; `node` sits in
+  // the same bin dir, which a GUI-launched app's minimal PATH does not include.
+  const env = spawnEnvFor("/Users/you/.nvm/versions/node/v22.22.2/bin/codex", {
+    PATH: "/usr/bin:/bin",
+    HOME: "/Users/you",
+  });
+  // spawnEnvFor joins with the host platform's PATH delimiter (":" on POSIX,
+  // ";" on Windows) — build the expectation the same way so this test passes
+  // on the Windows release CI too.
+  assert.equal(
+    env.PATH,
+    `/Users/you/.nvm/versions/node/v22.22.2/bin${delimiter}/usr/bin:/bin`,
+  );
+  assert.equal(env.HOME, "/Users/you");
+});
+
+test("StdioTransport turns spawn ENOENT into an actionable codex-not-found error", async () => {
+  const missing =
+    process.platform === "win32"
+      ? "C:\\nonexistent\\comote-test\\codex.exe"
+      : "/nonexistent/comote-test/codex";
+  const transport = new StdioTransport({ command: missing });
+  await assert.rejects(transport.connect(), (error) => {
+    assert.match(error.message, /找不到 codex 可执行文件/);
+    assert.ok(error.message.includes(missing), "error must name the resolved command path");
+    assert.match(error.message, /COMOTE_CODEX_PATH/);
+    return true;
+  });
+});
+
+test("spawnEnvFor inherits the environment untouched for bare commands", () => {
+  assert.equal(spawnEnvFor("codex", { PATH: "/usr/bin" }), undefined);
+});
+
+test("resolveCodexCommand respects NVM_DIR and falls back to older nvm nodes", () => {
+  const dirEntry = (name) => ({ name, isDirectory: () => true });
+  const versionsDir = "/opt/nvm/versions/node";
+  const older = `${versionsDir}/v18.20.0/bin/codex`;
+  assert.equal(
+    resolveCodexCommand({
+      platform: "linux",
+      env: { HOME: "/home/you", NVM_DIR: "/opt/nvm" },
+      exists: (c) => c === older,
+      readdir: (dir) =>
+        dir === versionsDir ? [dirEntry("v18.20.0"), dirEntry("v22.22.2")] : [],
+    }),
+    older,
   );
 });
 

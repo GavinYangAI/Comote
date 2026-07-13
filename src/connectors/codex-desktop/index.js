@@ -541,6 +541,9 @@ export function firstChangePathBasename(changes) {
 // (including a bounded recursive search) before falling back to PATH — skipping
 // the Microsoft Store `WindowsApps` shim, which is an alias stub that breaks the
 // stdio app-server. Falls back to bare "codex" so PATH resolution still works.
+// Bare "codex" is a last resort: when Comote is launched from Finder/Dock the
+// spawn PATH is launchd's minimal set, so version-manager installs (nvm, volta)
+// and Homebrew are invisible — hence the absolute-path probing on macOS/Linux.
 // All filesystem/environment access is injectable so the resolver is testable.
 export function resolveCodexCommand({
   platform = process.platform,
@@ -549,6 +552,13 @@ export function resolveCodexCommand({
   exists = existsSync,
   readdir = readdirSync,
 } = {}) {
+  // Explicit user override wins everywhere, even if the file is missing —
+  // a wrong override should fail loudly (with the path in the error), not be
+  // silently ignored in favor of a different binary.
+  const override = env.COMOTE_CODEX_PATH;
+  if (typeof override === "string" && override.trim()) {
+    return override.trim();
+  }
   if (platform === "win32") {
     const localAppData = env.LOCALAPPDATA;
     if (localAppData) {
@@ -579,22 +589,81 @@ export function resolveCodexCommand({
       );
     return pathCodex ?? "codex";
   }
-  const bundled = "/Applications/Codex.app/Contents/Resources/codex";
-  if (exists(bundled)) {
-    return bundled;
+  const home = env.HOME;
+  if (platform === "darwin") {
+    // Codex Desktop was renamed to ChatGPT.app; both bundle a native codex
+    // binary at a fixed absolute path, which is immune to the minimal PATH a
+    // Finder-launched app inherits. Prefer the current app, then the legacy
+    // one, then the npm/Homebrew CLI install locations.
+    const bundledCandidates = [
+      "/Applications/ChatGPT.app/Contents/Resources/codex",
+      "/Applications/Codex.app/Contents/Resources/codex",
+    ];
+    const bundled = bundledCandidates.find((candidate) => exists(candidate));
+    if (bundled) {
+      return bundled;
+    }
+    const macCandidates = [
+      "/opt/homebrew/bin/codex",
+      "/usr/local/bin/codex",
+      home ? `${home}/.local/bin/codex` : null,
+      home ? `${home}/.volta/bin/codex` : null,
+    ].filter(Boolean);
+    const macCodex = macCandidates.find((candidate) => exists(candidate));
+    return macCodex ?? findNvmCodex({ env, exists, readdir }) ?? "codex";
   }
   // On Linux the binary often lands outside the spawn PATH (e.g. ~/.local/bin
   // from a user install, or /snap/bin from a snap), so probe the common install
   // locations before falling back to bare "codex" for PATH resolution.
-  const home = env.HOME;
   const linuxCandidates = [
     home ? `${home}/.local/bin/codex` : null,
     "/usr/local/bin/codex",
     "/usr/bin/codex",
     "/snap/bin/codex",
+    home ? `${home}/.volta/bin/codex` : null,
   ].filter(Boolean);
   const linuxCodex = linuxCandidates.find((candidate) => exists(candidate));
-  return linuxCodex ?? "codex";
+  return linuxCodex ?? findNvmCodex({ env, exists, readdir }) ?? "codex";
+}
+
+// Probes nvm-managed node installs for a global `codex`, newest node first.
+// nvm's bin dirs are per-version and never on a GUI-launched app's PATH, so an
+// npm-installed Codex CLI is otherwise unreachable from the desktop app.
+function findNvmCodex({ env, exists, readdir }) {
+  const root = env.NVM_DIR ?? (env.HOME ? `${env.HOME}/.nvm` : null);
+  if (!root) {
+    return null;
+  }
+  const versionsDir = `${root}/versions/node`;
+  let entries;
+  try {
+    entries = readdir(versionsDir, { withFileTypes: true });
+  } catch {
+    return null;
+  }
+  const versions = entries
+    .filter((entry) => entry?.isDirectory?.())
+    .map((entry) => entry.name)
+    .sort(compareNodeVersionsDesc);
+  for (const name of versions) {
+    const candidate = `${versionsDir}/${name}/bin/codex`;
+    if (exists(candidate)) {
+      return candidate;
+    }
+  }
+  return null;
+}
+
+function compareNodeVersionsDesc(left, right) {
+  const parse = (name) => name.replace(/^v/, "").split(".").map(Number);
+  const [a, b] = [parse(left), parse(right)];
+  for (let i = 0; i < 3; i += 1) {
+    const diff = (b[i] ?? 0) - (a[i] ?? 0);
+    if (diff) {
+      return diff;
+    }
+  }
+  return 0;
 }
 
 // Bounded depth-first search for codex.exe under a directory, used on Windows

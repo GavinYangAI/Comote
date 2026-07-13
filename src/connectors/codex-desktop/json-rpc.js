@@ -1,6 +1,22 @@
 import { spawn } from "node:child_process";
+import { delimiter, dirname, isAbsolute } from "node:path";
 
 const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
+
+// For an absolute command, returns a child env whose PATH starts with the
+// command's own directory; for bare commands returns undefined (inherit).
+// Rationale: an npm-installed codex is a `#!/usr/bin/env node` script, and a
+// GUI-launched app's minimal PATH has no `node` — but node sits next to codex
+// in the same bin dir (nvm/Homebrew), so prepending that dir makes the shebang
+// resolvable.
+export function spawnEnvFor(command, baseEnv = process.env) {
+  if (typeof command !== "string" || !isAbsolute(command)) {
+    return undefined;
+  }
+  const dir = dirname(command);
+  const path = baseEnv.PATH ? `${dir}${delimiter}${baseEnv.PATH}` : dir;
+  return { ...baseEnv, PATH: path };
+}
 
 export class JsonRpcClient {
   constructor({ transport, requestTimeoutMs = DEFAULT_REQUEST_TIMEOUT_MS }) {
@@ -159,10 +175,22 @@ export class StdioTransport {
     if (this.child) {
       return;
     }
-    const child = spawn(this.command, this.args, { stdio: ["pipe", "pipe", "ignore"] });
+    const child = spawn(this.command, this.args, {
+      stdio: ["pipe", "pipe", "ignore"],
+      env: spawnEnvFor(this.command),
+    });
     await new Promise((resolve, reject) => {
       child.once("spawn", resolve);
-      child.once("error", reject);
+      child.once("error", (error) =>
+        reject(
+          error?.code === "ENOENT"
+            ? new Error(
+                `找不到 codex 可执行文件（${this.command}）。请安装 ChatGPT 桌面版或 Codex CLI（npm install -g @openai/codex），` +
+                  `或设置环境变量 COMOTE_CODEX_PATH 指向 codex 的完整路径。`,
+              )
+            : error,
+        ),
+      );
     });
     this.child = child;
     child.stdout.setEncoding("utf8");
