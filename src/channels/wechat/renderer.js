@@ -1,5 +1,6 @@
 import { t } from "../../core/i18n/index.js";
 import { describeApprovalForChat } from "../base/approval-format.js";
+import { chunkTextByLines } from "../base/chunk.js";
 
 // WeChat is text-only — no cards, no media. The renderer degrades every
 // semantic reply kind to plain text; the final agent reply is chunked into
@@ -50,17 +51,16 @@ export function createWeChatRenderer() {
   };
 }
 
-// Splits a long Codex reply into chat-sized chunks. Kept verbatim from
-// server/state.js (same size/maxChunks/trim/truncation key/slice loop).
+// Splits a long Codex reply into chat-sized chunks. Same size/maxChunks/trim/
+// truncation semantics as the original slice-every-1500 loop, but the split now
+// prefers line boundaries and never cuts an emoji surrogate pair in half
+// (shared chunkTextByLines — see base/chunk.js).
 function chunkForChannel(text, size = 1500, maxChunks = 6) {
   const value = String(text ?? "").trim();
   if (!value) {
     return [];
   }
-  const chunks = [];
-  for (let index = 0; index < value.length; index += size) {
-    chunks.push(value.slice(index, index + size));
-  }
+  const chunks = chunkTextByLines(value, size);
   if (chunks.length > maxChunks) {
     const kept = chunks.slice(0, maxChunks);
     kept[maxChunks - 1] += "\n" + t("state.chunk.truncated");

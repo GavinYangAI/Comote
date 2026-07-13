@@ -9,7 +9,39 @@ import {
   cancelKeyboard,
   statusText,
   generatePairingCode,
+  markdownToTelegramHtml,
+  escapeHtml,
+  BOT_COMMANDS,
 } from "../src/channels/telegram/cards.js";
+
+test("BOT_COMMANDS lists the main commands in Telegram's required shape (B-8)", () => {
+  assert.ok(BOT_COMMANDS.length >= 10);
+  for (const c of BOT_COMMANDS) {
+    assert.match(c.command, /^[a-z0-9_]{1,32}$/, "lowercase name, no leading slash");
+    assert.ok(c.description.length >= 3 && c.description.length <= 256);
+  }
+  const names = BOT_COMMANDS.map((c) => c.command);
+  for (const want of ["status", "projects", "sessions", "use", "new", "tail", "approve", "deny", "cancel", "file", "help"]) {
+    assert.ok(names.includes(want), `includes /${want}`);
+  }
+});
+
+test("escapeHtml escapes &, <, > (B-8)", () => {
+  assert.equal(escapeHtml("a & b < c > d"), "a &amp; b &lt; c &gt; d");
+});
+
+test("markdownToTelegramHtml converts bold / inline code / fences and escapes content (B-8)", () => {
+  assert.equal(markdownToTelegramHtml("**bold** text"), "<b>bold</b> text");
+  assert.equal(markdownToTelegramHtml("run `a<b>` now"), "run <code>a&lt;b&gt;</code> now");
+  assert.equal(markdownToTelegramHtml("```js\nif (a < b) {}\n```"), "<pre>if (a &lt; b) {}</pre>");
+  // Plain text is escaped, nothing else invented.
+  assert.equal(markdownToTelegramHtml("1 < 2 & 3"), "1 &lt; 2 &amp; 3");
+});
+
+test("markdownToTelegramHtml closes an unterminated trailing fence (B-8)", () => {
+  const html = markdownToTelegramHtml("before\n```\ncode tail");
+  assert.equal(html, "before\n<pre>code tail</pre>");
+});
 
 test("approve/reject callback round-trips and stays within 64 bytes", () => {
   const data = encodeCallback({ action: "approve", code: "A1B2" });

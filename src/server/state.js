@@ -18,7 +18,7 @@ import dingtalkPlugin from "../channels/dingtalk/index.js";
 import telegramPlugin from "../channels/telegram/index.js";
 import { generatePairingCode as generateTelegramPairingCode } from "../channels/telegram/cards.js";
 import { createRegistry } from "../channels/registry.js";
-import { JsonFileStore } from "../core/persistence.js";
+import { JsonFileStore, resolveStatePath } from "../core/persistence.js";
 import { OutboundQueue } from "../core/outbound-queue.js";
 import { EventLog } from "../core/event-log.js";
 import { SleepGuard } from "../core/sleep-guard.js";
@@ -82,13 +82,51 @@ export function createComoteState({
 
   const outboundReplies = new OutboundQueue({
     entries: persisted.outboundReplies ?? [],
-    onShed: (entry) =>
+    onShed: (entry) => {
       eventLog.error("出站队列积压，丢弃最旧的未投递回复", {
         id: entry.id,
         channel: entry.channel,
         attempts: entry.attempts,
-      }),
+      });
+      // Deferred: onShed fires INSIDE enqueue()'s shedActive pass, and enqueuing
+      // the notice synchronously there would race the survivor filter (the fresh
+      // entry isn't in keptIds and would be silently dropped). A microtask-later
+      // enqueue is safe.
+      setImmediate(() => notifyDeliveryFailure(entry));
+    },
+    // A reply that exhausted its retries is gone for good; surface that to the
+    // user instead of only writing an event-log line (B-11).
+    onTerminalFailure: (entry) => {
+      eventLog.error("回复投递彻底失败，已停止重试", {
+        id: entry.id,
+        channel: entry.channel,
+        error: entry.lastError,
+      });
+      notifyDeliveryFailure(entry);
+    },
   });
+
+  // Enqueues one SHORT failure notice into the same conversation whose reply was
+  // lost (terminal failure or shed). The notice itself is stamped noFailureNotice
+  // so its own failure can only ever log — never loop. Keyed on the lost entry's
+  // id so retries of this path stay idempotent.
+  function notifyDeliveryFailure(entry) {
+    if (!entry || entry.noFailureNotice || !entry.channel || !entry.conversationId) {
+      return;
+    }
+    const source = entry.kind === "media" ? (entry.fileName ?? entry.path ?? "") : (entry.text ?? "");
+    const preview = String(source).slice(0, 80);
+    outboundReplies.enqueue({
+      channel: entry.channel,
+      conversationId: entry.conversationId,
+      ...(entry.accountId ? { accountId: entry.accountId } : {}),
+      kind: "text",
+      noFailureNotice: true,
+      text: t("state.delivery.failed", { preview }),
+      dedupeKey: `deliveryfail:${entry.id}`,
+    });
+    deliverIfPush(entry.channel);
+  }
   const commandRouter = new CommandRouter({
     authorization,
     projects,
@@ -388,12 +426,32 @@ export function createComoteState({
   // Drives routeDesktopEvent's live-card path channel-agnostically. feishu and
   // dingtalk qualify; wechat does not. liveCardRuntime("feishu") === feishuRuntime,
   // so every feishu live-card path behaves exactly as it did when hardcoded.
+  //
+  // B-2: the capability bit is a DECLARATION; a runtime may still be unable to
+  // render live cards right now (dingtalk without a configured status template —
+  // its openThreadCard silently no-ops). Runtimes may expose
+  // liveCardsOperational() to report that; when it returns false the channel is
+  // treated as card-less so the milestone/text fallbacks engage instead of a
+  // fully silent turn. Runtimes without the method are operational by definition.
   function liveCardRuntime(channel) {
     const stack = channelStacks.get(channel);
     if (!stack) return null;
     if (!stack.plugin.meta.capabilities?.liveUpdates) return null;
     const rt = stack.runtime;
-    return typeof rt.openThreadCard === "function" ? rt : null;
+    if (typeof rt.openThreadCard !== "function") return null;
+    if (typeof rt.liveCardsOperational === "function" && !rt.liveCardsOperational()) return null;
+    return rt;
+  }
+
+  // True when a channel DECLARES live cards but its runtime can't render them
+  // right now (see liveCardRuntime above). Such a channel would otherwise get no
+  // turn feedback at all: milestones are declared off (the card was supposed to
+  // cover them) and the live-card path silently no-ops. wechat (liveUpdates=0)
+  // is NOT degraded — its milestone flow is the designed path.
+  function liveCardDegraded(channel) {
+    const stack = channelStacks.get(channel);
+    if (!stack?.plugin.meta.capabilities?.liveUpdates) return false;
+    return liveCardRuntime(channel) === null;
   }
 
   // Finishes every open live-card session across all live-card channels with a
@@ -413,9 +471,32 @@ export function createComoteState({
     }
   }
 
+  // B-3: live-card channels learn about a dropped connection via the error card
+  // below, but a card-less channel (wechat, or a degraded dingtalk) with a turn
+  // in flight would go silent FOREVER — no turnCompleted/error will ever arrive.
+  // Enqueue one disconnect text per such active turn. milestoneByThread holds an
+  // entry for every thread between turnStarted and its turn-ending event, so its
+  // keys ARE the active turns; must run BEFORE teardownAllMilestoneState clears it.
+  function notifyDisconnectToCardlessThreads() {
+    for (const threadId of milestoneByThread.keys()) {
+      const binding = commandRouter.getThreadBinding(threadId);
+      if (!binding || liveCardRuntime(binding.channel) !== null) continue;
+      outboundReplies.enqueue({
+        channel: binding.channel,
+        conversationId: binding.conversationId,
+        ...(binding.accountId ? { accountId: binding.accountId } : {}),
+        kind: "text",
+        text: t("state.disconnect.reply"),
+        dedupeKey: `disconnect:${threadId}:${turnNonce(threadId)}`,
+      });
+      deliverIfPush(binding.channel);
+    }
+  }
+
   // Closes every open live card with a disconnect notice and clears the per-turn
   // bookkeeping. Shared by connectionLost and connectionGaveUp.
   function finishLiveCardsForDisconnect() {
+    notifyDisconnectToCardlessThreads();
     finishAllLiveCards((live) =>
       live.buildStatusCard({
         phase: "error",
@@ -756,8 +837,12 @@ export function createComoteState({
       initMilestoneState(event.threadId);
       sleepGuard.acquire(event.threadId);
       const startedBinding = commandRouter.getThreadBinding(event.threadId);
-      if (startedBinding?.channel === "wechat") {
-        wechatRuntime
+      // Typing indicator, driven by the EXPLICIT capabilities.typing bit (B-8):
+      // wechat and telegram declare it and expose runtime.sendTyping (never
+      // throws); other channels no-op. Behavior for wechat is unchanged.
+      const startedStack = startedBinding ? channelStacks.get(startedBinding.channel) : null;
+      if (startedStack?.plugin.meta.capabilities?.typing && typeof startedStack.runtime.sendTyping === "function") {
+        startedStack.runtime
           .sendTyping({ conversationId: startedBinding.conversationId })
           .catch(() => {});
       }
@@ -772,6 +857,20 @@ export function createComoteState({
           .catch((error) => {
             startedLive.lastError = error.message;
           });
+      } else if (startedBinding && liveCardDegraded(startedBinding.channel)) {
+        // B-2: the channel promised a live card but can't render one (dingtalk
+        // without a status template). It also has no typing indicator, so send a
+        // one-line turn-start text — otherwise the user gets zero feedback until
+        // the first milestone. Keyed on the turn nonce: one per turn.
+        outboundReplies.enqueue({
+          channel: startedBinding.channel,
+          conversationId: startedBinding.conversationId,
+          ...(startedBinding.accountId ? { accountId: startedBinding.accountId } : {}),
+          kind: "text",
+          text: t("card.phase.started"),
+          dedupeKey: `turnstart:${event.threadId}:${turnNonce(event.threadId)}`,
+        });
+        deliverIfPush(startedBinding.channel);
       }
       eventLog.info("Codex 开始处理请求", { threadId: event.threadId });
       return;
@@ -1039,7 +1138,14 @@ export function createComoteState({
   function milestonesEnabledFor(channel) {
     const stack = channelStacks.get(channel);
     if (!stack) return false;
-    return Boolean(stack.plugin.meta.capabilities?.milestones);
+    if (stack.plugin.meta.capabilities?.milestones) return true;
+    // B-2 fallback: a live-card channel whose runtime can't actually render
+    // cards right now (dingtalk without a status template) declares
+    // milestones=0 only because the card was supposed to cover progress. With
+    // the card path inoperable, route it through the milestone text flow — the
+    // same degradation wechat uses by design. A dingtalk WITH its template
+    // keeps milestones off (liveCardDegraded=false), exactly as before.
+    return liveCardDegraded(channel);
   }
 
   // turnStarted hook: fresh per-turn milestone state with seq=0 and a quiet-
@@ -1348,7 +1454,13 @@ export function createComoteState({
   return stateRef;
 }
 
-export async function createPersistentComoteState({ filePath = ".comote/state.json" } = {}) {
+// Default: ~/.comote/state.json, with automatic legacy fallback to the old
+// CWD-relative .comote/state.json (resolveStatePath logs when that happens).
+// An explicit COMOTE_STATE_PATH still wins (src/server/index.js passes it as
+// filePath, and resolveStatePath honors it too).
+export async function createPersistentComoteState({
+  filePath = resolveStatePath({ env: process.env, logger: console }).path,
+} = {}) {
   const stateStore = new JsonFileStore({ filePath });
   const persisted = await stateStore.load();
   const currentVersion = await readPackageVersion();

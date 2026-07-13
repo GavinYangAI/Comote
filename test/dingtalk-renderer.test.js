@@ -77,6 +77,37 @@ test("media uploads then sends as file", async () => {
   assert.equal(send[1].mediaId, "media-1");
 });
 
+test("B-9: a long text reply is chunked with (i/n) prefixes at line boundaries", async () => {
+  const r = createDingTalkRenderer({ templates: {} });
+  const d = fakeDriver();
+  const lines = Array.from({ length: 80 }, (_, i) => `line ${String(i).padStart(2, "0")} ${"x".repeat(30)}`);
+  await r.render({ kind: "text", conversationId: "s", text: lines.join("\n") }, { driver: d });
+  assert.ok(d.calls.length > 1, "long reply was chunked");
+  for (let i = 0; i < d.calls.length; i += 1) {
+    const [name, arg] = d.calls[i];
+    assert.equal(name, "sendMarkdown");
+    assert.ok(arg.text.startsWith(`(${i + 1}/${d.calls.length})\n`));
+    const body = arg.text.replace(/^\(\d+\/\d+\)\n/, "");
+    for (const line of body.split("\n")) {
+      assert.ok(lines.includes(line), `chunk line is a whole input line: ${line}`);
+    }
+  }
+});
+
+test("B-9: a chunk boundary inside a code fence closes and reopens the fence", async () => {
+  const r = createDingTalkRenderer({ templates: {} });
+  const d = fakeDriver();
+  const code = Array.from({ length: 120 }, (_, i) => `const v${i} = ${i}; // ${"pad".repeat(6)}`).join("\n");
+  const text = `intro\n\`\`\`js\n${code}\n\`\`\`\ntail`;
+  await r.render({ kind: "text", conversationId: "s", text }, { driver: d });
+  assert.ok(d.calls.length > 1, "fenced reply spans multiple messages");
+  for (const [, arg] of d.calls) {
+    const body = arg.text.replace(/^\(\d+\/\d+\)\n/, "");
+    const fences = body.split("\n").filter((l) => l.trimStart().startsWith("```")).length;
+    assert.equal(fences % 2, 0, `chunk has balanced code fences:\n${body}`);
+  }
+});
+
 test("buildStatusCard returns a cardParamMap", () => {
   const r = createDingTalkRenderer({ templates: { status: "st.schema" } });
   const map = r.buildStatusCard({ phase: "completed", text: "done", done: true });

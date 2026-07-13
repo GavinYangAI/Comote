@@ -142,6 +142,50 @@ test("pushfile click outside the project fence is rejected (no enqueue)", async 
   assert.equal(warns.length, 1, "the fence violation is logged");
 });
 
+test("start() registers the bot command menu via setMyCommands (B-8)", async () => {
+  const { rt } = makeRuntime();
+  const registered = [];
+  rt.driver.startEventStream = async () => ({ ok: true });
+  rt.driver.stopEventStream = () => {};
+  rt.driver.setMyCommands = async (commands) => { registered.push(commands); };
+  await rt.start();
+  assert.equal(registered.length, 1, "command menu registered once on start");
+  const names = registered[0].map((c) => c.command);
+  for (const want of ["status", "projects", "sessions", "use", "new", "tail", "approve", "deny", "cancel", "file", "help"]) {
+    assert.ok(names.includes(want), `menu includes /${want}`);
+  }
+  for (const c of registered[0]) {
+    assert.match(c.command, /^[a-z0-9_]+$/, "telegram command names are lowercase, no slash");
+    assert.ok(c.description.length > 0);
+  }
+  rt.stop();
+});
+
+test("start() succeeds even when the driver lacks setMyCommands or it fails (B-8)", async () => {
+  const { rt } = makeRuntime();
+  rt.driver.startEventStream = async () => ({ ok: true });
+  rt.driver.stopEventStream = () => {};
+  rt.driver.setMyCommands = async () => { throw new Error("network down"); };
+  const status = await rt.start();
+  assert.equal(status.state, "running", "menu failure never blocks the channel");
+  rt.stop();
+});
+
+test("sendTyping fires the driver's sendChatAction and never throws (B-8)", async () => {
+  const { rt } = makeRuntime();
+  const actions = [];
+  rt.driver.sendChatAction = async (a) => { actions.push(a); };
+  await rt.sendTyping({ conversationId: "55" });
+  assert.deepEqual(actions[0], { chatId: "55", action: "typing" });
+  // A failing chat action is swallowed.
+  rt.driver.sendChatAction = async () => { throw new Error("boom"); };
+  await rt.sendTyping({ conversationId: "55" });
+  // No driver support / no conversation → silent no-op.
+  delete rt.driver.sendChatAction;
+  await rt.sendTyping({ conversationId: "55" });
+  await rt.sendTyping({ conversationId: null });
+});
+
 test("start() calls ensurePairingCode before starting", async () => {
   const order = [];
   const { rt } = makeRuntime({ ensurePairingCode: async () => { order.push("pair"); } });

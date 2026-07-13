@@ -76,12 +76,18 @@ test("authorized sender is routed to the command router", async () => {
   assert.equal(routed[0].text, "do thing");
 });
 
-test("group message is ignored (allowGroups false)", async () => {
+test("group message is ignored (allowGroups false) with ONE direct-only notice per group (B-12a)", async () => {
   const { adapter, routed, sent } = makeAdapter({ isAuthorized: () => true });
   const res = await adapter.handleInbound(msg({ type: "supergroup" }));
   assert.equal(res.kind, "ignored");
+  assert.equal(routed.length, 0, "group message is never routed");
+  assert.equal(sent.length, 1, "the group is told 'direct messages only' once");
+  assert.equal(sent[0].conversationId, "9");
+  // A repeat in the same group stays silent.
+  const again = await adapter.handleInbound(msg({ type: "supergroup" }));
+  assert.equal(again.kind, "ignored");
   assert.equal(routed.length, 0);
-  assert.equal(sent.length, 0);
+  assert.equal(sent.length, 1, "no second notice for the same group");
 });
 
 test("displayName falls back to the id when no username and no names", () => {

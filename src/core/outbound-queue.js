@@ -13,6 +13,7 @@ export class OutboundQueue {
     maxTerminalEntries = MAX_TERMINAL_ENTRIES,
     maxActiveEntries = MAX_ACTIVE_ENTRIES,
     onShed = null,
+    onTerminalFailure = null,
   } = {}) {
     this.entries = entries.map((entry) => ({ ...entry }));
     this.nextId = nextIdAfter(this.entries);
@@ -22,6 +23,11 @@ export class OutboundQueue {
     // Optional sink for shed-entry notifications so callers can log/alert
     // instead of silently dropping undeliverable replies.
     this.onShed = onShed;
+    // Optional sink invoked when an entry exhausts its retries and lands in the
+    // "failed" terminal state. Lets the host surface the loss to the user (a
+    // failed reply is otherwise only an event-log line). Called AFTER the entry
+    // is finalized, with a copy of it.
+    this.onTerminalFailure = onTerminalFailure;
   }
 
   enqueue(reply) {
@@ -126,6 +132,9 @@ export class OutboundQueue {
         : null;
     if (TERMINAL_STATUSES.has(entry.status)) {
       this.prune();
+      // The entry just went terminal-failed (markFailed never produces
+      // "delivered"): notify the host so the loss can be surfaced to the user.
+      this.onTerminalFailure?.({ ...entry });
     }
     return { ...entry };
   }

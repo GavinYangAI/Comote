@@ -38,6 +38,14 @@ export class DingTalkRuntimeService extends BaseChannelRuntime {
     return this.renderer.buildStatusCard(status);
   }
 
+  // Whether live thread cards can ACTUALLY be rendered right now. dingtalk
+  // declares capabilities.liveUpdates=1, but without a console-built status
+  // template openThreadCard degrades to a silent no-op — the host must know so
+  // it can fall back to the milestone text flow instead of a fully silent turn.
+  liveCardsOperational() {
+    return Boolean(this.renderer?.templates?.status);
+  }
+
   hasThreadCard(threadId) {
     return this.cardSessions.has(threadId);
   }

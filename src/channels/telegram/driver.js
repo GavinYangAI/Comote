@@ -64,6 +64,12 @@ export class TelegramDriver {
     return this._call("sendChatAction", { chat_id: chatId, action });
   }
 
+  // Registers the bot's command menu (the "/" button in the Telegram client).
+  // commands = [{ command, description }] — names lowercase, no leading slash.
+  async setMyCommands(commands) {
+    return this._call("setMyCommands", { commands });
+  }
+
   async _sendMultipart(method, chatId, field, localPath, extra = {}, fileName = null) {
     const bytes = await readFile(localPath);
     const form = new FormData();

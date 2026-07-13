@@ -147,4 +147,7 @@ export default {
   "state.milestone.merged": "▸ さらに {count} ステップ — 最新：{label}",
   "state.milestone.generic": "▸ 処理中…",
   "state.heartbeat.quiet": "⏳ まだ処理中です…（{minutes} 分経過）",
+  "state.disconnect.reply": "⚠️ Codex との接続が切断され、実行中のタスクと連絡が取れなくなりました。接続の回復後にもう一度送信してください。",
+  "state.delivery.failed": "⚠️ メッセージを配信できませんでした（再試行を停止しました）：{preview}",
+  "cmd.group.onlyDirect": "Comote は現在ダイレクトメッセージのみ対応しています。個別チャットで送ってください。",
 };

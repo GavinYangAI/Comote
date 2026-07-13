@@ -118,6 +118,31 @@ test("render omits dedupeKey when reply.dedupeKey is absent", async () => {
   assert.ok(!("dedupeKey" in driver.sent[0]));
 });
 
+test("B-9: long multi-line replies are chunked at line boundaries, not mid-sentence", async () => {
+  const r = createWeChatRenderer();
+  const driver = stubDriver();
+  const lines = Array.from({ length: 60 }, (_, i) => `sentence number ${String(i).padStart(2, "0")} ${"word ".repeat(8)}`.trim());
+  await r.render({ kind: "text", conversationId: "dm_x", text: lines.join("\n") }, { driver });
+  assert.ok(driver.sent.length > 1, "long reply was chunked");
+  for (const msg of driver.sent) {
+    // Strip the "(i/n)\n" prefix, then every remaining line must be a whole input line.
+    const body = msg.text.replace(/^\(\d+\/\d+\)\n/, "");
+    for (const line of body.split("\n")) {
+      assert.ok(lines.includes(line), `chunk line is a whole input line: ${line}`);
+    }
+  }
+});
+
+test("B-9: a hard split never cuts an emoji surrogate pair", async () => {
+  const r = createWeChatRenderer();
+  const driver = stubDriver();
+  await r.render({ kind: "text", conversationId: "dm_x", text: "🚀".repeat(1200) }, { driver });
+  assert.ok(driver.sent.length >= 2);
+  for (const msg of driver.sent) {
+    assert.ok(!/[\uD800-\uDBFF]$/.test(msg.text), "no lone high surrogate at a chunk end");
+  }
+});
+
 test("media reply with no name/path sends nothing", async () => {
   const r = createWeChatRenderer();
   const driver = stubDriver();

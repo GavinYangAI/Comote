@@ -147,4 +147,7 @@ export default {
   "state.milestone.merged": "▸ {count} paso(s) más — último: {label}",
   "state.milestone.generic": "▸ Trabajando…",
   "state.heartbeat.quiet": "⏳ Sigo trabajando… ({minutes} min hasta ahora)",
+  "state.disconnect.reply": "⚠️ Se perdió la conexión con Codex; la tarea en curso quedó sin seguimiento. Reenvía tu mensaje cuando se restablezca la conexión.",
+  "state.delivery.failed": "⚠️ No se pudo entregar un mensaje (se dejó de reintentar): {preview}",
+  "cmd.group.onlyDirect": "Por ahora Comote solo funciona por mensaje directo. Escríbeme en privado.",
 };

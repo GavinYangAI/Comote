@@ -75,7 +75,9 @@ export class TelegramChannelAdapter extends BaseChannelAdapter {
   async handleInbound(payload) {
     const message = this.normalizeInbound(payload);
     if (message.conversationType !== "direct" && !this.allowGroups) {
-      return { kind: "ignored", reason: "group messages are disabled" };
+      // Shared one-time "direct messages only" notice (base adapter) so a group
+      // @-mention isn't met with dead silence.
+      return this._ignoreGroupMessage(message);
     }
     this.onDetectedIdentity?.(message.identity);
 

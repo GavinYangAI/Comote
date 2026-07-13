@@ -61,6 +61,30 @@ test("outbound queue marks entries failed after the retry budget is exhausted", 
   assert.deepEqual(queue.list(), []);
 });
 
+test("onTerminalFailure fires exactly once — when an entry lands terminal-failed (B-11)", () => {
+  const failedEntries = [];
+  const queue = new OutboundQueue({ maxAttempts: 3, onTerminalFailure: (e) => failedEntries.push(e) });
+  const entry = queue.enqueue({ channel: "wechat", conversationId: "dm_owner", text: "hello" });
+
+  queue.markFailed(entry.id, new Error("first"));
+  queue.markFailed(entry.id, new Error("second"));
+  assert.equal(failedEntries.length, 0, "retrying attempts do not fire the terminal callback");
+
+  queue.markFailed(entry.id, new Error("third"));
+  assert.equal(failedEntries.length, 1, "the exhausting attempt fires it once");
+  assert.equal(failedEntries[0].id, entry.id);
+  assert.equal(failedEntries[0].status, "failed");
+  assert.equal(failedEntries[0].lastError, "third");
+});
+
+test("delivered entries never fire onTerminalFailure (B-11)", () => {
+  const failedEntries = [];
+  const queue = new OutboundQueue({ onTerminalFailure: (e) => failedEntries.push(e) });
+  const entry = queue.enqueue({ channel: "wechat", conversationId: "dm_owner", text: "hello" });
+  queue.markDelivered(entry.id);
+  assert.equal(failedEntries.length, 0);
+});
+
 test("outbound queue prunes terminal entries above the cap while keeping active entries", () => {
   const cap = 10;
   const queue = new OutboundQueue({ maxAttempts: 1, maxTerminalEntries: cap });

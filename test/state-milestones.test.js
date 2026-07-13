@@ -83,8 +83,25 @@ test("each channel declares an explicit capabilities.milestones bit matching its
 // A milestone-enabled push-style binding (the milestones bit, NOT !liveUpdates,
 // is the switch). dingtalk has liveUpdates=1 AND milestones=0, so it must stay
 // OFF — guarding against a reader that recovered the old !liveUpdates inference.
-test("a milestone on a dingtalk-bound thread enqueues nothing (milestones=0)", () => {
-  const { desktop, state } = buildState();
+// B-2 nuance: dingtalk's live cards need a configured status template to be
+// operational; only then is the card path live and milestones stay off. (A
+// template-less dingtalk is DEGRADED and falls back to milestone texts — see
+// state-ux-feedback.test.js.)
+test("a milestone on a dingtalk-bound thread with a status template enqueues nothing (milestones=0)", () => {
+  const desktop = { onEvent: null, async listProjects() { return []; } };
+  const state = createComoteState({
+    desktop,
+    stateStore: null,
+    persisted: {
+      channelConfigs: {
+        dingtalk: { enabled: true, appKey: "ak", appSecret: "as", statusTemplateId: "st.schema" },
+      },
+    },
+    autoStartWeChatRuntime: false,
+    autoStartFeishuRuntime: false,
+    autoStartDingTalkRuntime: false,
+    autoStartTelegramRuntime: false,
+  });
   bindThread(state, "t1", "dingtalk");
   desktop.onEvent({ type: "turnStarted", threadId: "t1" });
   desktop.onEvent({ type: "milestone", kind: "command", label: "npm", threadId: "t1" });

@@ -147,4 +147,7 @@ export default {
   "state.milestone.merged": "▸ {count} étape(s) de plus — dernière : {label}",
   "state.milestone.generic": "▸ En cours…",
   "state.heartbeat.quiet": "⏳ Toujours en cours… ({minutes} min jusqu'à présent)",
+  "state.disconnect.reply": "⚠️ Connexion à Codex perdue — la tâche en cours est injoignable. Renvoyez votre message une fois la connexion rétablie.",
+  "state.delivery.failed": "⚠️ Un message n'a pas pu être remis (abandon après plusieurs tentatives) : {preview}",
+  "cmd.group.onlyDirect": "Comote ne fonctionne pour l'instant qu'en message privé. Écrivez-moi directement.",
 };

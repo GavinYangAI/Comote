@@ -3,7 +3,7 @@ import { stat } from "node:fs/promises";
 import { basename } from "node:path";
 import { t } from "../../core/i18n/index.js";
 import { describeApprovalForChat } from "../base/approval-format.js";
-import { approvalKeyboard, pickerKeyboard, cancelKeyboard, filesKeyboard, statusText, chunkMessage } from "./cards.js";
+import { approvalKeyboard, pickerKeyboard, cancelKeyboard, filesKeyboard, statusText, chunkMessage, markdownToTelegramHtml } from "./cards.js";
 
 // Telegram: photos ≤10MB via sendPhoto, documents ≤50MB via sendDocument; degrade
 // past the ceiling. Telegram natively supports inline keyboards, so approval/picker
@@ -46,13 +46,30 @@ export function createTelegramRenderer() {
           // Telegram hard-caps messages at 4096 chars and rejects longer ones
           // with a 400 — after the outbound queue's retries that reply would be
           // dropped for good. Chunk like _sendChunked does, with room reserved
-          // for the "(i/n)\n" prefix.
+          // for the "(i/n)\n" prefix. Each chunk is sent as parse_mode=HTML
+          // (Codex markdown coarsely converted: **bold** / `code` / ```pre```);
+          // if Telegram rejects the entities, the SAME chunk is resent as plain
+          // text — formatting must never cost a message.
           const chunks = chunkMessage(text, 4096 - 16);
           for (let i = 0; i < chunks.length; i += 1) {
-            const body = chunks.length > 1 ? `(${i + 1}/${chunks.length})\n${chunks[i]}` : chunks[i];
-            await driver.sendMessage({ chatId: reply.conversationId, text: body });
+            const prefix = chunks.length > 1 ? `(${i + 1}/${chunks.length})\n` : "";
+            await this._sendFormatted(driver, reply.conversationId, prefix, chunks[i]);
           }
         }
+      }
+    },
+
+    // Sends one chunk as HTML, degrading to the raw plain text when Telegram
+    // rejects the entity markup (400 "can't parse entities"). Any other error
+    // (network, chat not found, …) propagates so the outbound queue retries.
+    async _sendFormatted(driver, chatId, prefix, rawChunk) {
+      const html = markdownToTelegramHtml(rawChunk);
+      try {
+        await driver.sendMessage({ chatId, text: `${prefix}${html}`, parseMode: "HTML" });
+      } catch (error) {
+        const parseRejected = error?.code === 400 && /can't parse entities/i.test(error?.message ?? "");
+        if (!parseRejected) throw error;
+        await driver.sendMessage({ chatId, text: `${prefix}${rawChunk}` });
       }
     },
 

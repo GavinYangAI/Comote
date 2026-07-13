@@ -147,4 +147,7 @@ export default {
   "state.milestone.merged": "▸ {count} more step(s) — latest: {label}",
   "state.milestone.generic": "▸ Working…",
   "state.heartbeat.quiet": "⏳ Still working… ({minutes}m so far)",
+  "state.disconnect.reply": "⚠️ Lost the connection to Codex — the current task is out of reach. Please resend once the connection is back.",
+  "state.delivery.failed": "⚠️ A message could not be delivered (gave up after retries): {preview}",
+  "cmd.group.onlyDirect": "Comote only works in direct messages for now. Please message me privately.",
 };

@@ -12,6 +12,23 @@ import { t } from "../../core/i18n/index.js";
 export const TELEGRAM_MESSAGE_LIMIT = 4096;
 export const STATUS_BODY_LIMIT = 3500;
 
+// The bot command menu registered via setMyCommands at runtime start. Telegram
+// renders ONE global menu (it cannot switch language per user at runtime), so the
+// descriptions are plain English — the most universally readable choice.
+export const BOT_COMMANDS = [
+  { command: "status", description: "Show connection status" },
+  { command: "projects", description: "List available projects" },
+  { command: "sessions", description: "List conversations" },
+  { command: "use", description: "Switch to a conversation" },
+  { command: "new", description: "Start a new Codex conversation" },
+  { command: "tail", description: "Show recent messages" },
+  { command: "approve", description: "Approve a Codex request" },
+  { command: "deny", description: "Deny a Codex request" },
+  { command: "cancel", description: "Cancel the current task" },
+  { command: "file", description: "Send a project file here" },
+  { command: "help", description: "Show all commands" },
+];
+
 const PICK_KIND_CODE = { project: "p", session: "s" };
 const PICK_KIND_NAME = { p: "project", s: "session" };
 
@@ -132,6 +149,53 @@ export function chunkMessage(text, limit = TELEGRAM_MESSAGE_LIMIT) {
   }
   if (current) chunks.push(current);
   return chunks;
+}
+
+// HTML-escapes the three characters Telegram's HTML parse mode treats specially.
+export function escapeHtml(text) {
+  return String(text ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+// Best-effort markdown → Telegram HTML. Deliberately tiny: only the three
+// constructs Codex output actually uses heavily — ```fences``` → <pre>,
+// `inline code` → <code>, **bold** → <b>. Everything else is escaped verbatim.
+// Content is escaped BEFORE the tags are inserted, so user text can never smuggle
+// markup in. An unclosed trailing fence is closed. The caller MUST still be
+// prepared for Telegram to reject the entities (it falls back to plain text) —
+// formatting must never cost a message.
+export function markdownToTelegramHtml(text) {
+  const value = String(text ?? "");
+  const out = [];
+  let fenceBuf = null; // null = outside a fence, array = inside (collecting lines)
+  for (const line of value.split("\n")) {
+    if (line.trimStart().startsWith("```")) {
+      if (fenceBuf === null) {
+        fenceBuf = [];
+      } else {
+        out.push(`<pre>${escapeHtml(fenceBuf.join("\n"))}</pre>`);
+        fenceBuf = null;
+      }
+      continue;
+    }
+    if (fenceBuf !== null) {
+      fenceBuf.push(line);
+      continue;
+    }
+    out.push(inlineMarkdownToHtml(line));
+  }
+  if (fenceBuf !== null) {
+    out.push(`<pre>${escapeHtml(fenceBuf.join("\n"))}</pre>`);
+  }
+  return out.join("\n");
+}
+
+// Inline pass for a single non-fence line: escape first (so the inserted tags are
+// the only markup), then `code` before **bold** so a backtick span wins.
+function inlineMarkdownToHtml(line) {
+  let s = escapeHtml(line);
+  s = s.replace(/`([^`\n]+)`/g, "<code>$1</code>");
+  s = s.replace(/\*\*([^*\n](?:[^\n]*?[^*\n])?)\*\*/g, "<b>$1</b>");
+  return s;
 }
 
 // 8 chars from a no-look-alike alphabet (no 0/O/1/I). The pairing code is a shared

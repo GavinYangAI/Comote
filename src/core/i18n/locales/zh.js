@@ -147,4 +147,7 @@ export default {
   "state.milestone.merged": "▸ 又执行了 {count} 步，最新：{label}",
   "state.milestone.generic": "▸ 处理中…",
   "state.heartbeat.quiet": "⏳ 仍在处理…（已 {minutes} 分钟）",
+  "state.disconnect.reply": "⚠️ 与 Codex 的连接已中断，当前任务已失联；恢复连接后请重新发送。",
+  "state.delivery.failed": "⚠️ 有一条消息投递失败（已停止重试）：{preview}",
+  "cmd.group.onlyDirect": "Comote 目前只支持私聊，请直接给我发私信使用。",
 };

@@ -157,5 +157,17 @@ test("ignores group messages until group workflow is explicitly enabled", async 
   });
 
   assert.equal(result.kind, "ignored");
-  assert.deepEqual(sent, []);
+  // B-12a: the group gets ONE "direct messages only" notice instead of dead
+  // silence — but the message itself is still not routed.
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].conversationId, "room_1");
+
+  const repeat = await adapter.handleInbound({
+    accountId: "wx_account_1",
+    peer: { id: "wxid_owner", name: "Alice" },
+    conversation: { id: "room_1", type: "group" },
+    message: { id: "msg_2", text: "/status" },
+  });
+  assert.equal(repeat.kind, "ignored");
+  assert.equal(sent.length, 1, "no second notice for the same group");
 });

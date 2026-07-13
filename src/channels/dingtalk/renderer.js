@@ -4,6 +4,7 @@ import { basename, extname } from "node:path";
 import { randomUUID } from "node:crypto";
 import { t } from "../../core/i18n/index.js";
 import { describeApprovalForChat, approvalDetail } from "../base/approval-format.js";
+import { chunkTextByLines } from "../base/chunk.js";
 import {
   toParamMap,
   approvalCardData,
@@ -156,15 +157,15 @@ export function createDingTalkRenderer({ templates = {} } = {}) {
 // Splits a long reply into chat-sized chunks (mirrors WeChat's chunkForChannel):
 // past MARKDOWN_MAX_CHUNKS the tail is truncated with a "see full transcript
 // locally" notice so the message still fits DingTalk's markdown payload limit.
+// DingTalk renders the payload as markdown, so the split is fence-aware: a break
+// inside a ``` code block closes the fence on the current chunk and reopens it on
+// the next, keeping every chunk valid markdown (shared chunkTextByLines).
 function chunkForChannel(text, size = MARKDOWN_CHUNK_SIZE, maxChunks = MARKDOWN_MAX_CHUNKS) {
   const value = String(text ?? "").trim();
   if (!value) {
     return [];
   }
-  const chunks = [];
-  for (let index = 0; index < value.length; index += size) {
-    chunks.push(value.slice(index, index + size));
-  }
+  const chunks = chunkTextByLines(value, size, { fenceAware: true });
   if (chunks.length > maxChunks) {
     const kept = chunks.slice(0, maxChunks);
     kept[maxChunks - 1] += "\n" + t("state.chunk.truncated");

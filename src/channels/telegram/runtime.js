@@ -2,7 +2,7 @@
 import { BaseChannelRuntime } from "../base/runtime.js";
 import { routerReplyToSemantic } from "../base/messages.js";
 import { createTelegramRenderer } from "./renderer.js";
-import { decodeCallback, chunkMessage } from "./cards.js";
+import { decodeCallback, chunkMessage, BOT_COMMANDS } from "./cards.js";
 import { resolveWithinProject, classifyMedia } from "../../core/paths.js";
 
 // Telegram runtime. BaseChannelRuntime owns inbound (push), outbound delivery via the
@@ -37,7 +37,30 @@ export class TelegramRuntimeService extends BaseChannelRuntime {
 
   async start() {
     await this.ensurePairingCode?.();
-    return super.start();
+    const status = await super.start();
+    // Register the command menu (the "/" button) so users can discover commands
+    // without typing them blind. Fire-and-forget: a menu registration failure
+    // must never block or fail the channel start.
+    if (this.running && typeof this.driver?.setMyCommands === "function") {
+      Promise.resolve(this.driver.setMyCommands(BOT_COMMANDS)).catch((error) => {
+        this.eventLog?.warn?.("telegram 注册命令菜单失败", { error: error?.message ?? String(error) });
+      });
+    }
+    return status;
+  }
+
+  // Best-effort "Codex is typing" indicator (state.js calls this on turnStarted
+  // for every channel that declares capabilities.typing). Mirrors the wechat
+  // runtime's contract: never throws, no-ops without a driver/conversation.
+  async sendTyping({ conversationId }) {
+    if (!this.driver?.sendChatAction || !conversationId) {
+      return;
+    }
+    try {
+      await this.driver.sendChatAction({ chatId: conversationId, action: "typing" });
+    } catch {
+      // A failed typing indicator must never disrupt the runtime.
+    }
   }
 
   buildStatusCard(status) {

@@ -44,11 +44,43 @@ test("routes a direct message and enqueues a semantic text reply", async () => {
   assert.equal(enqueued[0].conversationId, "c1");
 });
 
-test("ignores group messages when allowGroups is false", async () => {
+test("ignores group messages when allowGroups is false, with ONE direct-only notice per group (B-12a)", async () => {
   const { adapter, enqueued } = make();
   const out = await adapter.handleInbound({ id: "m2", chat: "g1", user: "u1", text: "hi", group: true });
   assert.equal(out.kind, "ignored");
-  assert.equal(enqueued.length, 0);
+  // First group message: one "direct messages only" notice so the group isn't
+  // met with dead silence — but the message itself is still NOT routed.
+  assert.equal(enqueued.length, 1);
+  assert.equal(enqueued[0].text, t("cmd.group.onlyDirect"));
+  assert.equal(enqueued[0].conversationId, "g1");
+  // Repeats in the same group stay silent (no spam).
+  const again = await adapter.handleInbound({ id: "m2b", chat: "g1", user: "u2", text: "yo", group: true });
+  assert.equal(again.kind, "ignored");
+  assert.equal(enqueued.length, 1, "no second notice for the same group");
+  // A different group gets its own single notice.
+  await adapter.handleInbound({ id: "m2c", chat: "g2", user: "u1", text: "hi", group: true });
+  assert.equal(enqueued.length, 2);
+  assert.equal(enqueued[1].conversationId, "g2");
+});
+
+test("group-notice memory is FIFO-capped at 200 groups (B-12a)", async () => {
+  const { adapter, enqueued } = make();
+  for (let i = 0; i < 201; i += 1) {
+    await adapter.handleInbound({ id: `g${i}`, chat: `group-${i}`, user: "u1", text: "hi", group: true });
+  }
+  assert.equal(enqueued.length, 201, "each new group noticed once");
+  // group-0 was evicted (FIFO) → a new message there re-notices once.
+  await adapter.handleInbound({ id: "re0", chat: "group-0", user: "u1", text: "hi", group: true });
+  assert.equal(enqueued.length, 202, "evicted group is re-noticed");
+  // group-200 is still remembered → stays silent.
+  await adapter.handleInbound({ id: "re200", chat: "group-200", user: "u1", text: "hi", group: true });
+  assert.equal(enqueued.length, 202, "remembered group stays silent");
+});
+
+test("a failing notice reply still returns the ignored result (B-12a)", async () => {
+  const { adapter } = make({ sendReply: async () => { throw new Error("send failed"); } });
+  const out = await adapter.handleInbound({ id: "m2x", chat: "g9", user: "u1", text: "hi", group: true });
+  assert.equal(out.kind, "ignored");
 });
 
 test("prefixes downloaded attachment paths into the prompt", async () => {

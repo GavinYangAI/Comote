@@ -46,6 +46,15 @@ test("_call throws on Telegram ok:false and tags error_code", async () => {
   await assert.rejects(() => d.sendMessage({ chatId: "1", text: "x" }), (e) => e.code === 401 && /Unauthorized/.test(e.message));
 });
 
+test("setMyCommands POSTs the command list (B-8)", async () => {
+  const fetchImpl = fakeFetch(() => okJson(true));
+  const d = new TelegramDriver({ botToken: "T", fetchImpl });
+  const commands = [{ command: "status", description: "Show connection status" }];
+  await d.setMyCommands(commands);
+  assert.match(fetchImpl.calls[0].url, /setMyCommands$/);
+  assert.deepEqual(fetchImpl.calls[0].body.commands, commands);
+});
+
 test("editMessageText + answerCallbackQuery hit the right methods", async () => {
   const fetchImpl = fakeFetch(() => okJson(true));
   const d = new TelegramDriver({ botToken: "T", fetchImpl });

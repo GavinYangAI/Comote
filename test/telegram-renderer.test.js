@@ -13,14 +13,64 @@ function fakeDriver() {
   };
 }
 
-test("text reply sends a plain message", async () => {
+test("text reply sends an HTML-formatted message (B-8)", async () => {
   const r = createTelegramRenderer();
   const d = fakeDriver();
   await r.render({ kind: "text", conversationId: "9", text: "hello" }, { driver: d });
   assert.deepEqual(d.calls[0][0], "sendMessage");
   assert.equal(d.calls[0][1].chatId, "9");
   assert.equal(d.calls[0][1].text, "hello");
-  assert.equal(d.calls[0][1].parseMode ?? null, null); // plain text, no parse_mode
+  assert.equal(d.calls[0][1].parseMode, "HTML");
+});
+
+test("B-8: markdown bold/code/pre are converted to Telegram HTML and content is escaped", async () => {
+  const r = createTelegramRenderer();
+  const d = fakeDriver();
+  await r.render(
+    { kind: "text", conversationId: "9", text: "**done** run `a < b`\n```\nx & y\n```" },
+    { driver: d },
+  );
+  const sent = d.calls[0][1];
+  assert.equal(sent.parseMode, "HTML");
+  assert.ok(sent.text.includes("<b>done</b>"), "bold converted");
+  assert.ok(sent.text.includes("<code>a &lt; b</code>"), "inline code converted + escaped");
+  assert.ok(sent.text.includes("<pre>x &amp; y</pre>"), "fence converted + escaped");
+});
+
+test("B-8: a 400 \"can't parse entities\" falls back to plain text — the message is never lost", async () => {
+  const r = createTelegramRenderer();
+  const calls = [];
+  const d = {
+    async sendMessage(a) {
+      calls.push(a);
+      if (a.parseMode === "HTML") {
+        const err = new Error("Telegram sendMessage failed: 400 Bad Request: can't parse entities");
+        err.code = 400;
+        throw err;
+      }
+      return { message_id: 1 };
+    },
+  };
+  await r.render({ kind: "text", conversationId: "9", text: "**broken md" }, { driver: d });
+  assert.equal(calls.length, 2, "HTML attempt then plain resend");
+  assert.equal(calls[0].parseMode, "HTML");
+  assert.equal(calls[1].parseMode ?? null, null, "fallback is plain text");
+  assert.equal(calls[1].text, "**broken md", "fallback carries the raw original chunk");
+});
+
+test("B-8: a non-parse error still propagates so the outbound queue retries", async () => {
+  const r = createTelegramRenderer();
+  const d = {
+    async sendMessage() {
+      const err = new Error("Telegram sendMessage failed: 429 Too Many Requests");
+      err.code = 429;
+      throw err;
+    },
+  };
+  await assert.rejects(
+    () => r.render({ kind: "text", conversationId: "9", text: "hi" }, { driver: d }),
+    /429/,
+  );
 });
 
 test("text reply longer than Telegram's 4096 limit is chunked with (i/n) prefixes", async () => {

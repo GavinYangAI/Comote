@@ -60,6 +60,11 @@ export class BaseChannelAdapter {
     this.supportsMedia = supportsMedia ?? Boolean(downloadAttachment);
     this.allowGroups = allowGroups;
     this.noProjectMessage = noProjectMessage;
+    // Group conversations already told "direct messages only" — one notice per
+    // group, in-memory (a restart re-noticing once is acceptable), FIFO-capped
+    // so an adapter that sees many groups can't grow this without bound.
+    this._groupNoticeSent = new Set();
+    this._groupNoticeMax = 200;
   }
 
   _noProjectText() {
@@ -85,10 +90,31 @@ export class BaseChannelAdapter {
     throw new Error("normalizeInbound not implemented");
   }
 
+  // Ignores a group message on a groups-disabled channel — but tells the group
+  // WHY, once. Silence here reads as a dead bot to anyone who @-mentions it; one
+  // "direct messages only" notice per group explains it without letting repeat
+  // messages spam the room. Best-effort: a notice failure must not break the
+  // ignore result. Shared by the base pipeline and subclass overrides (telegram).
+  async _ignoreGroupMessage(message) {
+    const groupId = message.conversationId;
+    if (groupId && !this._groupNoticeSent.has(groupId)) {
+      this._groupNoticeSent.add(groupId);
+      if (this._groupNoticeSent.size > this._groupNoticeMax) {
+        this._groupNoticeSent.delete(this._groupNoticeSent.values().next().value);
+      }
+      try {
+        await this._reply(message, t("cmd.group.onlyDirect"));
+      } catch {
+        // best effort — the group stays ignored either way
+      }
+    }
+    return { kind: "ignored", reason: "group messages are disabled" };
+  }
+
   async handleInbound(payload) {
     const message = this.normalizeInbound(payload);
     if (message.conversationType !== "direct" && !this.allowGroups) {
-      return { kind: "ignored", reason: "group messages are disabled" };
+      return this._ignoreGroupMessage(message);
     }
     await this.resolveIdentityName?.(message.identity);
     this.onDetectedIdentity?.(message.identity);
