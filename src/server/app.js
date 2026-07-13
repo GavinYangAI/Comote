@@ -238,10 +238,16 @@ async function handleApi(request, response, state) {
             // reverses for display — match that order.
             .reverse();
           if (all.length > 0) {
+            // `total` is the connector's untruncated count — the frontend
+            // detects new messages by total deltas, so it must keep growing
+            // past the fetch cap. `hasMore` stays window-bounded: pages past
+            // the cap don't exist server-side, so paging stops there instead
+            // of chasing empty pages toward the real total.
+            const total = Number.isFinite(recent?.total) ? recent.total : all.length;
             sendJson(response, 200, {
               threadId,
               messages: all.slice(offset, offset + limit),
-              total: all.length,
+              total,
               hasMore: offset + limit < all.length,
               source: "desktop",
             });

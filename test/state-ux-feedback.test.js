@@ -278,3 +278,27 @@ test("review-2: hasCapacity reflects active headroom", () => {
   queue.enqueue({ channel: "wechat", conversationId: "c1", kind: "text", text: "b" });
   assert.equal(queue.hasCapacity(), false);
 });
+
+test("review-3: shed cascade guard holds through the real createComoteState onShed", async () => {
+  const { state } = buildState();
+  // The daemon queue caps active entries at 500; the 501st enqueue sheds the
+  // oldest. The original defect enqueued a failure notice from onShed, which
+  // evicted the next real reply, cascading until only notices remained.
+  for (let i = 1; i <= 501; i += 1) {
+    state.outboundReplies.enqueue({
+      channel: "wechat",
+      conversationId: "conv-1",
+      kind: "text",
+      text: `msg ${i}`,
+    });
+  }
+  await new Promise((resolve) => setImmediate(resolve));
+  const entries = state.outboundReplies.list({ channel: "wechat", pendingOnly: false });
+  const notices = entries.filter((entry) => entry.noFailureNotice);
+  assert.equal(notices.length, 0, "no failure notices enqueued by shedding");
+  const active = entries.filter((entry) => entry.status === "queued");
+  assert.equal(active.length, 500);
+  for (const entry of active) {
+    assert.match(entry.text, /^msg /, `real reply survived, got: ${entry.text}`);
+  }
+});

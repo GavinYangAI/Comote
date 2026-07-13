@@ -637,6 +637,35 @@ test("review-2: desktop transcript fallback pages with offset and real total", a
   assert.equal(last.body.hasMore, false);
 });
 
+test("review-3: a thread past the 1000-message window keeps reporting a growing total", async () => {
+  const state = createFakeState();
+  state.transcript = {
+    listThread: (threadId) => ({ threadId, messages: [], total: 0, hasMore: false }),
+  };
+  // The real connector slices its window to the requested limit but reports the
+  // UNTRUNCATED total — mirror that: 1002 messages, window carries newest 1000.
+  let threadSize = 1002;
+  state.connectors.desktop.listRecentMessages = async ({ limit }) => {
+    const all = Array.from({ length: threadSize }, (_, i) => ({ role: "assistant", text: `m${i + 1}` }));
+    return { messages: all.slice(-limit), total: threadSize };
+  };
+
+  const first = await fetchTranscript(state, "threadId=t&limit=20&offset=0");
+  assert.equal(first.body.total, 1002, "total is untruncated past the window cap");
+  assert.equal(first.body.messages[0].text, "m1002", "newest message first");
+
+  // Two more messages arrive: the frontend detects them by the total delta.
+  threadSize = 1004;
+  const second = await fetchTranscript(state, "threadId=t&limit=20&offset=0");
+  assert.equal(second.body.total, 1004, "total keeps growing after saturation");
+  assert.equal(second.body.messages[0].text, "m1004");
+
+  // Paging stays bounded by the window: the last in-window page reports no more.
+  const tail = await fetchTranscript(state, "threadId=t&limit=20&offset=980");
+  assert.equal(tail.body.messages.length, 20);
+  assert.equal(tail.body.hasMore, false, "hasMore is window-bounded, not total-bounded");
+});
+
 test("review-2: a paged-past-the-end LOCAL transcript never switches source mid-scroll", async () => {
   const state = createFakeState();
   let desktopCalled = false;

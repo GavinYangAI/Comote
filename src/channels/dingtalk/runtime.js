@@ -147,14 +147,19 @@ export class DingTalkRuntimeService extends BaseChannelRuntime {
     if (params.action === "approve" || params.action === "reject") {
       const decision = params.action === "approve" ? "accept" : "decline";
       // Pass the clicker identity so the router's thread-owner check applies —
-      // an authorized user still may not resolve another user's approval.
+      // an authorized user still may not resolve another user's approval. Only
+      // the typed ownership rejection is swallowed; anything else (RPC
+      // timeout, connector down) rethrows — the approval survives an
+      // unresolved fault, so the click can simply be retried.
       try {
         await router?.resolveApproval?.(params.code, decision, identity);
       } catch (error) {
-        this.eventLog?.warn?.("钉钉卡片审批被拒绝", {
+        if (error?.code !== "not_owner") {
+          throw error;
+        }
+        this.eventLog?.warn?.("钉钉卡片审批被拒绝：非任务发起人", {
           code: params.code,
           operator: operatorStaffId ?? null,
-          error: error?.message ?? String(error),
         });
         return {};
       }

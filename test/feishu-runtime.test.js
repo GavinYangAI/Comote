@@ -398,7 +398,9 @@ test("review-2 (B-4): a not-owner rejection from the router becomes a denied toa
       commandRouter: {
         authorization: { isAuthorized: () => true },
         resolveApproval: async () => {
-          throw new Error("只有该任务的发起人可以处理这条审批。");
+          const error = new Error("只有该任务的发起人可以处理这条审批。");
+          error.code = "not_owner";
+          throw error;
         },
       },
     },
@@ -413,6 +415,31 @@ test("review-2 (B-4): a not-owner rejection from the router becomes a denied toa
   });
   assert.ok(result.toast, "returns a toast instead of crashing the callback");
   assert.doesNotMatch(result.toast.content ?? "", /已批准/);
+});
+
+test("review-3: a retriable fault (RPC timeout) rethrows instead of reading as denial", async () => {
+  const runtime = makeRuntime({
+    adapter: {
+      handleInbound: async () => ({ kind: "text" }),
+      commandRouter: {
+        authorization: { isAuthorized: () => true },
+        resolveApproval: async () => {
+          throw new Error("Codex app-server 请求超时：resolveApproval");
+        },
+      },
+    },
+    outboundQueue: new OutboundQueue(),
+    driver: { getStatus: () => ({ state: "configured" }), verifyEvent: () => true },
+  });
+
+  await assert.rejects(
+    runtime.handleCardAction({
+      open_id: "ou_owner",
+      open_message_id: "om_approval",
+      action: { value: { kind: "approval", code: "a1", decision: "accept" } },
+    }),
+    /请求超时/,
+  );
 });
 
 test("handleCardAction cancels a thread", async () => {

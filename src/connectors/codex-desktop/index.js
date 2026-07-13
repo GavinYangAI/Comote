@@ -580,6 +580,10 @@ export class CodexDesktopConnector {
     }
     return {
       messages: messages.slice(-limit),
+      // The UNTRUNCATED message count: callers (the transcript fallback) use
+      // total deltas to detect new messages, so a total capped at the window
+      // size would freeze refresh once a thread outgrows the window.
+      total: messages.length,
       _rawSample: turns.slice(-1)[0] ?? null,
       _turnCount: turns.length,
     };

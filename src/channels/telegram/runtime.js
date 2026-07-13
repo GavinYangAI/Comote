@@ -197,14 +197,19 @@ export class TelegramRuntimeService extends BaseChannelRuntime {
       const decision = params.action === "approve" ? "accept" : "decline";
       // Pass the clicker identity so the router's thread-owner check applies —
       // approval callbacks carry only the code (no threadId), so the card
-      // session owner gate above never covers them.
+      // session owner gate above never covers them. Only the typed ownership
+      // rejection is swallowed; anything else (RPC timeout, connector down)
+      // rethrows — the approval survives an unresolved fault, so the click
+      // can simply be retried.
       try {
         await router?.resolveApproval?.(params.code, decision, identity);
       } catch (error) {
-        this.eventLog?.warn?.("telegram 审批被拒绝", {
+        if (error?.code !== "not_owner") {
+          throw error;
+        }
+        this.eventLog?.warn?.("telegram 审批被拒绝：非任务发起人", {
           code: params.code,
           clickerId,
-          error: error?.message ?? String(error),
         });
       }
       return;

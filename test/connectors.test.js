@@ -566,6 +566,7 @@ test("desktop connector reads recent messages with thread/read", async () => {
       { role: "user", text: "continue from Feishu" },
       { role: "assistant", text: "done" },
     ],
+    total: 2,
     _rawSample: {
       id: "turn_1",
       items: [

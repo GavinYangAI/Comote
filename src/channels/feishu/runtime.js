@@ -334,13 +334,18 @@ export class FeishuRuntimeService extends BaseChannelRuntime {
     }
     if (action.value.kind === "approval") {
       // Pass the clicker identity so the router's thread-owner check applies —
-      // an authorized user still may not resolve another user's approval.
+      // an authorized user still may not resolve another user's approval. Only
+      // the typed ownership rejection becomes a denied toast; anything else
+      // (RPC timeout, connector down) rethrows — the approval survives an
+      // unresolved fault, so the click can simply be retried.
       try {
         await router?.resolveApproval(action.value.code, action.value.decision, identity);
       } catch (error) {
-        this.eventLog?.warn?.("飞书卡片审批被拒绝", {
+        if (error?.code !== "not_owner") {
+          throw error;
+        }
+        this.eventLog?.warn?.("飞书卡片审批被拒绝：非任务发起人", {
           code: action.value.code,
-          error: error?.message ?? String(error),
         });
         return this.deniedToast();
       }

@@ -814,13 +814,15 @@ export class CommandRouter {
   }
 
   // Resolves a pending Codex approval by short code or id. `identity` is the
-  // IM identity typing /approve <code> or /deny <code>; when the approval's
-  // thread has a recorded owner, only that owner may resolve it (B-4 — the
-  // channel button paths gate ownership in their runtimes; this is the text
-  // path's equivalent). `identity` is null for trusted local callers — the
-  // desktop web UI resolves via the connector directly and the channel
-  // runtimes pass no identity — so null skips the gate (backward compatible;
-  // the machine owner is implicitly allowed).
+  // resolver's IM identity — the text path (/approve, /deny) and all three
+  // channel button runtimes pass their clicker identity, and when the
+  // approval's thread has a recorded owner, only that owner may resolve it
+  // (B-4). `identity` is null only for trusted local callers (the desktop web
+  // UI resolves via the connector directly), which skips the gate — the
+  // machine owner is implicitly allowed. An ownership rejection throws with
+  // `code = "not_owner"` so callers can tell it apart from retriable faults
+  // (RPC timeout etc.) — the approval is only deleted after a successful
+  // resolve, so retriable faults lose nothing.
   async resolveApproval(selector, decision, identity = null) {
     if (!selector) {
       throw new Error(decision === "accept" ? t("cmd.approve.usage") : t("cmd.deny.usage"));
@@ -838,7 +840,9 @@ export class CommandRouter {
         ? this.getThreadBinding(approval.threadId)?.ownerStableId ?? null
         : null;
       if (owner && owner !== identity.stableId) {
-        throw new Error(t("cmd.approve.notOwner"));
+        const error = new Error(t("cmd.approve.notOwner"));
+        error.code = "not_owner";
+        throw error;
       }
     }
     await this.codexDesktop.resolveApproval(selector, decision);

@@ -45,7 +45,9 @@ test("review-2 (B-4): a not-owner rejection from the router is swallowed gracefu
   const { rt, calls } = makeRuntime();
   calls.resolve.length = 0;
   rt.adapter.commandRouter.resolveApproval = async () => {
-    throw new Error("只有该任务的发起人可以处理这条审批。");
+    const error = new Error("只有该任务的发起人可以处理这条审批。");
+    error.code = "not_owner";
+    throw error;
   };
   await rt.handleCallbackQuery({ id: "cq9", data: "ap:A1", message: { chat: { id: 9 }, message_id: 5 }, from: { id: 777 } });
   assert.equal(calls.answer.at(-1).callbackQueryId, "cq9", "callback still answered, no crash");
