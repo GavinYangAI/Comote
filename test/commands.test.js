@@ -342,7 +342,8 @@ test("plain messages continue the active Codex Desktop thread", async () => {
 
   router.handleMessage({ identity, text: "/open 1" });
   sessions.upsertExternalSession({ projectPath: "/repo", id: "thread_1", title: "Existing thread" });
-  sessions.useSession("/repo", "thread_1");
+  // Active pointers are per identity (B-6): seed the pointer for this identity.
+  sessions.useSession("/repo", "thread_1", "wechat:wxid_owner");
   const reply = await router.handleMessageAsync({ identity, text: "continue implementing" });
 
   assert.match(reply.text, /已发送给 Codex Desktop/);
@@ -372,7 +373,7 @@ test("plain messages resume the active Codex Desktop thread before starting a tu
 
   router.handleMessage({ identity, text: "/open 1" });
   sessions.upsertExternalSession({ projectPath: "/repo", id: "thread_1", title: "Existing thread" });
-  sessions.useSession("/repo", "thread_1");
+  sessions.useSession("/repo", "thread_1", "wechat:wxid_owner");
   const reply = await router.handleMessageAsync({ identity, text: "continue implementing" });
 
   assert.match(reply.text, /已发送给 Codex Desktop/);
@@ -402,7 +403,7 @@ test("inbound image attachments are forwarded to startTurn as resolved image pat
 
   router.handleMessage({ identity, text: "/open 1" });
   sessions.upsertExternalSession({ projectPath: "/repo", id: "thread_1", title: "Existing thread" });
-  sessions.useSession("/repo", "thread_1");
+  sessions.useSession("/repo", "thread_1", "telegram:tg_owner");
 
   await router.handleMessageAsync({
     identity,
@@ -648,7 +649,7 @@ test("normal prose is routed to Codex, never treated as a mistyped command", asy
 
   router.handleMessage({ identity, text: "/open 1" });
   sessions.upsertExternalSession({ projectPath: "/repo", id: "thread_1", title: "Existing thread" });
-  sessions.useSession("/repo", "thread_1");
+  sessions.useSession("/repo", "thread_1", "wechat:wxid_owner");
 
   // Prose that merely mentions a slash mid-sentence must still reach Codex.
   const reply = await router.handleMessageAsync({ identity, text: "please run a/b test on /repo" });

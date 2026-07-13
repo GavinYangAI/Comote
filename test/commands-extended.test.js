@@ -58,6 +58,8 @@ test("current, switch, and tail make phone session navigation explicit", async (
       { role: "user", text: "fix tests" },
       { role: "assistant", text: "done" },
     ],
+    // Active pointers are per identity (B-6).
+    identityKey: "wechat:wx:owner",
   });
   const current = await router.handleMessageAsync({ identity, text: "/current" });
   const switched = await router.handleMessageAsync({ identity, text: "/switch 1" });
@@ -81,8 +83,12 @@ test("cancel delegates to Codex Desktop when a session is active", async () => {
   };
   const { router, identity, sessions } = createRouter({ desktop });
 
-  await router.handleMessageAsync({ identity, text: "/open 1" });
-  sessions.upsertExternalSession({ projectPath: "/repo/comote", id: "thread_1", title: "Run task" });
+  // Burn the one-time welcome card so the /cancel assertion sees only its reply.
+  await router.handleMessageAsync({ identity, text: "/status" });
+  // Sync /open: the async variant opens a session picker, and /cancel while a
+  // picker is pending exits the selection instead of cancelling the turn (B-10).
+  router.handleMessage({ identity, text: "/open 1" });
+  sessions.upsertExternalSession({ projectPath: "/repo/comote", id: "thread_1", title: "Run task", identityKey: "wechat:wx:owner" });
   const reply = await router.handleMessageAsync({ identity, text: "/cancel" });
 
   assert.equal(reply.text, "已取消当前 Codex 任务\nthread_1");

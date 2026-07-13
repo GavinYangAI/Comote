@@ -9,6 +9,21 @@ function isAbsolutePath(value) {
   return typeof value === "string" && value.startsWith("/");
 }
 
+// Upper bound for the one-time-message identity sets (welcome card /
+// unauthorized notice). They persist across restarts, so cap them and evict
+// oldest-first rather than letting a scan of random strangers grow the state
+// file forever. Worst case an evicted identity sees the notice once more.
+const MAX_REMEMBERED_IDENTITIES = 500;
+
+// Adds `key` to a Set that behaves as a FIFO of at most
+// MAX_REMEMBERED_IDENTITIES entries (Sets iterate in insertion order).
+function rememberIdentity(set, key) {
+  set.add(key);
+  while (set.size > MAX_REMEMBERED_IDENTITIES) {
+    set.delete(set.values().next().value);
+  }
+}
+
 export class CommandRouter {
   constructor({
     authorization,
@@ -44,9 +59,11 @@ export class CommandRouter {
     // Cost guard: identityKey -> array of turn-start epoch ms.
     this.maxTurnsPerHour = maxTurnsPerHour;
     this.turnTimestamps = new Map();
-    // identityKey sets for one-time first-contact messaging.
-    this.noticedIdentities = new Set();
-    this.greetedIdentities = new Set();
+    // identityKey sets for one-time first-contact messaging. Persisted (capped)
+    // so a daemon restart does not replay the welcome card / unauthorized
+    // notice to everyone who already saw it.
+    this.noticedIdentities = new Set((persisted.noticedIdentities ?? []).slice(-MAX_REMEMBERED_IDENTITIES));
+    this.greetedIdentities = new Set((persisted.greetedIdentities ?? []).slice(-MAX_REMEMBERED_IDENTITIES));
   }
 
   // Serializable routing state for persistence. Transient UI state
@@ -56,6 +73,8 @@ export class CommandRouter {
       currentProjectByIdentity: [...this.currentProjectByIdentity],
       conversationByIdentity: [...this.conversationByIdentity],
       threadBindings: [...this.threadBindings],
+      noticedIdentities: [...this.noticedIdentities],
+      greetedIdentities: [...this.greetedIdentities],
     };
   }
 
@@ -164,14 +183,14 @@ export class CommandRouter {
     const key = this.identityKey(message.identity);
     if (!this.authorization.isAuthorized(message.identity)) {
       if (!this.noticedIdentities.has(key)) {
-        this.noticedIdentities.add(key);
+        rememberIdentity(this.noticedIdentities, key);
         return { kind: "notice", text: this.unauthorizedNoticeText() };
       }
       return this.deniedReply();
     }
     const reply = await this.dispatchAuthorizedMessage(message);
     if (!this.greetedIdentities.has(key)) {
-      this.greetedIdentities.add(key);
+      rememberIdentity(this.greetedIdentities, key);
       return this.prependWelcome(reply);
     }
     return reply;
@@ -208,19 +227,27 @@ export class CommandRouter {
         return this.text(this.statusText(message.identity));
       }
       if (command === "/tail") {
-        return this.text(this.tailText(message.identity, rest));
+        return this.text(await this.tailTextAsync(message.identity, rest));
       }
       if (command === "/file") {
         return await this.handleFileCommand(message.identity, rest);
       }
       if (command === "/cancel") {
+        // While a picker is open, /cancel is the escape hatch out of the
+        // selection state (B-10); only otherwise does it cancel a Codex turn.
+        const pendingKey = this.identityKey(message.identity);
+        const pending = this.pendingByIdentity.get(pendingKey);
+        if (pending?.type === "choose_project" || pending?.type === "choose_session") {
+          this.pendingByIdentity.delete(pendingKey);
+          return this.text(t("cmd.picker.cancelled"));
+        }
         return this.text(await this.cancelActiveTurn(message.identity));
       }
       if (command === "/approve") {
-        return this.text(await this.resolveApproval(rest, "accept"));
+        return this.text(await this.resolveApproval(rest, "accept", message.identity));
       }
       if (command === "/deny") {
-        return this.text(await this.resolveApproval(rest, "decline"));
+        return this.text(await this.resolveApproval(rest, "decline", message.identity));
       }
       if (!command.startsWith("/")) {
         return await this.handlePlainText(message.identity, message.text, message.attachments);
@@ -312,7 +339,9 @@ export class CommandRouter {
 
   statusText(identity) {
     const projectPath = this.currentProjectByIdentity.get(this.identityKey(identity));
-    const activeSession = projectPath ? this.sessions.getActiveSession(projectPath) : null;
+    const activeSession = projectPath
+      ? this.sessions.getActiveSession(projectPath, this.identityKey(identity))
+      : null;
     return [
       t("cmd.status.title"),
       t("cmd.status.user", { user: describeIdentity(identity) }),
@@ -521,17 +550,44 @@ export class CommandRouter {
 
   useSession(identity, selector) {
     const projectPath = this.requireCurrentProject(identity);
-    const session = this.sessions.useSession(projectPath, selector);
+    const session = this.sessions.useSession(projectPath, selector, this.identityKey(identity));
     return t("cmd.use.switched", { title: session.title, id: session.id });
   }
 
   tailText(identity, countText) {
     const projectPath = this.requireCurrentProject(identity);
-    const activeSession = this.sessions.getActiveSession(projectPath);
+    const activeSession = this.sessions.getActiveSession(projectPath, this.identityKey(identity));
     if (!activeSession) {
       throw new Error(t("cmd.session.needActive"));
     }
-    const count = Math.min(Math.max(Number(countText || 5) || 5, 1), 20);
+    const count = clampTailCount(countText);
+    const messages = activeSession.messages.slice(-count);
+    if (messages.length === 0) {
+      return t("cmd.tail.empty");
+    }
+    return messages.map((message) => `${message.role}: ${message.text}`).join("\n");
+  }
+
+  // Async /tail. Desktop threads never append to the local session.messages
+  // (the return path records into the Transcript instead), so the old
+  // in-memory read was permanently empty for them (B-5). Desktop sessions go
+  // through recentDesktopThreadLines (desktop RPC with a local-transcript
+  // fallback); locally-created sessions (session_NNNN / cli_*) keep the
+  // original in-memory read.
+  async tailTextAsync(identity, countText) {
+    const projectPath = this.requireCurrentProject(identity);
+    const activeSession = this.sessions.getActiveSession(projectPath, this.identityKey(identity));
+    if (!activeSession) {
+      throw new Error(t("cmd.session.needActive"));
+    }
+    const count = clampTailCount(countText);
+    const isLocalSession = /^(session|cli)_/.test(String(activeSession.id));
+    if (!isLocalSession) {
+      const lines = await this.recentDesktopThreadLines(activeSession.id, count);
+      if (lines.length > 0) {
+        return lines.join("\n");
+      }
+    }
     const messages = activeSession.messages.slice(-count);
     if (messages.length === 0) {
       return t("cmd.tail.empty");
@@ -556,7 +612,7 @@ export class CommandRouter {
         const title = this.threadTitle(activeThread, thread);
         const threadId = activeThread.id ?? thread.id;
         this.bindThreadForIdentity(identity, threadId, projectPath);
-        this.sessions.upsertExternalSession({ projectPath, id: threadId, title });
+        this.sessions.upsertExternalSession({ projectPath, id: threadId, title, identityKey: key });
         this.pendingByIdentity.delete(key);
         const recent = await this.recentDesktopThreadLines(threadId, 3);
         const recentBlock = recent.length > 0
@@ -576,6 +632,7 @@ export class CommandRouter {
       projectPath,
       title: message || "New Comote session",
       firstMessage: message,
+      identityKey: this.identityKey(identity),
     });
     return t("cmd.new.created", { title: session.title, id: session.id });
   }
@@ -603,6 +660,7 @@ export class CommandRouter {
           id: threadId,
           title: message || threadId,
           messages: message ? [{ role: "user", text: message }] : [],
+          identityKey: key,
         });
         this.pendingByIdentity.delete(key);
         return t("cmd.new.sentDesktop", { id: threadId });
@@ -614,6 +672,7 @@ export class CommandRouter {
           id: result.id,
           title: message || result.id,
           messages: message ? [{ role: "user", text: message }] : [],
+          identityKey: key,
         });
         this.pendingByIdentity.delete(key);
         return t("cmd.new.startedCli", { name: message || result.id, output: result.output });
@@ -631,14 +690,25 @@ export class CommandRouter {
     const trimmed = text.trim();
     const pending = this.pendingByIdentity.get(key);
 
-    if (pending?.type === "choose_project") {
-      return this.chooseProject(identity, trimmed);
-    }
-    if (pending?.type === "choose_session") {
-      if (!/^\d+$/.test(trimmed)) {
-        return this.text(t("cmd.session.replyNumberOrNew"));
+    if (pending?.type === "choose_project" || pending?.type === "choose_session") {
+      if (/^\d+$/.test(trimmed)) {
+        if (pending.type === "choose_project") {
+          return this.chooseProject(identity, trimmed);
+        }
+        return this.text(await this.useSessionAsync(identity, trimmed));
       }
-      return this.text(await this.useSessionAsync(identity, trimmed));
+      // Non-numeric input while a picker is open (B-10): hint once (with the
+      // /cancel escape), then on the second consecutive miss give up on the
+      // picker and let the message fall through as a normal one below.
+      // Without this the selection state swallows every plain message forever.
+      if (!pending.pickerMisses) {
+        this.pendingByIdentity.set(key, { ...pending, pickerMisses: 1 });
+        const base = pending.type === "choose_project"
+          ? t("cmd.projects.replyNumber")
+          : t("cmd.session.replyNumberOrNew");
+        return this.text(`${base}\n${t("cmd.picker.escapeHint")}`);
+      }
+      this.pendingByIdentity.delete(key);
     }
     if (pending?.type === "await_new_session_message") {
       if (!trimmed) {
@@ -651,7 +721,7 @@ export class CommandRouter {
     if (!projectPath) {
       return this.projectsTextAsync(identity);
     }
-    if (!this.sessions.getActiveSession(projectPath)) {
+    if (!this.sessions.getActiveSession(projectPath, key)) {
       return this.sessionsTextAsync(identity, { choose: true });
     }
     return this.text(await this.sendToActiveSession(identity, text, attachments));
@@ -700,11 +770,17 @@ export class CommandRouter {
 
   async sendToActiveSession(identity, text, attachments = []) {
     const projectPath = this.requireCurrentProject(identity);
-    const activeSession = this.sessions.getActiveSession(projectPath);
+    const activeSession = this.sessions.getActiveSession(projectPath, this.identityKey(identity));
     if (!activeSession) {
       throw new Error(t("cmd.session.needActive"));
     }
     if (this.codexDesktop?.getStatus?.().state !== "connected") {
+      // CLI fallback sessions (ids "cli_*", started by /new when only the
+      // Codex CLI was available) are one-shot: codex exec cannot resume them.
+      // Explain the way out instead of a bare "not connected" (B-7).
+      if (String(activeSession.id).startsWith("cli_")) {
+        throw new Error(t("cmd.session.cliNoResume"));
+      }
       throw new Error(t("cmd.desktop.notConnected"));
     }
     // Reserve quota up front; refund it if the turn never actually starts.
@@ -737,12 +813,33 @@ export class CommandRouter {
     return this.codexDesktop.resumeThread({ threadId, cwd });
   }
 
-  async resolveApproval(selector, decision) {
+  // Resolves a pending Codex approval by short code or id. `identity` is the
+  // IM identity typing /approve <code> or /deny <code>; when the approval's
+  // thread has a recorded owner, only that owner may resolve it (B-4 — the
+  // channel button paths gate ownership in their runtimes; this is the text
+  // path's equivalent). `identity` is null for trusted local callers — the
+  // desktop web UI resolves via the connector directly and the channel
+  // runtimes pass no identity — so null skips the gate (backward compatible;
+  // the machine owner is implicitly allowed).
+  async resolveApproval(selector, decision, identity = null) {
     if (!selector) {
       throw new Error(decision === "accept" ? t("cmd.approve.usage") : t("cmd.deny.usage"));
     }
     if (!this.codexDesktop?.resolveApproval) {
       throw new Error(t("cmd.approve.unavailable"));
+    }
+    if (identity) {
+      const approval = this.findPendingApproval(selector);
+      // Approvals without a threadId, or whose thread has no recorded owner
+      // binding (e.g. a turn started from the desktop UI, or a binding lost to
+      // an old snapshot), cannot be attributed to anyone: they stay resolvable
+      // by any authorized identity, which is the pre-existing behavior.
+      const owner = approval?.threadId
+        ? this.getThreadBinding(approval.threadId)?.ownerStableId ?? null
+        : null;
+      if (owner && owner !== identity.stableId) {
+        throw new Error(t("cmd.approve.notOwner"));
+      }
     }
     await this.codexDesktop.resolveApproval(selector, decision);
     return decision === "accept"
@@ -750,9 +847,17 @@ export class CommandRouter {
       : t("cmd.deny.rejected", { selector });
   }
 
+  // Looks up a pending approval on the desktop connector by short code or id.
+  // Returns null when the connector cannot enumerate approvals (older mocks /
+  // connectors) — the ownership gate then degrades to "cannot attribute".
+  findPendingApproval(selector) {
+    const pending = this.codexDesktop?.listPendingApprovals?.() ?? [];
+    return pending.find((a) => a?.shortCode === selector || a?.id === selector) ?? null;
+  }
+
   async cancelActiveTurn(identity) {
     const projectPath = this.requireCurrentProject(identity);
-    const activeSession = this.sessions.getActiveSession(projectPath);
+    const activeSession = this.sessions.getActiveSession(projectPath, this.identityKey(identity));
     if (!activeSession) {
       throw new Error(t("cmd.session.needActive"));
     }
@@ -832,4 +937,9 @@ export class CommandRouter {
 
 function isThreadNotFoundError(error) {
   return /thread not found/i.test(error?.message ?? String(error));
+}
+
+// /tail [n]: default 5, clamped to 1..20.
+function clampTailCount(countText) {
+  return Math.min(Math.max(Number(countText || 5) || 5, 1), 20);
 }
