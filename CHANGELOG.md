@@ -7,6 +7,38 @@ GitHub Release notes, so keep each version's heading as `## vX.Y.Z`.
 本文件记录 Comote 的更新内容。发版流程会按推送的 `vX.Y.Z` tag 自动抽取对应
 段落作为 GitHub Release 说明，请保持每个版本标题为 `## vX.Y.Z`。
 
+## v0.7.0
+
+### ✨ What's New
+
+- **Works with the new Codex.** Codex Desktop became the ChatGPT desktop app and moved its bundled `codex` binary; Comote now finds codex across ChatGPT.app, the legacy Codex.app, Homebrew, nvm and Volta installs — and a GUI-launched Comote no longer trips over the minimal system PATH. Set `COMOTE_CODEX_PATH` to pin a specific binary.
+- **Conversations panel, grown up.** Pick any project from a dropdown (projects are now merged from Codex workspaces *and* conversation history), page through long thread lists with "load more", and expand a real Codex thread to see its history pulled straight from Codex instead of "no local record".
+- **Diagnostics that tell the truth.** Connection failures show the real reason and the detected codex path (in the app banner, `/status`, and `comote doctor`, which now checks the codex binary and login). A first connect that fails retries quietly every 30s, and codex's stderr is captured for post-mortems.
+- **Channel feedback everywhere.** DingTalk without a card template falls back to text progress instead of silence; WeChat-style channels are told when Codex disconnects mid-task; delivery failures send a short notice; Telegram gets a bot command menu, formatted (HTML) replies with a plain-text safety net, typing indicators, and long replies split safely at line/code-point boundaries on every channel.
+- **CLI quality of life.** `comote update` reports your version and the right upgrade path for how you installed (npm vs desktop); `comote logs --file` reads the desktop launch log without the daemon; the state file lives at `~/.comote/state.json` (legacy locations still honored) and doctor shows where everything is.
+
+### 🐛 Fixes
+
+- **Security.** IM approval buttons and `/approve` now verify the resolver owns the task's thread; sidecar output is scrubbed of credentials (Feishu access keys, bot tokens) before it reaches the launch log; four dependency advisories cleared.
+- Each user's active session is now tracked per identity — one person's `/use` no longer redirects another person's messages.
+- Telegram replies over 4096 characters are chunked instead of silently dropped; `/tail` shows real thread history; `/sessions` says so when Codex is unreachable instead of showing an empty cached list.
+- A full outbound queue no longer lets failure notices cascade over real replies; long threads (1000+ messages) keep refreshing.
+
+### ✨ 新功能
+
+- **适配新版 Codex。** Codex 桌面版已并入 ChatGPT 桌面应用，捆绑的 `codex` 二进制换了位置；Comote 现在会依次探测 ChatGPT.app、旧版 Codex.app、Homebrew、nvm、Volta 安装，从 Finder 启动也不再被系统最小 PATH 卡住。可用 `COMOTE_CODEX_PATH` 指定特定二进制。
+- **对话面板升级。** 项目下拉可选（项目列表合并了 Codex 工作区与历史对话两个来源）、长列表支持"加载更多"分页、展开真实 Codex 会话可直接读取 Codex 侧历史，不再显示"暂无本地记录"。
+- **诊断说真话。** 连接失败会显示真实原因和检测到的 codex 路径（应用横幅、`/status`、`comote doctor` 三处一致；doctor 新增 codex 二进制与登录检查）。首次连接失败后每 30 秒静默重试，codex 的 stderr 也会被捕获用于排障。
+- **渠道反馈全面补齐。** 钉钉未配卡片模板时降级为文本进度而非全程沉默；微信等渠道在任务中途 Codex 断连时会收到通知；投递彻底失败会给一条简短提示；Telegram 新增命令菜单、HTML 排版（解析失败自动回退纯文本）、输入中指示，各渠道长回复均按行/码点安全分片。
+- **CLI 易用性。** `comote update` 按安装方式（npm/桌面版）给出正确升级路径；`comote logs --file` 无需 daemon 直读桌面启动日志；状态文件统一到 `~/.comote/state.json`（兼容旧位置），doctor 会显示各路径来源。
+
+### 🐛 修复
+
+- **安全。** IM 审批按钮与 `/approve` 现在校验操作者是否为任务发起人；sidecar 输出写入启动日志前会脱敏凭据（飞书 access key、bot token 等）；清零 4 个依赖漏洞。
+- 当前会话指针按用户隔离——一个人 `/use` 切换会话不再劫持另一个人的消息。
+- Telegram 超过 4096 字符的回复改为分片发送而非静默丢失；`/tail` 显示真实会话历史；`/sessions` 在 Codex 未连接时明确说明，而不是展示一份空的本地缓存。
+- 出站队列满载时失败通知不再级联吞掉真实回复；超长会话（1000+ 条消息）持续刷新不中断。
+
 ## v0.6.2
 
 ### ✨ What's New
