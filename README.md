@@ -2,7 +2,7 @@
 
 # Comote
 
-**手机上的 Codex 遥控器 · 本地运行 · 端到端私密**
+**手机上的 Codex 遥控器 · 本地运行 · 无 Comote 自有服务器**
 
 把你电脑上的 [Codex](https://openai.com/codex)（ChatGPT 桌面应用，原 Codex Desktop；或 Codex CLI）接到飞书 / 微信 / 钉钉 / Telegram，让你在地铁里、客户那边、半夜的床上，都能继续指挥你的 Codex agent —— 不需要把电脑暴露到公网，不需要租服务器，不需要装一堆中间件。
 
@@ -146,9 +146,28 @@ Linux / 无界面服务器请看[下面](#linux--无界面服务器headless-vps)
 
 桌面端用 [Tauri](https://tauri.app/) 包了一层壳，Node daemon 作为 sidecar 启动，只监听本机回环地址。
 
-**真正本地优先：整个链路里没有任何一步走公网中转。** daemon 只绑 `127.0.0.1`，所有授权、token、会话历史都存在本机 `~/.comote/` 下，不上传任何服务器。手机端的 IM bot 通过各平台自己的服务推到你的 daemon（飞书是 WebSocket 长连接，钉钉是 Stream 长连接，微信是 iLink getupdates 轮询，Telegram 是 getUpdates 长轮询），daemon 在本机直接跟 `codex app-server` 子进程说话。
+**本地优先，诚实版**：Comote 没有自己的服务器，你的消息不经过任何 Comote 自有服务器中转；Codex 调用全部发生在本机（daemon 在本机直接跟 `codex app-server` 子进程说话），daemon 也只绑 `127.0.0.1`，授权、token、会话历史都存在本机（见下面[数据存储位置](#数据存储位置)）。但要说清楚一点：你和 Comote 之间的消息**经由你所选 IM 平台自己的服务器**传输（飞书是 WebSocket 长连接，钉钉是 Stream 长连接，微信是 iLink getupdates 轮询，Telegram 是 getUpdates 长轮询），这段链路受该 IM 平台的隐私政策约束。
 
 ## 配置与参考
+
+### 配置的三层结构
+
+Comote 的配置分三层，各管各的：
+
+| 层 | 管什么 | 谁来写 | 典型场景 |
+|---|---|---|---|
+| **环境变量** | 运行时行为：监听地址 / 端口、state 文件位置、codex 路径、API token（见下表） | 你（shell / systemd `Environment=`） | VPS / headless 部署 |
+| **state.json** | 渠道配置（appKey、botToken…）、授权身份、设置（如界面语言） | Web UI 与 `comote config` 写入，**不要手改** | 桌面 / 日常使用 |
+| **CLI flag** | 单次调用的覆盖（如 `--state-path`、`--json`） | 你（命令行） | 排障、脚本 |
+
+优先级：CLI flag > 环境变量 > 默认值；渠道配置以 state.json 为准（UI 与 `comote config` 是同一份数据的两个入口）。典型分工：**VPS 用环境变量 + `comote config`，桌面用 UI**。
+
+### 数据存储位置
+
+- **CLI / daemon（npm 安装）**：默认 `~/.comote/state.json`（绝对路径）。若新默认路径不存在、而旧版的**当前目录相对** `.comote/state.json` 存在，daemon 会自动沿用旧文件并打一行日志（向后兼容，不搬迁文件）。
+- **桌面 App**：state 存在系统应用数据目录 —— macOS `~/Library/Application Support/dev.comote.desktop/state.json`，Windows `%APPDATA%\dev.comote.desktop\state.json`（App 启动 daemon 时通过 `COMOTE_STATE_PATH` 指定）。
+- 显式指定永远优先：`COMOTE_STATE_PATH` 环境变量或 `--state-path` flag。
+- `comote doctor` 会打印当前解析到的 state 路径**及其来源**（flag / env / legacy / default），拿不准看哪份文件时先跑它。
 
 不同 IM 的细节：
 
@@ -161,8 +180,9 @@ Linux / 无界面服务器请看[下面](#linux--无界面服务器headless-vps)
 
 | 变量 | 说明 |
 |---|---|
+| `HOST` | daemon 监听地址（默认 `127.0.0.1`；改成非 loopback 必须同时设 `COMOTE_LOCAL_API_TOKEN`，否则拒绝启动） |
 | `PORT` | daemon 监听端口（不设走内置默认值；正常使用不用动） |
-| `COMOTE_STATE_PATH` | 持久化状态文件路径（默认 `.comote/state.json`） |
+| `COMOTE_STATE_PATH` | 持久化状态文件路径（默认 `~/.comote/state.json`；桌面 App 会把它指到应用数据目录，见上面[数据存储位置](#数据存储位置)） |
 | `COMOTE_CODEX_PATH` | 显式指定 codex 可执行文件的完整路径，优先级最高（用于自定义安装位置） |
 | `COMOTE_LOCAL_API_TOKEN` | 设了之后所有 `/api/*` 调用必须带这个 token |
 | `COMOTE_WECHAT_ACCOUNT_ID` | 同机绑多个微信号时区分用（默认 `default`） |
@@ -179,6 +199,25 @@ Linux / 无界面服务器请看[下面](#linux--无界面服务器headless-vps)
 | `/approve <code>` | 批准一个待审批的操作 |
 | `/deny <code>` | 拒绝一个待审批的操作 |
 | 普通文本 | 转给当前 thread 给 Codex |
+
+## 排障与日志位置
+
+出问题先跑这两条：
+
+```bash
+comote doctor        # 预检：state 文件（含路径来源）、绑定安全、codex 二进制 / 登录、daemon、连接器、日志位置
+comote logs          # daemon 内存事件日志（daemon 活着才有；--limit N 可调）
+```
+
+日志分两处：
+
+- **daemon 事件日志**：内存 ring buffer，`comote logs` 读取（也在 Web 设置页的"运行日志"面板）。daemon 挂了就没了 —— 这时看下面的文件日志。
+- **桌面 App 启动日志（文件，只在桌面 App 模式下产生）**：
+  - macOS：`~/Library/Application Support/dev.comote.desktop/comote-launch.log`
+  - Windows：`%APPDATA%\dev.comote.desktop\` 下的 `comote-launch.log`、`comote-node.stdout.log`、`comote-node.stderr.log`
+  - 用 `comote logs --file` 直接看文件尾部（默认 200 行，`--lines N` 可调），不需要 daemon 在线。npm/CLI 方式运行时这些文件不存在，属正常。
+
+想升级：`comote update` 只做检查并打印升级方式（npm 安装 → `npm install -g comote@latest`，任何平台；桌面 App → 下载链接），不会自动执行升级。
 
 ## Linux / 无界面服务器（headless VPS）
 
@@ -283,7 +322,7 @@ npm run dist:win
 
 **Q：数据会上传到任何服务器吗？**
 
-不会，纯本地。链路细节见上面[怎么工作的](#怎么工作的)。
+不会上传到 Comote 的服务器 —— Comote 根本没有自有服务器，Codex 调用也全部发生在本机。但你和 Comote 之间的**消息本身走的是你所选 IM 平台的通道**（飞书 / 微信 / 钉钉 / Telegram 各自的服务器），受该平台隐私政策约束。链路细节见上面[怎么工作的](#怎么工作的)。
 
 **Q：可以多人共用一台 daemon 吗？**
 

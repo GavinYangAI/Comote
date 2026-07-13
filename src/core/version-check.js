@@ -1,13 +1,80 @@
+import { realpathSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { dirname } from "node:path";
+import { dirname, sep } from "node:path";
+import { fileURLToPath } from "node:url";
 
 const DEFAULT_REPO = "GavinYangAI/comote";
 const DEFAULT_INTERVAL_MS = 6 * 60 * 60 * 1000;
 const DEFAULT_INITIAL_DELAY_MS = 30_000;
 const CACHE_TTL_MS = 60 * 60 * 1000;
-// On Linux the daemon is installed from npm and CI ships no downloadable asset,
-// so the update affordance points the operator at npm instead of a dead link.
-export const LINUX_UPDATE_COMMAND = "npm i -g comote@latest";
+// Update guidance is keyed on the INSTALL SOURCE, not the OS: an npm-installed
+// daemon (any platform — README documents npm installs on macOS/Windows/Linux)
+// gets an npm command; a desktop-App install gets a download link.
+export const NPM_UPDATE_COMMAND = "npm install -g comote@latest";
+// Back-compat alias: Linux used to be the only npm-installed target.
+export const LINUX_UPDATE_COMMAND = NPM_UPDATE_COMMAND;
+
+// True when `p` contains `segment` as a whole path segment (either separator,
+// so Windows paths behave when tests run on POSIX and vice versa).
+function hasPathSegment(p, segment) {
+  return String(p)
+    .split(/[\\/]/)
+    .includes(segment);
+}
+
+function moduleSelfPath() {
+  try {
+    return fileURLToPath(import.meta.url);
+  } catch {
+    return null;
+  }
+}
+
+// Detect how this Comote instance was installed:
+//   "desktop" — running out of the Tauri App's bundled resources. Signals:
+//               an explicit COMOTE_LAUNCHED_BY=tauri env (future-proof hook),
+//               or a path inside the App's resource dir — the bundled server
+//               lives under a `comote-server` directory (main.rs:
+//               resource_dir/comote-server/src/server/index.js), macOS under
+//               <App>.app/Contents/Resources/. Checked FIRST because the
+//               bundle also ships a node_modules for its deps.
+//   "npm"     — this module (or argv[1], or its realpath — npm global bins are
+//               symlinks into lib/node_modules) lives under a node_modules
+//               directory.
+// Fallback when neither signal fires (e.g. a git checkout): Linux has no
+// desktop build, so npm is the only channel there; elsewhere assume desktop.
+export function detectInstallSource({
+  argv1 = process.argv[1],
+  modulePath = moduleSelfPath(),
+  env = process.env,
+  platform = process.platform,
+  realpath = realpathSync,
+} = {}) {
+  if (env?.COMOTE_LAUNCHED_BY === "tauri") {
+    return "desktop";
+  }
+  const candidates = [];
+  for (const p of [modulePath, argv1]) {
+    if (!p) continue;
+    candidates.push(String(p));
+    try {
+      candidates.push(String(realpath(p)));
+    } catch {
+      // Path may not exist (tests, packed snapshots) — the literal string is enough.
+    }
+  }
+  if (
+    candidates.some(
+      (p) => hasPathSegment(p, "comote-server") || p.includes(`${sep}Contents${sep}Resources${sep}`),
+    )
+  ) {
+    return "desktop";
+  }
+  if (candidates.some((p) => hasPathSegment(p, "node_modules"))) {
+    return "npm";
+  }
+  return platform === "linux" ? "npm" : "desktop";
+}
 
 export function compareSemver(a, b) {
   const parse = (value) =>
@@ -26,15 +93,16 @@ function normalizeTag(tag) {
   return tag.startsWith("v") ? tag.slice(1) : tag;
 }
 
-function emptyResult(currentVersion, platform = process.platform) {
+function emptyResult(currentVersion, platform = process.platform, installSource = "desktop") {
   return {
     current: currentVersion,
     latest: null,
     hasUpdate: false,
     releaseUrl: null,
     downloadUrl: null,
-    updateCommand: platform === "linux" ? LINUX_UPDATE_COMMAND : null,
+    updateCommand: installSource === "npm" ? NPM_UPDATE_COMMAND : null,
     platform,
+    installSource,
     releaseNotes: null,
     checkedAt: null,
     error: null,
@@ -82,6 +150,7 @@ export class VersionChecker {
     now = () => Date.now(),
     platform = process.platform,
     arch = process.arch,
+    installSource = null,
   } = {}) {
     if (!currentVersion) {
       throw new Error("VersionChecker requires currentVersion");
@@ -98,7 +167,10 @@ export class VersionChecker {
     this.now = now;
     this.platform = platform;
     this.arch = arch;
-    this.lastResult = emptyResult(currentVersion, platform);
+    // Explicit override wins (tests, callers that already know); otherwise
+    // detect from the runtime paths, with the injected platform as fallback.
+    this.installSource = installSource ?? detectInstallSource({ platform });
+    this.lastResult = emptyResult(currentVersion, platform, this.installSource);
     this._initialTimer = null;
     this._timer = null;
   }
@@ -134,7 +206,10 @@ export class VersionChecker {
       );
       if (response.status === 404) {
         // No published release yet — valid state, not an error.
-        this.lastResult = { ...emptyResult(this.currentVersion, this.platform), checkedAt: this.now() };
+        this.lastResult = {
+          ...emptyResult(this.currentVersion, this.platform, this.installSource),
+          checkedAt: this.now(),
+        };
       } else if (!response.ok) {
         this.lastResult = {
           ...this.lastResult,
@@ -145,23 +220,25 @@ export class VersionChecker {
         const data = await response.json();
         const latest = normalizeTag(data.tag_name);
         const hasUpdate = latest ? compareSemver(latest, this.currentVersion) > 0 : false;
-        const isLinux = this.platform === "linux";
+        const fromNpm = this.installSource === "npm";
         this.lastResult = {
           current: this.currentVersion,
           latest,
           hasUpdate,
           releaseUrl: data.html_url ?? null,
-          // Linux installs come from npm and CI ships no downloadable asset, so
-          // point the operator at an npm command instead of a dead download link.
-          downloadUrl: isLinux
+          // npm installs (any platform) update via npm — a desktop download
+          // link would be the wrong (or, on Linux, a dead) affordance. Desktop
+          // installs get the release asset for their platform/arch instead.
+          downloadUrl: fromNpm
             ? null
             : selectDownloadUrl(data.assets, {
                 platform: this.platform,
                 arch: this.arch,
                 releasesUrl: data.html_url ?? `https://github.com/${this.repo}/releases`,
               }),
-          updateCommand: isLinux ? LINUX_UPDATE_COMMAND : null,
+          updateCommand: fromNpm ? NPM_UPDATE_COMMAND : null,
           platform: this.platform,
+          installSource: this.installSource,
           releaseNotes: data.body ?? null,
           checkedAt: this.now(),
           error: null,

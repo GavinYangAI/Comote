@@ -2,7 +2,7 @@
 
 # Comote
 
-**A remote control for Codex, in your pocket · Runs locally · End-to-end private**
+**A remote control for Codex, in your pocket · Runs locally · No Comote servers in the loop**
 
 Connect the [Codex](https://openai.com/codex) on your computer (the ChatGPT desktop app, formerly Codex Desktop; or the Codex CLI) to Feishu / WeChat / DingTalk / Telegram, so you can keep directing your Codex agent from the subway, from a client's office, from bed at midnight — without exposing your machine to the public internet, renting a server, or installing a pile of middleware.
 
@@ -146,9 +146,28 @@ WeChat / Feishu / DingTalk / Telegram bot
 
 The desktop side is wrapped with [Tauri](https://tauri.app/); the Node daemon launches as a sidecar and listens only on the loopback address.
 
-**Truly local-first: no step in the chain relays through the public internet.** The daemon binds only to `127.0.0.1`; all authorizations, tokens, and session history live locally under `~/.comote/`, nothing is uploaded to any server. The phone-side IM bot pushes to your daemon through each platform's own service (Feishu over a WebSocket long connection, DingTalk over a Stream long connection, WeChat over iLink getupdates polling, Telegram over getUpdates long polling), and the daemon talks directly to its local `codex app-server` child process.
+**Local-first, stated honestly**: Comote runs no servers of its own — your messages never pass through any Comote-operated server, and every Codex call happens on your machine (the daemon talks directly to its local `codex app-server` child process and binds only to `127.0.0.1`; authorizations, tokens, and session history stay local — see [Where your data lives](#where-your-data-lives)). To be clear about the one hop that isn't local: messages between you and Comote **do travel through the servers of the IM platform you chose** (Feishu over a WebSocket long connection, DingTalk over a Stream long connection, WeChat over iLink getupdates polling, Telegram over getUpdates long polling), and that leg is governed by that platform's privacy policy.
 
 ## Configuration and reference
+
+### The three configuration layers
+
+Comote's configuration splits into three layers, each with its own job:
+
+| Layer | Owns | Written by | Typical use |
+|---|---|---|---|
+| **Environment variables** | Runtime behavior: bind address / port, state file location, codex path, API token (table below) | You (shell / systemd `Environment=`) | VPS / headless deployments |
+| **state.json** | Channel configs (appKey, botToken, …), authorized identities, settings (e.g. UI language) | The Web UI and `comote config` — **don't hand-edit it** | Desktop / daily use |
+| **CLI flags** | Per-invocation overrides (e.g. `--state-path`, `--json`) | You (command line) | Troubleshooting, scripts |
+
+Precedence: CLI flag > environment variable > default. Channel configuration lives in state.json (the UI and `comote config` are two doors into the same data). Rule of thumb: **env vars + `comote config` on a VPS, the UI on the desktop**.
+
+### Where your data lives
+
+- **CLI / daemon (npm install)**: `~/.comote/state.json` by default (absolute path). If that new default doesn't exist but the older **CWD-relative** `.comote/state.json` does, the daemon keeps using the old file and logs a line about it (backward compatibility — no file migration).
+- **Desktop App**: state lives in the OS app-data directory — macOS `~/Library/Application Support/dev.comote.desktop/state.json`, Windows `%APPDATA%\dev.comote.desktop\state.json` (the App passes `COMOTE_STATE_PATH` when starting the daemon).
+- An explicit setting always wins: the `COMOTE_STATE_PATH` env var or the `--state-path` flag.
+- `comote doctor` prints the resolved state path **and where it came from** (flag / env / legacy / default) — run it first whenever you're unsure which file you're looking at.
 
 Per-IM details:
 
@@ -161,8 +180,9 @@ Common environment variables:
 
 | Variable | What it does |
 |---|---|
+| `HOST` | daemon bind address (default `127.0.0.1`; a non-loopback value REQUIRES `COMOTE_LOCAL_API_TOKEN`, or the daemon refuses to start) |
 | `PORT` | daemon listen port (unset → built-in default; you normally don't touch it) |
-| `COMOTE_STATE_PATH` | path to the persisted state file (default `.comote/state.json`) |
+| `COMOTE_STATE_PATH` | path to the persisted state file (default `~/.comote/state.json`; the desktop App points it at the app-data directory — see [Where your data lives](#where-your-data-lives)) |
 | `COMOTE_CODEX_PATH` | explicit full path to the codex executable — takes highest priority (for custom install locations) |
 | `COMOTE_LOCAL_API_TOKEN` | if set, every `/api/*` call must carry this token |
 | `COMOTE_WECHAT_ACCOUNT_ID` | distinguishes multiple WeChat accounts bound on one machine (default `default`) |
@@ -179,6 +199,25 @@ Command cheat sheet:
 | `/approve <code>` | approve a pending operation |
 | `/deny <code>` | deny a pending operation |
 | plain text | forwarded to the current thread for Codex |
+
+## Troubleshooting and log locations
+
+When something's off, start with these two:
+
+```bash
+comote doctor        # preflight: state file (with path source), bind safety, codex binary/login, daemon, connector, log locations
+comote logs          # the daemon's in-memory event log (needs a live daemon; --limit N to adjust)
+```
+
+Logs live in two places:
+
+- **Daemon event log**: an in-memory ring buffer, read with `comote logs` (also shown in the Web settings page's runtime-log panel). It's gone when the daemon dies — that's when you want the files below.
+- **Desktop-App launch logs (files, written only in desktop App mode)**:
+  - macOS: `~/Library/Application Support/dev.comote.desktop/comote-launch.log`
+  - Windows: `comote-launch.log`, `comote-node.stdout.log`, and `comote-node.stderr.log` under `%APPDATA%\dev.comote.desktop\`
+  - Read the tail with `comote logs --file` (default 200 lines, `--lines N` to adjust) — no daemon required. When Comote runs via npm/CLI these files simply don't exist; that's normal.
+
+To upgrade: `comote update` checks and prints the right upgrade path (npm install → `npm install -g comote@latest`, on every platform; desktop App → a download link) — it never runs the upgrade for you.
 
 ## Linux / headless VPS
 
@@ -283,7 +322,7 @@ You can also let GitHub Actions do it (the `windows-latest` runner) — see `.gi
 
 **Q: Does any data get uploaded to a server?**
 
-No — purely local. See [How it works](#how-it-works) above for the chain details.
+Not to any Comote server — Comote doesn't operate one, and every Codex call happens on your machine. But the **messages themselves travel through the IM platform you chose** (Feishu / WeChat / DingTalk / Telegram run their own servers), governed by that platform's privacy policy. See [How it works](#how-it-works) above for the chain details.
 
 **Q: Can several people share one daemon?**
 

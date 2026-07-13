@@ -1,5 +1,51 @@
+import { existsSync } from "node:fs";
 import { chmod, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
-import { dirname } from "node:path";
+import { homedir } from "node:os";
+import { dirname, join, resolve } from "node:path";
+
+// --- state path resolution ---------------------------------------------------
+// ONE rule shared by the daemon (createPersistentComoteState) and the CLI
+// (`comote doctor`), so both always look at the same file. Priority:
+//   1. explicit --state-path flag                          → source "flag"
+//   2. $COMOTE_STATE_PATH                                  → source "env"
+//      (the desktop App sets this to <app_data_dir>/state.json)
+//   3. legacy CWD-relative .comote/state.json, ONLY when it exists and the
+//      new default does not — releases before the ~/.comote default resolved
+//      relative to the CWD, so existing installs keep reading their data
+//      without a file migration                            → source "legacy"
+//   4. ~/.comote/state.json (absolute, via os.homedir())   → source "default"
+
+export const LEGACY_STATE_RELATIVE_PATH = ".comote/state.json";
+
+export function defaultStatePath({ home = homedir } = {}) {
+  return join(home(), ".comote", "state.json");
+}
+
+export function resolveStatePath({
+  flags = {},
+  env = {},
+  exists = existsSync,
+  home = homedir,
+  cwd = () => process.cwd(),
+  logger = null,
+} = {}) {
+  if (flags["state-path"]) {
+    return { path: flags["state-path"], source: "flag" };
+  }
+  if (env.COMOTE_STATE_PATH) {
+    return { path: env.COMOTE_STATE_PATH, source: "env" };
+  }
+  const preferred = defaultStatePath({ home });
+  const legacy = resolve(cwd(), LEGACY_STATE_RELATIVE_PATH);
+  if (legacy !== preferred && !exists(preferred) && exists(legacy)) {
+    logger?.warn?.(
+      `Comote: using legacy state file at ${legacy} (older releases defaulted to a CWD-relative path). ` +
+        `New installs use ${preferred}; set COMOTE_STATE_PATH or pass --state-path to choose explicitly.`,
+    );
+    return { path: legacy, source: "legacy" };
+  }
+  return { path: preferred, source: "default" };
+}
 
 // state.json carries raw channel secrets (appSecret, botToken, wechat.token,
 // encryptKey) in cleartext, so the file and its directory are created with

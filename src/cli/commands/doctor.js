@@ -6,10 +6,13 @@
 // stopped daemon, an offline connector — is not a hard failure).
 //
 // Checks:
-//   1. State file   — resolve the path (--state-path / $COMOTE_STATE_PATH /
-//                     default .comote/state.json), report existence and (on
-//                     POSIX) that mode is 0600. Reuses JsonFileStore.load() so
-//                     a missing/corrupt file never throws here.
+//   1. State file   — resolve the path the same way the daemon does
+//                     (--state-path / $COMOTE_STATE_PATH / legacy CWD-relative
+//                     .comote/state.json / default ~/.comote/state.json — see
+//                     resolveStatePath in src/core/persistence.js), report the
+//                     path AND its source, existence, and (on POSIX) that mode
+//                     is 0600. Reuses JsonFileStore.load() so a missing/corrupt
+//                     file never throws here.
 //   2. Bind safety  — evaluate the CURRENT intended bind ($HOST default
 //                     127.0.0.1, token = Boolean($COMOTE_LOCAL_API_TOKEN)) via
 //                     assertSafeBind; loopback/with-token → PASS, the guard's
@@ -24,6 +27,10 @@
 //   5. Codex login  — ~/.codex/auth.json (or $CODEX_HOME/auth.json) present.
 //   6. Connector    — only when the daemon is reachable: GET /api/status and
 //                     report connectors.desktop.state plus its lastError.
+//   7. Logs (info)  — where to find logs: the daemon's in-memory event log
+//                     (`comote logs`) and the desktop-App launch log files
+//                     (`comote logs --file`); those files exist only when the
+//                     desktop App has run.
 
 import { existsSync } from "node:fs";
 import { stat } from "node:fs/promises";
@@ -31,26 +38,22 @@ import { homedir } from "node:os";
 import { isAbsolute, join } from "node:path";
 
 import { resolveCodexCommand } from "../../connectors/codex-desktop/index.js";
-import { JsonFileStore } from "../../core/persistence.js";
+import { JsonFileStore, resolveStatePath } from "../../core/persistence.js";
 import { assertSafeBind } from "../../server/bind-safety.js";
+import { desktopLogPaths } from "../log-paths.js";
 import { createRenderer } from "../render.js";
 import { DaemonUnreachable } from "../client.js";
 
-const DEFAULT_STATE_PATH = ".comote/state.json";
-
-// Resolve the state.json path the same way the daemon does: an explicit
-// --state-path wins, then $COMOTE_STATE_PATH, then the default.
-function resolveStatePath({ flags = {}, env = {} } = {}) {
-  return flags["state-path"] || env.COMOTE_STATE_PATH || DEFAULT_STATE_PATH;
-}
-
-// One diagnostic line. `level` is "pass" | "warn" | "fail".
+// One diagnostic line. `level` is "pass" | "warn" | "fail" | "info".
 function makeCheck(level, name, detail) {
   return { level, name, detail };
 }
 
 // --- check 1: state file -------------------------------------------------
-async function checkStateFile({ statePath, FileStore = JsonFileStore }) {
+async function checkStateFile({ statePath, stateSource = "default", FileStore = JsonFileStore }) {
+  // Always show WHERE the path came from (flag / env / legacy / default) so a
+  // desktop-App user querying the wrong file can see why at a glance.
+  const src = `source: ${stateSource}`;
   let info;
   try {
     info = await stat(statePath);
@@ -60,9 +63,9 @@ async function checkStateFile({ statePath, FileStore = JsonFileStore }) {
       // can load() it without crashing (JsonFileStore.load() returns {}).
       const store = new FileStore({ filePath: statePath, logger: silentLogger() });
       await store.load();
-      return makeCheck("warn", "State file", `not found at ${statePath} (created on first daemon run)`);
+      return makeCheck("warn", "State file", `not found at ${statePath} (${src}; created on first daemon run)`);
     }
-    return makeCheck("fail", "State file", `cannot stat ${statePath}: ${error.message}`);
+    return makeCheck("fail", "State file", `cannot stat ${statePath}: ${error.message} (${src})`);
   }
 
   // Load it (never throws — corrupt files are quarantined + recovered).
@@ -71,16 +74,16 @@ async function checkStateFile({ statePath, FileStore = JsonFileStore }) {
 
   // POSIX-only mode check. NTFS doesn't carry 0600 bits, so don't assert there.
   if (process.platform === "win32") {
-    return makeCheck("pass", "State file", `present at ${statePath}`);
+    return makeCheck("pass", "State file", `present at ${statePath} (${src})`);
   }
   const mode = info.mode & 0o777;
   if (mode === 0o600) {
-    return makeCheck("pass", "State file", `present at ${statePath} (mode 0600)`);
+    return makeCheck("pass", "State file", `present at ${statePath} (mode 0600, ${src})`);
   }
   return makeCheck(
     "warn",
     "State file",
-    `present at ${statePath} but mode is ${mode.toString(8).padStart(4, "0")} (expected 0600)`,
+    `present at ${statePath} but mode is ${mode.toString(8).padStart(4, "0")} (expected 0600; ${src})`,
   );
 }
 
@@ -171,6 +174,26 @@ async function checkConnector({ client }) {
   }
 }
 
+// --- check 7 (info): where the logs live -----------------------------------
+// Purely informational — never affects the exit code. Points at the daemon's
+// in-memory event log (`comote logs`) and the desktop-App log files (macOS:
+// ~/Library/Application Support/dev.comote.desktop/comote-launch.log; Windows:
+// the %APPDATA% equivalent plus comote-node.stdout/stderr.log). The files may
+// not exist — they are written only when Comote runs as the desktop App.
+function logsInfo({ platform = process.platform, env = {}, home = homedir } = {}) {
+  const files = desktopLogPaths({ platform, env, home });
+  const daemonNote = "daemon in-memory log: `comote logs`";
+  if (files.length === 0) {
+    return makeCheck("info", "Logs", `${daemonNote}; no desktop-App log files on this platform`);
+  }
+  const list = files.map((f) => `${f.path} (${f.label})`).join(", ");
+  return makeCheck(
+    "info",
+    "Logs",
+    `${daemonNote}; desktop-App files (may not exist — only written in desktop App mode, read with \`comote logs --file\`): ${list}`,
+  );
+}
+
 function silentLogger() {
   return { warn() {}, error() {}, info() {} };
 }
@@ -182,15 +205,18 @@ function paintLevel(r, level) {
   if (level === "warn") {
     return r.yellow("WARN");
   }
+  if (level === "info") {
+    return r.dim("INFO");
+  }
   return r.red("FAIL");
 }
 
 export async function run({ parsed, client, env, write }) {
   const r = createRenderer({ flags: parsed.flags, env });
-  const statePath = resolveStatePath({ flags: parsed.flags, env });
+  const { path: statePath, source: stateSource } = resolveStatePath({ flags: parsed.flags, env });
 
   const checks = [];
-  checks.push(await checkStateFile({ statePath }));
+  checks.push(await checkStateFile({ statePath, stateSource }));
   checks.push(checkBindSafety({ env }));
   checks.push(checkCodexBinary({ env }));
   checks.push(checkCodexLogin({ env }));
@@ -200,6 +226,7 @@ export async function run({ parsed, client, env, write }) {
   if (daemon.reachable) {
     checks.push(await checkConnector({ client }));
   }
+  checks.push(logsInfo({ env }));
 
   if (r.json) {
     write(`${r.jsonText(checks)}\n`);
@@ -232,5 +259,5 @@ export const __test__ = {
   checkStateFile,
   checkCodexBinary,
   checkCodexLogin,
-  DEFAULT_STATE_PATH,
+  logsInfo,
 };

@@ -5,7 +5,13 @@ import { readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { VersionChecker, compareSemver, selectDownloadUrl } from "../src/core/version-check.js";
+import {
+  VersionChecker,
+  compareSemver,
+  detectInstallSource,
+  NPM_UPDATE_COMMAND,
+  selectDownloadUrl,
+} from "../src/core/version-check.js";
 
 function makeFetch(responses) {
   const calls = [];
@@ -108,7 +114,7 @@ test("checkNow on Linux carries updateCommand and a null downloadUrl", async () 
 
   assert.equal(result.hasUpdate, true);
   assert.equal(result.downloadUrl, null);
-  assert.equal(result.updateCommand, "npm i -g comote@latest");
+  assert.equal(result.updateCommand, NPM_UPDATE_COMMAND);
   assert.equal(result.platform, "linux");
 });
 
@@ -120,7 +126,114 @@ test("Linux empty/initial result still carries the npm updateCommand", () => {
   });
   const result = checker.getLastResult();
   assert.equal(result.downloadUrl, null);
-  assert.equal(result.updateCommand, "npm i -g comote@latest");
+  assert.equal(result.updateCommand, NPM_UPDATE_COMMAND);
+});
+
+// ---------------------------------------------------------------------------
+// install-source detection (C-5): update guidance follows how Comote was
+// installed, not which OS it runs on.
+// ---------------------------------------------------------------------------
+
+test("detectInstallSource: global node_modules path (any platform) → npm", () => {
+  assert.equal(
+    detectInstallSource({
+      argv1: "/usr/local/lib/node_modules/comote/bin/comote.js",
+      modulePath: null,
+      env: {},
+      platform: "darwin",
+      realpath: (p) => p,
+    }),
+    "npm",
+  );
+  assert.equal(
+    detectInstallSource({
+      argv1: "C:\\Users\\me\\AppData\\Roaming\\npm\\node_modules\\comote\\bin\\comote.js",
+      modulePath: null,
+      env: {},
+      platform: "win32",
+      realpath: (p) => p,
+    }),
+    "npm",
+  );
+});
+
+test("detectInstallSource: npm bin symlink resolves through realpath → npm", () => {
+  const source = detectInstallSource({
+    argv1: "/Users/me/.nvm/versions/node/v22.22.2/bin/comote",
+    modulePath: null,
+    env: {},
+    platform: "darwin",
+    realpath: () => "/Users/me/.nvm/versions/node/v22.22.2/lib/node_modules/comote/bin/comote.js",
+  });
+  assert.equal(source, "npm");
+});
+
+test("detectInstallSource: desktop bundle resource paths → desktop (even with a bundled node_modules)", () => {
+  // macOS app bundle: the sidecar's entry lives under Contents/Resources.
+  assert.equal(
+    detectInstallSource({
+      argv1: "/Applications/Comote.app/Contents/Resources/comote-server/src/server/index.js",
+      modulePath: "/Applications/Comote.app/Contents/Resources/comote-server/node_modules/x/index.js",
+      env: {},
+      platform: "darwin",
+      realpath: (p) => p,
+    }),
+    "desktop",
+  );
+  // Windows resource dir: resources\comote-server\…
+  assert.equal(
+    detectInstallSource({
+      argv1: "C:\\Program Files\\Comote\\resources\\comote-server\\src\\server\\index.js",
+      modulePath: null,
+      env: {},
+      platform: "win32",
+      realpath: (p) => p,
+    }),
+    "desktop",
+  );
+});
+
+test("detectInstallSource: COMOTE_LAUNCHED_BY=tauri wins over everything", () => {
+  const source = detectInstallSource({
+    argv1: "/usr/local/lib/node_modules/comote/bin/comote.js",
+    modulePath: null,
+    env: { COMOTE_LAUNCHED_BY: "tauri" },
+    platform: "darwin",
+    realpath: (p) => p,
+  });
+  assert.equal(source, "desktop");
+});
+
+test("detectInstallSource: no signal → npm on Linux, desktop elsewhere", () => {
+  const base = { argv1: "/home/me/checkout/bin/comote.js", modulePath: null, env: {}, realpath: (p) => p };
+  assert.equal(detectInstallSource({ ...base, platform: "linux" }), "npm");
+  assert.equal(detectInstallSource({ ...base, platform: "darwin" }), "desktop");
+  assert.equal(detectInstallSource({ ...base, platform: "win32" }), "desktop");
+});
+
+test("checkNow with installSource npm on macOS gives the npm command, no download link", async () => {
+  const fetchImpl = makeFetch(
+    jsonResponse({
+      tag_name: "v0.3.0",
+      html_url: "https://example.com/release",
+      assets: [{ name: "Comote-0.3.0-arm64.dmg", browser_download_url: "u-dmg" }],
+    }),
+  );
+  const checker = new VersionChecker({
+    currentVersion: "0.2.0",
+    fetchImpl,
+    now: () => 1000,
+    platform: "darwin",
+    arch: "arm64",
+    installSource: "npm",
+  });
+
+  const result = await checker.checkNow();
+
+  assert.equal(result.hasUpdate, true);
+  assert.equal(result.updateCommand, NPM_UPDATE_COMMAND);
+  assert.equal(result.downloadUrl, null);
+  assert.equal(result.installSource, "npm");
 });
 
 test("non-Linux platforms leave updateCommand null and keep the download link", async () => {

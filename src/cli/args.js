@@ -34,6 +34,7 @@ const VALUE_FLAGS = new Set([
   "bot-token-file",
   "limit",
   "offset",
+  "lines",
   "secret-stdin",
 ]);
 
@@ -43,6 +44,7 @@ const BOOLEAN_FLAGS = new Set([
   "json",
   "plain",
   "probe",
+  "file",
   "follow",
   "background",
   "non-interactive",

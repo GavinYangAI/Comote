@@ -1,17 +1,30 @@
-// `comote logs [--limit N] [--offset N]`.
+// `comote logs [--limit N] [--offset N]` — tail the daemon's in-memory log.
+// `comote logs --file [--lines N]`      — tail the desktop-App log FILES.
 //
-// GET /api/logs returns the daemon's in-memory event ring buffer as
-// { entries, total, hasMore }. entries are NEWEST-FIRST, each shaped
+// Default mode: GET /api/logs returns the daemon's in-memory event ring buffer
+// as { entries, total, hasMore }. entries are NEWEST-FIRST, each shaped
 // { id, at (ISO), level, message, detail? } (src/core/event-log.js). The route
 // honors ?limit & ?offset server-side, so we pass them through verbatim.
+//
+// --file mode: reads the tail (default 200 lines, --lines N) of the desktop
+// App's launch log files (see src/cli/log-paths.js) straight from disk — no
+// daemon needed, which is the whole point: these files are where the evidence
+// lands when the daemon/sidecar failed to start. The files exist only when the
+// desktop App has run; a friendly pointer is printed when they don't.
 //
 // Default render is one compact line per entry: timestamp · level · message,
 // plus a short one-line detail summary when a detail object/string is present.
 // --json passes the raw { entries, total, hasMore } object through; --plain
 // drops color (handled by the renderer).
 
+import { existsSync } from "node:fs";
+import { readFile } from "node:fs/promises";
+
+import { desktopLogPaths } from "../log-paths.js";
 import { createRenderer } from "../render.js";
 import { UsageError } from "../index.js";
+
+const DEFAULT_FILE_TAIL_LINES = 200;
 
 // Parse a --limit / --offset flag into a non-negative integer, or throw a
 // UsageError so a typo'd `--limit foo` is a clean exit 2 rather than NaN noise.
@@ -26,8 +39,60 @@ function parseCount(raw, name) {
   return n;
 }
 
+// Last N non-empty-tail lines of a text blob (the trailing newline does not
+// count as an extra empty line).
+function tailLines(text, n) {
+  const lines = String(text).split(/\r?\n/);
+  while (lines.length > 0 && lines[lines.length - 1] === "") {
+    lines.pop();
+  }
+  return lines.slice(Math.max(0, lines.length - n));
+}
+
+// --file mode. Injectable platform/home/fs so tests never depend on the host's
+// real desktop-App logs.
+async function runFileMode({
+  write,
+  r,
+  lines,
+  env = {},
+  platform = process.platform,
+  home,
+  exists = existsSync,
+  readFileImpl = readFile,
+}) {
+  const candidates = desktopLogPaths({ platform, env, ...(home ? { home } : {}) });
+  if (candidates.length === 0) {
+    write(`No desktop-App log files on this platform (${platform}) — the desktop App does not ship for it.\n`);
+    write(`Use \`comote logs\` for the daemon's in-memory event log.\n`);
+    return 0;
+  }
+  const existing = candidates.filter((c) => exists(c.path));
+  if (existing.length === 0) {
+    write("No desktop-App log files found. Expected locations:\n");
+    for (const c of candidates) {
+      write(`  ${c.path} (${c.label})\n`);
+    }
+    write("These files are only written when Comote runs as the desktop App.\n");
+    write(`Use \`comote logs\` for the daemon's in-memory event log.\n`);
+    return 0;
+  }
+  for (const c of existing) {
+    const raw = await readFileImpl(c.path, "utf8");
+    const tail = tailLines(raw, lines);
+    write(`${r.dim(`== ${c.path} — last ${tail.length} line(s) ==`)}\n`);
+    write(tail.length > 0 ? `${tail.join("\n")}\n` : `${r.dim("(empty)")}\n`);
+  }
+  return 0;
+}
+
 export async function run({ parsed, client, env, write }) {
   const r = createRenderer({ flags: parsed.flags, env });
+
+  if (parsed.flags.file) {
+    const lines = parseCount(parsed.flags.lines, "lines") ?? DEFAULT_FILE_TAIL_LINES;
+    return runFileMode({ write, r, lines, env });
+  }
 
   const limit = parseCount(parsed.flags.limit, "limit");
   const offset = parseCount(parsed.flags.offset, "offset");
@@ -132,3 +197,9 @@ function clip(text, max) {
   }
   return `${text.slice(0, max - 1)}…`;
 }
+
+export const __test__ = {
+  runFileMode,
+  tailLines,
+  DEFAULT_FILE_TAIL_LINES,
+};

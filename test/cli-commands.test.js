@@ -9,6 +9,8 @@ import { matchApproval } from "../src/cli/commands/approvals.js";
 import { parseTarget } from "../src/cli/commands/identities.js";
 import { runWizard } from "../src/cli/commands/onboard.js";
 import { __test__ as doctorInternals } from "../src/cli/commands/doctor.js";
+import { __test__ as logsInternals } from "../src/cli/commands/logs.js";
+import { run as updateRun } from "../src/cli/commands/update.js";
 import { renderQr } from "../src/cli/qr.js";
 
 // ---------------------------------------------------------------------------
@@ -1068,4 +1070,274 @@ test("doctor connector: disconnected state surfaces the daemon's lastError", asy
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
+});
+
+// ---------------------------------------------------------------------------
+// doctor: state path source + Logs info line (C-2 / C-3)
+// ---------------------------------------------------------------------------
+
+test("doctor: state path source is printed (flag / env)", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "comote-doctor-"));
+  const statePath = join(dir, "state.json");
+  await writeFile(statePath, "{}", { mode: 0o600 });
+  await chmod(statePath, 0o600);
+  const routes = {
+    "GET /api/version": { body: { version: "0.6.2", pid: 1 } },
+    "GET /api/status": { body: { connectors: { desktop: { state: "connected" } } } },
+  };
+  try {
+    const viaFlag = await runCli(["doctor", "--state-path", statePath, "--plain"], routes);
+    assert.match(viaFlag.out, /State file:.*source: flag/);
+
+    const viaEnv = await runCli(["doctor", "--plain"], routes, {
+      env: { COMOTE_STATE_PATH: statePath },
+    });
+    assert.match(viaEnv.out, /State file:.*source: env/);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("doctor: resolveStatePath default is the absolute ~/.comote path", () => {
+  const { path, source } = doctorInternals.resolveStatePath({
+    env: {},
+    exists: () => false,
+    home: () => join(tmpdir(), "comote-doctor-home"),
+  });
+  assert.equal(source, "default");
+  assert.equal(path, join(tmpdir(), "comote-doctor-home", ".comote", "state.json"));
+});
+
+test("doctor: Logs info line names the daemon log and the desktop-App log files", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "comote-doctor-"));
+  const statePath = join(dir, "state.json");
+  await writeFile(statePath, "{}", { mode: 0o600 });
+  await chmod(statePath, 0o600);
+  try {
+    const { code, out } = await runCli(["doctor", "--state-path", statePath, "--plain"], {
+      "GET /api/version": { body: { version: "0.6.2", pid: 1 } },
+      "GET /api/status": { body: { connectors: { desktop: { state: "connected" } } } },
+    });
+    assert.equal(code, 0);
+    assert.match(out, /INFO\s+Logs: daemon in-memory log: `comote logs`/);
+    if (process.platform === "darwin" || process.platform === "win32") {
+      assert.match(out, /comote-launch\.log/);
+      assert.match(out, /only written in desktop App mode/);
+      assert.match(out, /comote logs --file/);
+    }
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("doctor logsInfo: per-platform file lists (injected platform)", () => {
+  const home = () => "/Users/you";
+  const mac = doctorInternals.logsInfo({ platform: "darwin", env: {}, home });
+  assert.equal(mac.level, "info");
+  assert.match(mac.detail, /Library\/Application Support\/dev\.comote\.desktop\/comote-launch\.log/);
+
+  const win = doctorInternals.logsInfo({
+    platform: "win32",
+    env: { APPDATA: "C:\\Users\\you\\AppData\\Roaming" },
+    home,
+  });
+  assert.match(win.detail, /comote-node\.stdout\.log/);
+  assert.match(win.detail, /comote-node\.stderr\.log/);
+
+  const linux = doctorInternals.logsInfo({ platform: "linux", env: {}, home });
+  assert.match(linux.detail, /no desktop-App log files on this platform/);
+  // The info line must never drive the exit code.
+  assert.equal(linux.level, "info");
+});
+
+// ---------------------------------------------------------------------------
+// logs --file (C-3): read the desktop-App launch log tail from disk
+// ---------------------------------------------------------------------------
+
+function plainRenderer() {
+  return {
+    json: false,
+    dim: (s) => s,
+    red: (s) => s,
+    green: (s) => s,
+    yellow: (s) => s,
+    jsonText: (v) => JSON.stringify(v),
+  };
+}
+
+test("logs --file: tails the launch log (default cap, newest lines win)", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "comote-logs-home-"));
+  try {
+    const logDir = join(dir, "Library", "Application Support", "dev.comote.desktop");
+    const logPath = join(logDir, "comote-launch.log");
+    const { mkdir } = await import("node:fs/promises");
+    await mkdir(logDir, { recursive: true });
+    const lines = Array.from({ length: 250 }, (_, i) => `line-${i + 1}`);
+    await writeFile(logPath, `${lines.join("\n")}\n`);
+
+    const out = [];
+    const code = await logsInternals.runFileMode({
+      write: (s) => out.push(s),
+      r: plainRenderer(),
+      lines: 200,
+      env: {},
+      platform: "darwin",
+      home: () => dir,
+    });
+    const text = out.join("");
+    assert.equal(code, 0);
+    assert.match(text, /comote-launch\.log — last 200 line\(s\)/);
+    assert.ok(text.includes("line-250"), "newest line present");
+    assert.ok(text.includes("line-51"), "first line inside the 200-line tail");
+    assert.ok(!text.includes("line-50\n"), "older lines are cut off");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("logs --file: missing files → friendly pointer with expected locations, exit 0", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "comote-logs-home-"));
+  try {
+    const out = [];
+    const code = await logsInternals.runFileMode({
+      write: (s) => out.push(s),
+      r: plainRenderer(),
+      lines: 200,
+      env: {},
+      platform: "darwin",
+      home: () => dir,
+    });
+    const text = out.join("");
+    assert.equal(code, 0, "missing desktop logs are not an error");
+    assert.match(text, /No desktop-App log files found/);
+    assert.match(text, /comote-launch\.log/);
+    assert.match(text, /only written when Comote runs as the desktop App/);
+    assert.match(text, /comote logs/);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("logs --file: platform without a desktop build → friendly notice", async () => {
+  const out = [];
+  const code = await logsInternals.runFileMode({
+    write: (s) => out.push(s),
+    r: plainRenderer(),
+    lines: 200,
+    env: {},
+    platform: "linux",
+    home: () => "/home/you",
+  });
+  assert.equal(code, 0);
+  assert.match(out.join(""), /No desktop-App log files on this platform/);
+});
+
+test("logs --file --lines junk: usage error (exit 2), before touching the filesystem", async () => {
+  const { code, err } = await runCli(["logs", "--file", "--lines", "foo"], {});
+  assert.equal(code, 2);
+  assert.match(err, /--lines must be a non-negative integer/);
+});
+
+test("logs tailLines: trailing newline does not count, short files pass through", () => {
+  assert.deepEqual(logsInternals.tailLines("a\nb\nc\n", 2), ["b", "c"]);
+  assert.deepEqual(logsInternals.tailLines("a\r\nb\r\n", 5), ["a", "b"]);
+  assert.deepEqual(logsInternals.tailLines("", 5), []);
+});
+
+// ---------------------------------------------------------------------------
+// update (C-5): check + print only, keyed on install source, no daemon needed
+// ---------------------------------------------------------------------------
+
+function releaseFetch(body, { status = 200 } = {}) {
+  return async () => ({ ok: status >= 200 && status < 300, status, json: async () => body });
+}
+
+test("update: npm install source prints the npm command on any platform", async () => {
+  const out = [];
+  const code = await updateRun({
+    parsed: { flags: { plain: true }, positionals: [] },
+    env: {},
+    write: (s) => out.push(s),
+    fetchImpl: releaseFetch({
+      tag_name: "v99.0.0",
+      html_url: "https://github.com/GavinYangAI/comote/releases/tag/v99.0.0",
+      assets: [{ name: "Comote-99.0.0-arm64.dmg", browser_download_url: "u-dmg" }],
+    }),
+    installSource: "npm",
+  });
+  const text = out.join("");
+  assert.equal(code, 0);
+  assert.match(text, /Current version\s+\d+\.\d+\.\d+/);
+  assert.match(text, /Latest release\s+99\.0\.0/);
+  assert.match(text, /Install source\s+npm/);
+  assert.match(text, /npm install -g comote@latest/);
+  assert.doesNotMatch(text, /u-dmg/);
+});
+
+test("update: desktop install source prints the download link, never an npm command", async () => {
+  const out = [];
+  const code = await updateRun({
+    parsed: { flags: { plain: true }, positionals: [] },
+    env: {},
+    write: (s) => out.push(s),
+    fetchImpl: releaseFetch({
+      tag_name: "v99.0.0",
+      html_url: "https://github.com/GavinYangAI/comote/releases/tag/v99.0.0",
+      assets: [
+        { name: "Comote-99.0.0-arm64.dmg", browser_download_url: "u-dmg" },
+        { name: "Comote-Setup-99.0.0-x64.exe", browser_download_url: "u-exe" },
+      ],
+    }),
+    installSource: "desktop",
+  });
+  const text = out.join("");
+  assert.equal(code, 0);
+  assert.match(text, /Install source\s+desktop App/);
+  assert.match(text, /Download the new desktop build/);
+  assert.doesNotMatch(text, /npm install -g comote@latest/);
+});
+
+test("update: already up to date", async () => {
+  const out = [];
+  const code = await updateRun({
+    parsed: { flags: { plain: true }, positionals: [] },
+    env: {},
+    write: (s) => out.push(s),
+    fetchImpl: releaseFetch({ tag_name: "v0.0.1", html_url: "x" }),
+    installSource: "npm",
+    currentVersion: "0.0.1",
+  });
+  assert.equal(code, 0);
+  assert.match(out.join(""), /You are up to date/);
+});
+
+test("update: network failure → readable error, exit 1", async () => {
+  const out = [];
+  const code = await updateRun({
+    parsed: { flags: { plain: true }, positionals: [] },
+    env: {},
+    write: (s) => out.push(s),
+    fetchImpl: async () => {
+      throw new Error("offline");
+    },
+    installSource: "npm",
+  });
+  assert.equal(code, 1);
+  assert.match(out.join(""), /Update check failed: offline/);
+});
+
+test("update --json: raw result object with installSource", async () => {
+  const out = [];
+  const code = await updateRun({
+    parsed: { flags: { json: true }, positionals: [] },
+    env: {},
+    write: (s) => out.push(s),
+    fetchImpl: releaseFetch({ tag_name: "v99.0.0", html_url: "x", assets: [] }),
+    installSource: "npm",
+  });
+  assert.equal(code, 0);
+  const parsed = JSON.parse(out.join(""));
+  assert.equal(parsed.latest, "99.0.0");
+  assert.equal(parsed.installSource, "npm");
+  assert.equal(parsed.updateCommand, "npm install -g comote@latest");
 });
