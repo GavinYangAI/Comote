@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import {
   channelBadge, channelRows, channelFormSpec,
   channelBoundButton, normalizedLoginView, restingLoginView, readinessFromChannels,
-  isConnected, partitionChannels, channelSummaryLine, bindingAffordance, channelSetup,
+  isConnected, partitionChannels, channelSummaryLine, bindingAffordance, channelSetup, channelLastError,
 } from "../public/channel-view.js";
 
 const t = (k) => k; // echo key
@@ -152,4 +152,32 @@ test("channelSetup: splits steps by newline + maps link, null when no meta.setup
   const tt = (k) => (k === "S" ? "step one\nstep two\n" : k === "L" ? "open" : k);
   assert.deepEqual(channelSetup(c, tt), { steps: ["step one", "step two"], link: { url: "https://x", label: "open" } });
   assert.equal(channelSetup(ch({}), t), null);
+});
+
+// --- C-1: runtime.lastError surfaced as error badge + helper ---
+
+test("channelLastError returns the trimmed runtime error or null", () => {
+  assert.equal(channelLastError(ch({ runtime: { state: "configured", lastError: "bad token" } })), "bad token");
+  assert.equal(channelLastError(ch({ runtime: { state: "configured", lastError: "  " } })), null);
+  assert.equal(channelLastError(ch({ runtime: { state: "running", lastError: null } })), null);
+  assert.equal(channelLastError(ch({ runtime: { state: "running" } })), null);
+  assert.equal(channelLastError({}), null);
+});
+
+test("channelBadge: runtime.lastError yields an error badge over state and pending", () => {
+  const broken = ch({
+    config: { configured: true },
+    runtime: { state: "configured", lastError: "401 invalid app secret" },
+    states: { configured: { labelKey: "S.cfg", tone: "neutral" } },
+  });
+  assert.deepEqual(channelBadge(broken, t), { text: "web.channel.state.error", tone: "error" });
+  // Without lastError the pending-binding badge still applies (configured, not bound).
+  const pendingOnly = ch({ config: { configured: true }, runtime: { state: "configured" } });
+  assert.deepEqual(channelBadge(pendingOnly, t), { text: "web.channel.state.pendingPair", tone: "warning" });
+  // statusFlags still outrank the error badge.
+  const flagged = ch({
+    statusFlags: [{ source: "runtime", field: "needsRelogin", tone: "warning", badgeKey: "FLAG" }],
+    runtime: { state: "configured", needsRelogin: true, lastError: "boom" },
+  });
+  assert.deepEqual(channelBadge(flagged, t), { text: "FLAG", tone: "warning" });
 });

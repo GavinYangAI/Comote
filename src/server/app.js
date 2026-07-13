@@ -5,6 +5,7 @@ import { extname, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { SUPPORTED_LOCALES } from "../core/i18n/index.js";
+import { detectInstallSource, NPM_UPDATE_COMMAND } from "../core/version-check.js";
 import { createComoteState } from "./state.js";
 
 const ROOT = fileURLToPath(new URL("../../", import.meta.url));
@@ -188,7 +189,14 @@ async function handleApi(request, response, state) {
 
   if (request.method === "GET" && url.pathname === "/api/codex/threads") {
     const cwd = url.searchParams.get("cwd");
-    const result = await state.connectors.desktop.listThreads({ cwd });
+    // Pagination passthrough: limit (bounded to a sane 1..100) and the opaque
+    // cursor from a previous response's nextCursor. The connector's response
+    // ({ data, nextCursor, backwardsCursor }) is forwarded as-is so the
+    // frontend can chain "load more" requests.
+    const rawLimit = Number(url.searchParams.get("limit") || 20);
+    const limit = Number.isFinite(rawLimit) ? Math.min(100, Math.max(1, Math.trunc(rawLimit))) : 20;
+    const cursor = url.searchParams.get("cursor") || null;
+    const result = await state.connectors.desktop.listThreads({ cwd, limit, cursor });
     sendJson(response, 200, result);
     return;
   }
@@ -502,7 +510,7 @@ function formatVersionResponse(state) {
       hasUpdate: false,
       releaseUrl: null,
       downloadUrl: null,
-      updateCommand: process.platform === "linux" ? "npm i -g comote@latest" : null,
+      updateCommand: detectInstallSource() === "npm" ? NPM_UPDATE_COMMAND : null,
       platform: process.platform,
       checkedAt: null,
     };

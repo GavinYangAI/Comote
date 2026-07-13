@@ -417,6 +417,34 @@ button,
   color: var(--muted);
 }
 
+.badge.error {
+  background: var(--error-soft);
+  color: var(--error);
+}
+
+/* C-1: a channel runtime's recorded lastError, rendered inside the expanded
+   channel detail. Reuses the error palette of .error-notice / .list-error. */
+.channel-error {
+  border-radius: var(--radius-sm);
+  padding: 8px 12px;
+  margin: 8px 0;
+  background: var(--error-soft);
+  color: var(--error-text);
+  font-size: 14px;
+  word-break: break-word;
+}
+
+.channel-error strong {
+  color: var(--error);
+}
+
+/* D-1: event-log detail rendered as one "key: value" per line instead of a
+   raw JSON blob; nested objects keep indented JSON. */
+.log-detail {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
 /* ── Section blocks ── */
 .section-block,
 .advanced,

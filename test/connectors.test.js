@@ -207,6 +207,56 @@ test("desktop connector lists and starts Codex threads", async () => {
   assert.equal((await startPromise).thread.id, "thread_1");
 });
 
+test("desktop connector passes a pagination cursor through to thread/list", async () => {
+  const transport = new MemoryTransport();
+  const connector = new CodexDesktopConnector({ transport });
+
+  // Cursor shape verified against codex 0.144 app-server: request param is
+  // `cursor`, response carries { data, nextCursor, backwardsCursor } with
+  // ISO-8601 timestamp cursors.
+  const listPromise = connector.listThreads({
+    cwd: "/repo",
+    limit: 2,
+    cursor: "2026-07-13T13:49:16Z",
+  });
+  await flushAsyncWork();
+  assert.equal(transport.sent[0].method, "thread/list");
+  assert.deepEqual(transport.sent[0].params, {
+    cwd: "/repo",
+    archived: false,
+    limit: 2,
+    useStateDbOnly: false,
+    cursor: "2026-07-13T13:49:16Z",
+  });
+  transport.receive({
+    jsonrpc: "2.0",
+    id: 1,
+    result: {
+      data: [{ id: "thread_2" }],
+      nextCursor: "2026-07-13T13:12:06Z",
+      backwardsCursor: "2026-07-13T06:22:32.803Z",
+    },
+  });
+  // The response (including nextCursor) is forwarded untouched.
+  assert.deepEqual(await listPromise, {
+    data: [{ id: "thread_2" }],
+    nextCursor: "2026-07-13T13:12:06Z",
+    backwardsCursor: "2026-07-13T06:22:32.803Z",
+  });
+
+  // An empty/null cursor must NOT appear in the RPC params (first page).
+  const firstPagePromise = connector.listThreads({ cwd: "/repo", limit: 2, cursor: null });
+  await flushAsyncWork();
+  assert.deepEqual(transport.sent[1].params, {
+    cwd: "/repo",
+    archived: false,
+    limit: 2,
+    useStateDbOnly: false,
+  });
+  transport.receive({ jsonrpc: "2.0", id: 2, result: { data: [], nextCursor: null, backwardsCursor: null } });
+  await firstPagePromise;
+});
+
 test("desktop connector derives projects and marks Desktop or CLI sources", async () => {
   const transport = new MemoryTransport();
   // No global-state file -> falls back to deriving projects from thread history.

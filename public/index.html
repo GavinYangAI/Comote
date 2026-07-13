@@ -53,7 +53,7 @@
             <span data-i18n="web.nav.about">关于</span>
           </a>
         </nav>
-        <div class="sidebar-foot" id="sidebarVersion">版本 · 检查中</div>
+        <div class="sidebar-foot" id="sidebarVersion" data-i18n="web.version.checking">版本 · 检查中</div>
       </aside>
 
       <main class="main-pane">
@@ -223,7 +223,14 @@
 
             <article class="panel">
               <h3 data-i18n="web.advanced.threads">Codex 对话</h3>
+              <div id="threadsControls" class="config-field" hidden>
+                <label class="domain-label" for="threadsProjectSelect" data-i18n="web.threads.projectLabel">项目</label>
+                <label class="select-wrap"><select id="threadsProjectSelect"></select></label>
+              </div>
               <ul id="threads" class="list"></ul>
+              <div id="threadsFooter" class="actions" hidden>
+                <button id="threadsLoadMore" class="secondary-button load-more-btn" type="button" data-i18n="web.threads.loadMore">加载更多</button>
+              </div>
             </article>
 
             <article class="panel">

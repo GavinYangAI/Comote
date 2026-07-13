@@ -18,6 +18,7 @@ import {
   channelSummaryLine,
   bindingAffordance,
   channelSetup,
+  channelLastError,
   normalizedLoginView,
   restingLoginView,
   readinessFromChannels,
@@ -154,6 +155,15 @@ let renderQueued = false;
 let logsOffset = 0;
 let conversationThreads = [];
 let conversationShown = 0;
+// D-5/E-5: "Codex 对话" panel state — the user's project selection (remembered
+// in memory across re-renders), the accumulated thread pages, and the opaque
+// nextCursor for the "load more" button.
+let threadsProjectPath = null; // user's explicit selection; null = follow projects[0]
+let threadsLoadedProject = null; // { name, path } of the project the list belongs to
+let threadsItems = []; // accumulated thread list (all loaded pages, newest first)
+let threadsCursor = null; // nextCursor for the next page; null = no more pages
+let threadsPagedBeyondFirst = false; // user clicked "load more" at least once
+const THREADS_PAGE_SIZE = 20;
 
 async function render() {
   // Coalesce instead of dropping: a call arriving mid-render queues one more
@@ -251,22 +261,32 @@ function renderReadiness(status, identitiesResult, channels) {
   const desktopState = status?.connectors?.desktop?.state;
   const { bound, running } = readinessFromChannels(channels);
 
+  // Each step carries its dictionary hint (D-2: present in the dict but never
+  // rendered before) plus the section anchor an unfinished step links to.
   const items = [
     {
       done: desktopState === "connected" || desktopState === "available",
       label: tWeb("web.readiness.step1.label"),
+      hint: tWeb("web.readiness.step1.hint"),
+      anchor: "#codexNotice",
     },
     {
       done: bound,
       label: tWeb("web.readiness.step2.label"),
+      hint: tWeb("web.readiness.step2.hint"),
+      anchor: "#connectPhone",
     },
     {
       done: identities.length > 0,
       label: tWeb("web.readiness.step3.label"),
+      hint: tWeb("web.readiness.step3.hint"),
+      anchor: "#users",
     },
     {
       done: running,
       label: tWeb("web.readiness.step4.label"),
+      hint: tWeb("web.readiness.step4.hint"),
+      anchor: "#connectPhone",
     },
   ];
   // Hide the whole section once setup is complete — no clutter for return users.
@@ -295,6 +315,7 @@ function renderReadiness(status, identitiesResult, channels) {
           <div>
             <div class="ready-step-no">${tWeb("web.readiness.stepNo", { step: index + 1 })}</div>
             <strong>${escapeHtml(item.label)}</strong>
+            <div class="meta ready-hint">${escapeHtml(item.hint)}${item.done ? "" : ` <a href="${escapeAttr(item.anchor)}">${escapeHtml(tWeb("web.readiness.goto"))}</a>`}</div>
           </div>
         </li>`,
     )
@@ -407,14 +428,31 @@ function setupChannelCards() {
     const saveBtn = event.target.closest("[data-save-config]");
     if (saveBtn) {
       const id = saveBtn.dataset.saveConfig;
-      await guardedAction(() =>
+      // D-4: give the button a saving → saved lifecycle instead of silence.
+      // guardedAction already alerts on failure and returns null there.
+      saveBtn.disabled = true;
+      const originalLabel = saveBtn.textContent;
+      saveBtn.textContent = tWeb("web.channel.saving");
+      const result = await guardedAction(() =>
         getJson(`/api/channels/${encodeURIComponent(id)}/config`, {
           method: "PUT",
           headers: { "content-type": "application/json" },
           body: JSON.stringify(readChannelForm(id)),
         }),
       );
-      await render();
+      if (result === null) {
+        saveBtn.disabled = false;
+        saveBtn.textContent = originalLabel;
+        await render();
+        return;
+      }
+      saveBtn.textContent = tWeb("web.channel.saved");
+      // Hold the confirmation for 2s, then re-render (which rebuilds the card
+      // and restores the normal save label). A 5s auto-refresh may repaint
+      // earlier — harmless, it just shortens the confirmation.
+      setTimeout(() => {
+        render().catch(() => {});
+      }, 2000);
     }
   });
 }
@@ -441,7 +479,19 @@ function renderChannelDropdown(channels) {
 function connectedRowHtml(ch) {
   const badge = channelBadge(ch, tWeb);
   const pending = isConnected(ch) && !isBound(ch);
-  const badgeClass = `badge${pending ? " pending" : badge.tone === "success" ? " success" : badge.tone === "warning" ? " warning" : ""}`;
+  // The error tone (runtime.lastError) outranks the pending style — a broken
+  // channel must look broken even while it is also waiting to be bound.
+  const badgeClass = `badge${
+    badge.tone === "error"
+      ? " error"
+      : pending
+        ? " pending"
+        : badge.tone === "success"
+          ? " success"
+          : badge.tone === "warning"
+            ? " warning"
+            : ""
+  }`;
   const icon = ch.icon ?? (ch.displayName ?? "")[0] ?? "";
   const summary = channelSummaryLine(ch, tWeb);
   const expanded = expandedChannelId === ch.id;
@@ -491,6 +541,12 @@ function channelDetailHtml(ch) {
   }
   // bound qr channel: still show its resting QR area (account summary) on expand
   const qrResting = ch.binding === "qr" && !aff ? qrAreaHtml(ch) : "";
+  // C-1: surface the runtime's recorded lastError as a red row so a bad token
+  // (configure "succeeds", runtime start fails) is no longer invisible.
+  const lastError = channelLastError(ch);
+  const errorHtml = lastError
+    ? `<div class="channel-error"><strong>${escapeHtml(tWeb("web.channel.lastError"))}</strong>: ${escapeHtml(lastError)}</div>`
+    : "";
   const rows = channelRows(ch, tWeb).map((r) => `<dt>${escapeHtml(r.label)}</dt><dd>${escapeHtml(r.value)}</dd>`).join("");
   const setup = channelSetup(ch, tWeb);
   const setupHtml = setup ? `<details class="channel-setup"><summary>${escapeHtml(tWeb("web.channel.howTo"))} ▸</summary><ol>${setup.steps.map((s) => `<li>${escapeHtml(s)}</li>`).join("")}</ol>${setup.link ? `<a href="${escapeAttr(setup.link.url)}" target="_blank" rel="noopener">↗ ${escapeHtml(setup.link.label)}</a>` : ""}</details>` : "";
@@ -498,7 +554,7 @@ function channelDetailHtml(ch) {
   const actionBtn = ch.binding === "qr"
     ? `<button type="button" class="btn-primary-card" data-bind="${escapeAttr(ch.id)}">${escapeHtml(button.label)}</button>`
     : `<button type="button" class="btn-primary-card" data-save-config="${escapeAttr(ch.id)}">${escapeHtml(tWeb("web.channel.save"))}</button>`;
-  return `${affHtml}${qrResting}${rows ? `<dl class="kv status-rows">${rows}</dl>` : ""}${channelConfigFormHtml(ch)}${setupHtml}<div class="actions card-actions">${actionBtn}</div>`;
+  return `${errorHtml}${affHtml}${qrResting}${rows ? `<dl class="kv status-rows">${rows}</dl>` : ""}${channelConfigFormHtml(ch)}${setupHtml}<div class="actions card-actions">${actionBtn}</div>`;
 }
 
 // The qr scan area (extracted from the old channelCardHtml qr branch) so both the
@@ -604,10 +660,29 @@ function renderApprovals(result) {
           .join("");
 }
 
+// D-1 (lite): render an event's detail as one `key: value` per line instead of
+// a raw JSON blob. Nested objects/arrays keep indented JSON as the value.
+function formatLogDetail(detail) {
+  if (detail == null) {
+    return "";
+  }
+  if (typeof detail !== "object") {
+    return String(detail);
+  }
+  if (Array.isArray(detail)) {
+    return JSON.stringify(detail, null, 2);
+  }
+  return Object.entries(detail)
+    .map(([key, value]) =>
+      `${key}: ${value !== null && typeof value === "object" ? JSON.stringify(value, null, 2) : String(value)}`)
+    .join("\n");
+}
+
 function renderLogEntries(entries) {
   return entries
     .map((entry) => {
-      const detail = entry.detail ? `<div class="meta">${escapeHtml(JSON.stringify(entry.detail))}</div>` : "";
+      const detailText = formatLogDetail(entry.detail);
+      const detail = detailText ? `<div class="meta log-detail">${escapeHtml(detailText)}</div>` : "";
       return `<li class="log-row log-${escapeAttr(entry.level)}"><span class="log-time">${escapeHtml(formatTime(entry.at))}</span><span><strong>${escapeHtml(entry.message)}</strong>${detail}</span></li>`;
     })
     .join("");
@@ -759,7 +834,9 @@ function paintThreads(threadList, primaryProject) {
       const cwd = thread.cwd ?? primaryProject.path;
       const expanded = expandedThreadIds.has(threadId);
       const state = threadDetailCache.get(threadId) ?? defaultThreadDetailState();
-      return `<li class="thread-row" data-thread-id="${escapeAttr(threadId)}"><div class="thread-row-summary"><strong>${index + 1}. ${escapeHtml(title)}</strong><div class="meta">${escapeHtml(threadId)}</div><div class="meta">${escapeHtml(cwd)}</div></div><div class="thread-detail"${expanded ? "" : " hidden"} data-offset="${escapeAttr(state.offset)}" data-loaded="${escapeAttr(state.loaded)}" data-total="${escapeAttr(state.total)}">${expanded ? state.html : ""}</div></li>`;
+      // E-7 accessibility: the row toggles on click, so expose it as a
+      // focusable button whose aria-expanded tracks the detail panel.
+      return `<li class="thread-row" data-thread-id="${escapeAttr(threadId)}" role="button" tabindex="0" aria-expanded="${expanded ? "true" : "false"}"><div class="thread-row-summary"><strong>${index + 1}. ${escapeHtml(title)}</strong><div class="meta">${escapeHtml(threadId)}</div><div class="meta">${escapeHtml(cwd)}</div></div><div class="thread-detail"${expanded ? "" : " hidden"} data-offset="${escapeAttr(state.offset)}" data-loaded="${escapeAttr(state.loaded)}" data-total="${escapeAttr(state.total)}">${expanded ? state.html : ""}</div></li>`;
     })
     .join("");
 
@@ -867,25 +944,96 @@ async function refreshPanelTranscript(threadId, panel, prevTotal) {
   return nextTotal;
 }
 
+function threadsUrl(cwd, cursor) {
+  const params = new URLSearchParams({ cwd, limit: String(THREADS_PAGE_SIZE) });
+  if (cursor) {
+    params.set("cursor", cursor);
+  }
+  return `/api/codex/threads?${params}`;
+}
+
+function resetThreadsPanel() {
+  expandedThreadIds.clear();
+  threadDetailCache.clear();
+  lastThreadSignature = null;
+  threadsLoadedProject = null;
+  threadsItems = [];
+  threadsCursor = null;
+  threadsPagedBeyondFirst = false;
+}
+
+// Keeps the project <select> in sync with /api/projects while preserving the
+// user's selection across the 5s re-renders (options are value=path).
+function updateThreadsControls(projects, selected) {
+  const controls = document.querySelector("#threadsControls");
+  const select = document.querySelector("#threadsProjectSelect");
+  if (!controls || !select) {
+    return;
+  }
+  controls.hidden = projects.length === 0;
+  select.innerHTML = projects
+    .map((project) => `<option value="${escapeAttr(project.path)}">${escapeHtml(project.name)}</option>`)
+    .join("");
+  if (selected) {
+    select.value = selected.path;
+  }
+}
+
+// The "load more" button is only useful while the server reports another page.
+function updateThreadsFooter() {
+  const footer = document.querySelector("#threadsFooter");
+  if (footer) {
+    footer.hidden = !(threadsCursor && threadsItems.length > 0);
+  }
+}
+
+function threadKey(thread) {
+  return String(thread?.id ?? "");
+}
+
 async function renderThreads(status, projectsValue) {
   const target = document.querySelector("#threads");
   const projects = Array.isArray(projectsValue) ? projectsValue : [];
-  const primaryProject = projects[0];
-  if (status.connectors.desktop.state !== "connected" || !primaryProject) {
-    expandedThreadIds.clear();
-    threadDetailCache.clear();
-    lastThreadSignature = null;
+  // Honor the user's selection when it still exists; otherwise fall back to
+  // the first project (also the initial default).
+  const selected = projects.find((project) => project.path === threadsProjectPath) ?? projects[0] ?? null;
+  updateThreadsControls(projects, selected);
+  if (status.connectors.desktop.state !== "connected" || !selected) {
+    resetThreadsPanel();
+    updateThreadsFooter();
     target.innerHTML = `<li><strong>${tWeb("web.threads.disconnected.title")}</strong><div class="meta">${tWeb("web.threads.disconnected.hint")}</div></li>`;
     return;
   }
-  const result = await safeGet(`/api/codex/threads?cwd=${encodeURIComponent(primaryProject.path)}`, null);
+  const result = await safeGet(threadsUrl(selected.path, null), null);
   if (!result.ok) {
     lastThreadSignature = null;
+    updateThreadsFooter();
     target.innerHTML = sectionError(tWeb("web.connectors.error.threads"));
     return;
   }
-  const threadList = result.value?.data ?? result.value?.threads ?? [];
-  paintThreads(threadList, primaryProject);
+  const firstPage = result.value?.data ?? result.value?.threads ?? [];
+  const firstCursor = result.value?.nextCursor ?? null;
+  if (threadsLoadedProject?.path !== selected.path) {
+    // Project switched (or first paint): drop the old project's pages and
+    // any expanded-panel state — it belongs to different threads.
+    resetThreadsPanel();
+    threadsLoadedProject = { name: selected.name, path: selected.path };
+    threadsItems = firstPage;
+    threadsCursor = firstCursor;
+  } else if (!threadsPagedBeyondFirst) {
+    // Same project, only the first page loaded: replace it wholesale so
+    // removed/archived threads disappear too.
+    threadsItems = firstPage;
+    threadsCursor = firstCursor;
+  } else {
+    // Same project with extra pages loaded: refresh the newest page but keep
+    // the older pages the user paged into. Dedupe by id, newest page first;
+    // the tail cursor is unaffected by new threads appearing at the top.
+    const firstIds = new Set(firstPage.map(threadKey));
+    threadsItems = [...firstPage, ...threadsItems.filter((thread) => !firstIds.has(threadKey(thread)))];
+  }
+  updateThreadsFooter();
+  paintThreads(threadsItems, selected);
   // paintThreads restores expanded panels from cache; pull fresh transcripts so
   // new messages show up within the 5s poll instead of being frozen at expand.
   await refreshExpandedThreadDetails(target);
@@ -1264,7 +1412,13 @@ function normalizeQrImageSource(value) {
   return qrDataUrl(text);
 }
 
+// D-3: prefer the registry's displayName (available for every channel, kept in
+// channelsById by renderOnce) so dingtalk/telegram identities don't show a bare
+// channel id. The wechat/feishu dictionary names remain as a fallback for the
+// window before the first /api/channels response lands.
 function channelName(channel) {
+  const meta = channelsById[channel];
+  if (meta?.displayName) return meta.displayName;
   if (channel === "wechat") return tWeb("web.channelName.wechat");
   if (channel === "feishu") return tWeb("web.channelName.feishu");
   return channel;
@@ -1314,14 +1468,10 @@ const NAV_LABEL_KEYS = {
 
 function setupNavigation() {
   const navItems = [...document.querySelectorAll(".nav-item")];
-  const eyebrow = document.querySelector("#topEyebrow");
 
   function activate(sectionId) {
     for (const item of navItems) {
       item.classList.toggle("active", item.getAttribute("href") === `#${sectionId}`);
-    }
-    if (eyebrow && NAV_LABEL_KEYS[sectionId]) {
-      eyebrow.textContent = tWeb(NAV_LABEL_KEYS[sectionId]);
     }
   }
 
@@ -1385,6 +1535,57 @@ function rememberThreadDetail(row, panel) {
   lastThreadSignature = null;
 }
 
+// D-5: switching the project re-fetches the thread list from page one.
+document.querySelector("#threadsProjectSelect")?.addEventListener("change", async (event) => {
+  threadsProjectPath = event.target.value || null;
+  // Invalidate the loaded list so renderThreads treats this as a project switch.
+  threadsLoadedProject = null;
+  await render();
+});
+
+// E-5: append the next (older) page using the server's nextCursor.
+document.querySelector("#threadsLoadMore")?.addEventListener("click", async (event) => {
+  const button = event.currentTarget;
+  if (!threadsCursor || !threadsLoadedProject || button.disabled) {
+    return;
+  }
+  button.disabled = true;
+  const original = button.textContent;
+  button.textContent = tWeb("web.threads.loading");
+  try {
+    const result = await safeGet(threadsUrl(threadsLoadedProject.path, threadsCursor), null);
+    if (result.ok && result.value) {
+      const page = result.value?.data ?? result.value?.threads ?? [];
+      const known = new Set(threadsItems.map(threadKey));
+      threadsItems = [...threadsItems, ...page.filter((thread) => !known.has(threadKey(thread)))];
+      // An empty page means the cursor is exhausted regardless of what the
+      // server echoes back — otherwise trust its nextCursor.
+      threadsCursor = page.length > 0 ? result.value?.nextCursor ?? null : null;
+      threadsPagedBeyondFirst = true;
+      paintThreads(threadsItems, threadsLoadedProject);
+    }
+  } finally {
+    button.disabled = false;
+    button.textContent = original;
+    updateThreadsFooter();
+  }
+});
+
+// E-7: thread rows are rendered as role="button" focusable rows; Enter/Space
+// must toggle them exactly like a click. Clicks inside the detail panel are
+// excluded, mirroring the click handler below.
+document.querySelector("#threads").addEventListener("keydown", (event) => {
+  if (event.key !== "Enter" && event.key !== " ") {
+    return;
+  }
+  const row = event.target.closest("li[data-thread-id]");
+  if (!row || event.target.closest(".thread-detail")) {
+    return;
+  }
+  event.preventDefault(); // keep Space from scrolling the page
+  row.click();
+});
+
 document.querySelector("#threads").addEventListener("click", async (event) => {
   const row = event.target.closest("li[data-thread-id]");
   if (!row) {
@@ -1446,6 +1647,7 @@ document.querySelector("#threads").addEventListener("click", async (event) => {
   }
   const isExpanded = !panel.hidden;
   panel.hidden = isExpanded;
+  row.setAttribute("aria-expanded", String(!panel.hidden));
   if (isExpanded) {
     rememberThreadDetail(row, panel);
     return;
@@ -1478,7 +1680,12 @@ document.querySelector("#threads").addEventListener("click", async (event) => {
     rememberThreadDetail(row, panel);
     return;
   }
-  let html = renderThreadMessages(messages);
+  // E-4: transcripts served from the connector's thread/read fallback (rather
+  // than Comote's own relay transcript) get a small origin annotation.
+  const sourceNote = firstResult.value.source === "desktop"
+    ? `<div class="meta thread-source">${tWeb("web.threads.sourceDesktop")}</div>`
+    : "";
+  let html = sourceNote + renderThreadMessages(messages);
   if (hasMore) {
     html += `<button class="secondary-button thread-load-more-btn">${tWeb("web.threads.loadMore")}</button>`;
   }

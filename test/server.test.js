@@ -214,6 +214,45 @@ test("desktop connector API initializes and lists threads", async () => {
   });
 });
 
+test("threads API passes limit/cursor through and forwards nextCursor", async () => {
+  const state = createFakeState();
+  const calls = [];
+  state.connectors.desktop.listThreads = async (options) => {
+    calls.push(options);
+    return {
+      data: [{ id: "thread_2", preview: "Older", cwd: options.cwd }],
+      nextCursor: "2026-07-13T13:12:06Z",
+      backwardsCursor: "2026-07-13T06:22:32.803Z",
+    };
+  };
+  const app = createServer(state);
+  const server = app.listen(0);
+  await new Promise((resolve) => server.once("listening", resolve));
+
+  const { port } = server.address();
+  const withCursor = await fetch(
+    `http://127.0.0.1:${port}/api/codex/threads?cwd=${encodeURIComponent("/repo")}&limit=2&cursor=${encodeURIComponent("2026-07-13T13:49:16Z")}`,
+  );
+  const body = await withCursor.json();
+  const withoutCursor = await fetch(
+    `http://127.0.0.1:${port}/api/codex/threads?cwd=${encodeURIComponent("/repo")}`,
+  );
+  await withoutCursor.json();
+  // Out-of-range limits are clamped, not passed through verbatim.
+  await (await fetch(
+    `http://127.0.0.1:${port}/api/codex/threads?cwd=${encodeURIComponent("/repo")}&limit=9999`,
+  )).json();
+  server.close();
+
+  assert.equal(withCursor.status, 200);
+  assert.deepEqual(calls[0], { cwd: "/repo", limit: 2, cursor: "2026-07-13T13:49:16Z" });
+  // nextCursor/backwardsCursor are forwarded so the frontend can chain pages.
+  assert.equal(body.nextCursor, "2026-07-13T13:12:06Z");
+  assert.equal(body.backwardsCursor, "2026-07-13T06:22:32.803Z");
+  assert.deepEqual(calls[1], { cwd: "/repo", limit: 20, cursor: null });
+  assert.deepEqual(calls[2], { cwd: "/repo", limit: 100, cursor: null });
+});
+
 test("channel message API routes authorized phone commands", async () => {
   const app = createServer(createStateWithProject());
   const server = app.listen(0);

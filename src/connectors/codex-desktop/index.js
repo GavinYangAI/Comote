@@ -450,13 +450,22 @@ export class CodexDesktopConnector {
     return result;
   }
 
-  async listThreads({ cwd = null, limit = 20 } = {}) {
-    return this.client.request("thread/list", {
+  async listThreads({ cwd = null, limit = 20, cursor = null } = {}) {
+    const params = {
       cwd,
       archived: false,
       limit,
       useStateDbOnly: false,
-    });
+    };
+    // Pagination: thread/list returns { data, nextCursor, backwardsCursor };
+    // passing the previous response's nextCursor back as `cursor` fetches the
+    // next (older) page. Verified against codex 0.144: the cursor is an
+    // ISO-8601 timestamp string. Only sent when non-empty so the default
+    // first-page request stays byte-identical to the pre-pagination one.
+    if (cursor) {
+      params.cursor = cursor;
+    }
+    return this.client.request("thread/list", params);
   }
 
   async listProjects({ limit = 100 } = {}) {

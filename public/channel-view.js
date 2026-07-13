@@ -12,6 +12,13 @@ export function channelBadge(channel, t) {
       return { text: t(flag.badgeKey), tone: flag.tone };
     }
   }
+  // A recorded runtime error (bad token, stream drop, poll failure) beats the
+  // state-derived badge: "已配置/监听中" over a broken channel is exactly the
+  // silent-failure C-1 complained about. Cleared by the runtime on the next
+  // successful poll/deliver/start, so this self-heals.
+  if (channelLastError(channel)) {
+    return { text: t("web.channel.state.error"), tone: "error" };
+  }
   // Configured but not yet bound → pending-binding badge (token: 待配对, qr: 待扫码).
   // Only telegram reaches this today (configured !== bound); others have configured≡bound.
   if (isConnected(channel) && !isBound(channel)) {
@@ -99,6 +106,14 @@ export function restingLoginView(channel, t) {
     accountLine: account ? t("web.channel.row.account") + "：" + account : null,
     message: null,
   };
+}
+
+// The runtime's recorded lastError, or null. Trimmed so whitespace-only
+// values (defensive) don't render an empty red row.
+export function channelLastError(channel) {
+  const raw = channel?.runtime?.lastError;
+  const text = typeof raw === "string" ? raw.trim() : "";
+  return text || null;
 }
 
 export function readinessFromChannels(channels) {
