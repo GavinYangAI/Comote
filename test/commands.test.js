@@ -63,6 +63,27 @@ test("lists projects and sessions using phone commands", () => {
   assert.match(sessionReply.text, /Build the bridge/);
 });
 
+test("async sessions warns about the degraded local list when desktop is offline", async () => {
+  const authorization = new AuthorizationStore();
+  const projects = new ProjectStore();
+  const sessions = new SessionStore();
+  const identity = { channel: "wechat", stableId: "wxid_owner", displayName: "Alice" };
+  const codexDesktop = {
+    getStatus: () => ({ state: "not_connected", lastError: "spawn codex ENOENT" }),
+  };
+  const router = new CommandRouter({ authorization, projects, sessions, codexDesktop });
+  authorization.confirmIdentity(identity);
+  projects.replaceProjects([
+    { name: "comote", path: "/home/test/projects/comote", source: "manual", status: "available" },
+  ]);
+
+  router.handleMessage({ identity, text: "/open 1" });
+  const reply = await router.handleMessageAsync({ identity, text: "/sessions" });
+
+  assert.match(reply.text, /Codex 未连接/);
+  assert.match(reply.text, /0\. 新建对话/, "the picker still works while degraded");
+});
+
 test("async sessions command lists Codex Desktop threads when connected", async () => {
   const authorization = new AuthorizationStore();
   const projects = new ProjectStore();

@@ -83,6 +83,7 @@ export default {
   "cmd.open.usage": "사용법: /open <프로젝트 번호 또는 경로>",
   "cmd.open.excluded": "이 경로는 민감한 디렉터리에 속해 제외되었습니다: {path}",
   "cmd.open.entered": "{name}에 들어갔습니다\n{path}",
+  "cmd.session.desktopOffline": "⚠️ Codex가 연결되어 있지 않습니다. 아래는 로컬 캐시된 대화 목록이며 불완전할 수 있습니다. /status 로 원인을 확인하거나 컴퓨터에서 Comote를 열어 주세요.",
   "cmd.session.none": "이 프로젝트에는 아직 대화가 없습니다. /new <메시지> 로 새로 시작하세요.",
   "cmd.session.choose": "대화를 선택하세요:",
   "cmd.session.newLabel": "새 대화",

@@ -83,6 +83,7 @@ export default {
   "cmd.open.usage": "用法：/open <项目编号或路径>",
   "cmd.open.excluded": "该路径属于敏感目录，已被排除：{path}",
   "cmd.open.entered": "已进入 {name}\n{path}",
+  "cmd.session.desktopOffline": "⚠️ Codex 未连接，以下是本地缓存的对话列表，可能不完整。可发送 /status 查看原因，或在电脑上打开 Comote 检查连接。",
   "cmd.session.none": "当前项目还没有对话。发送 /new <消息> 新建一个。",
   "cmd.session.choose": "请选择对话：",
   "cmd.session.newLabel": "新建对话",

@@ -83,6 +83,7 @@ export default {
   "cmd.open.usage": "Usage: /open <project number or path>",
   "cmd.open.excluded": "That path is in a sensitive directory and has been excluded: {path}",
   "cmd.open.entered": "Entered {name}\n{path}",
+  "cmd.session.desktopOffline": "⚠️ Codex is not connected — this is the locally cached conversation list and may be incomplete. Send /status for the reason, or open Comote on the computer.",
   "cmd.session.none": "No conversations in this project yet. Send /new <message> to start one.",
   "cmd.session.choose": "Pick a conversation:",
   "cmd.session.newLabel": "New conversation",

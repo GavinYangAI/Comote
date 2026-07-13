@@ -83,6 +83,7 @@ export default {
   "cmd.open.usage": "使い方：/open <プロジェクト番号またはパス>",
   "cmd.open.excluded": "このパスは機密ディレクトリのため除外されました：{path}",
   "cmd.open.entered": "{name} に入りました\n{path}",
+  "cmd.session.desktopOffline": "⚠️ Codex に接続されていません。以下はローカルキャッシュの会話リストで、不完全な場合があります。/status で原因を確認するか、PC で Comote を開いてください。",
   "cmd.session.none": "このプロジェクトにはまだ会話がありません。/new <メッセージ> で作成してください。",
   "cmd.session.choose": "会話を選んでください：",
   "cmd.session.newLabel": "新しい会話",

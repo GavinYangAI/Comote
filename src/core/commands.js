@@ -478,7 +478,10 @@ export class CommandRouter {
         index: String(index + 1),
       })),
     ];
-    return this.pickerFromSessions(entries);
+    // Degraded path: the desktop connector is down, so this list is only
+    // Comote's local cache. Say so — a silent downgrade reads as "my
+    // conversations are gone" to the IM user.
+    return this.pickerFromSessions(entries, { preamble: t("cmd.session.desktopOffline") });
   }
 
   // Asks Codex Desktop for the latest N user/assistant messages on a thread.
