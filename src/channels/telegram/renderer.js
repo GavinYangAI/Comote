@@ -3,7 +3,7 @@ import { stat } from "node:fs/promises";
 import { basename } from "node:path";
 import { t } from "../../core/i18n/index.js";
 import { describeApprovalForChat } from "../base/approval-format.js";
-import { approvalKeyboard, pickerKeyboard, cancelKeyboard, filesKeyboard, statusText } from "./cards.js";
+import { approvalKeyboard, pickerKeyboard, cancelKeyboard, filesKeyboard, statusText, chunkMessage } from "./cards.js";
 
 // Telegram: photos ≤10MB via sendPhoto, documents ≤50MB via sendDocument; degrade
 // past the ceiling. Telegram natively supports inline keyboards, so approval/picker
@@ -43,7 +43,15 @@ export function createTelegramRenderer() {
         default: {
           const text = reply.text ?? "";
           if (!text) return;
-          await driver.sendMessage({ chatId: reply.conversationId, text });
+          // Telegram hard-caps messages at 4096 chars and rejects longer ones
+          // with a 400 — after the outbound queue's retries that reply would be
+          // dropped for good. Chunk like _sendChunked does, with room reserved
+          // for the "(i/n)\n" prefix.
+          const chunks = chunkMessage(text, 4096 - 16);
+          for (let i = 0; i < chunks.length; i += 1) {
+            const body = chunks.length > 1 ? `(${i + 1}/${chunks.length})\n${chunks[i]}` : chunks[i];
+            await driver.sendMessage({ chatId: reply.conversationId, text: body });
+          }
         }
       }
     },

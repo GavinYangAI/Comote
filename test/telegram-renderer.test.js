@@ -23,6 +23,25 @@ test("text reply sends a plain message", async () => {
   assert.equal(d.calls[0][1].parseMode ?? null, null); // plain text, no parse_mode
 });
 
+test("text reply longer than Telegram's 4096 limit is chunked with (i/n) prefixes", async () => {
+  const r = createTelegramRenderer();
+  const d = fakeDriver();
+  const long = "x".repeat(9000);
+  await r.render({ kind: "text", conversationId: "9", text: long }, { driver: d });
+
+  assert.ok(d.calls.length >= 3, `expected ≥3 chunks, got ${d.calls.length}`);
+  let reassembled = "";
+  for (let i = 0; i < d.calls.length; i += 1) {
+    const [method, args] = d.calls[i];
+    assert.equal(method, "sendMessage");
+    assert.ok(args.text.length <= 4096, `chunk ${i} exceeds 4096 (${args.text.length})`);
+    const prefix = `(${i + 1}/${d.calls.length})\n`;
+    assert.ok(args.text.startsWith(prefix), `chunk ${i} missing ${prefix.trim()} prefix`);
+    reassembled += args.text.slice(prefix.length);
+  }
+  assert.equal(reassembled, long, "no content lost across chunks");
+});
+
 test("empty text reply sends nothing", async () => {
   const r = createTelegramRenderer();
   const d = fakeDriver();
