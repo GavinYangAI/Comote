@@ -736,8 +736,117 @@ fn keep_daemon_alive_from_settings_body(body: &str) -> bool {
 
 fn log_line(log_path: &Path, message: &str) {
     if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(log_path) {
-        let _ = writeln!(file, "{message}");
+        let _ = writeln!(file, "{}", redact_secrets(message));
     }
+}
+
+// Keys whose values must never reach the persisted launch log. The sidecar's
+// stdout is pumped here verbatim, and SDKs log secret-bearing URLs — the Lark
+// WSClient logs its full connection URL including `access_key` and `ticket`.
+// Exact-case variants are listed (not lowercased matching) so byte offsets
+// stay valid for non-ASCII log text.
+const SECRET_LOG_KEYS: [&str; 10] = [
+    "access_key",
+    "app_secret",
+    "appSecret",
+    "botToken",
+    "encryptKey",
+    "encrypt_key",
+    "verificationToken",
+    "verification_token",
+    "ticket",
+    "token",
+];
+
+// Masks secret values in a log line before it is written to disk. Handles
+// `key=value` (URL query) and `"key":"value"` (JSON) shapes for the keys
+// above, plus Telegram's path-embedded bot token (`/bot<id>:<secret>`).
+fn redact_secrets(text: &str) -> String {
+    let mut result = redact_telegram_bot_token(text);
+    for key in SECRET_LOG_KEYS {
+        result = redact_key_values(&result, key);
+    }
+    result
+}
+
+fn redact_key_values(text: &str, key: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut pos = 0;
+    while let Some(found) = text[pos..].find(key) {
+        let key_start = pos + found;
+        let after_key = key_start + key.len();
+        let rest = &text[after_key..];
+        // (separator length, whether the value is a quoted JSON string)
+        let sep = if rest.starts_with('=') {
+            Some((1, false))
+        } else if rest.starts_with("\":\"") {
+            Some((3, true))
+        } else if rest.starts_with("\": \"") {
+            Some((4, true))
+        } else {
+            None
+        };
+        let Some((sep_len, quoted)) = sep else {
+            out.push_str(&text[pos..after_key]);
+            pos = after_key;
+            continue;
+        };
+        let value_start = after_key + sep_len;
+        let value_end = text[value_start..]
+            .find(|c: char| {
+                if quoted {
+                    c == '"'
+                } else {
+                    matches!(c, '&' | '"' | '\'' | ' ' | '\t' | ',' | '}' | ')')
+                }
+            })
+            .map(|offset| value_start + offset)
+            .unwrap_or(text.len());
+        out.push_str(&text[pos..value_start]);
+        if value_end > value_start {
+            out.push_str("[REDACTED]");
+        }
+        pos = value_end;
+    }
+    out.push_str(&text[pos..]);
+    out
+}
+
+// Telegram bot tokens travel in the URL path (`api.telegram.org/bot<id>:<secret>/…`),
+// so key=value masking never sees them.
+fn redact_telegram_bot_token(text: &str) -> String {
+    let bytes = text.as_bytes();
+    let mut out = String::with_capacity(text.len());
+    let mut pos = 0;
+    while let Some(found) = text[pos..].find("/bot") {
+        let marker = pos + found;
+        let id_start = marker + 4;
+        let mut cursor = id_start;
+        while cursor < bytes.len() && bytes[cursor].is_ascii_digit() {
+            cursor += 1;
+        }
+        if cursor > id_start && bytes.get(cursor) == Some(&b':') {
+            let secret_start = cursor + 1;
+            let mut secret_end = secret_start;
+            while secret_end < bytes.len()
+                && (bytes[secret_end].is_ascii_alphanumeric()
+                    || bytes[secret_end] == b'_'
+                    || bytes[secret_end] == b'-')
+            {
+                secret_end += 1;
+            }
+            if secret_end - secret_start >= 20 {
+                out.push_str(&text[pos..marker]);
+                out.push_str("/bot[REDACTED]");
+                pos = secret_end;
+                continue;
+            }
+        }
+        out.push_str(&text[pos..id_start]);
+        pos = id_start;
+    }
+    out.push_str(&text[pos..]);
+    out
 }
 
 fn log_bytes(log_path: &Path, stream: &str, bytes: &[u8]) {
@@ -751,6 +860,43 @@ fn log_bytes(log_path: &Path, stream: &str, bytes: &[u8]) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn redacts_lark_ws_url_credentials() {
+        let line = "connecting wss://open.feishu.cn/callback/ws?access_key=abc123DEF&ticket=t0k3n-v4lue&device_id=7";
+        let redacted = redact_secrets(line);
+        assert_eq!(
+            redacted,
+            "connecting wss://open.feishu.cn/callback/ws?access_key=[REDACTED]&ticket=[REDACTED]&device_id=7"
+        );
+    }
+
+    #[test]
+    fn redacts_json_secret_fields() {
+        let line = r#"config loaded {"appId":"cli_x","appSecret":"sHh-secret","botToken":"12:ab","encryptKey": "kk"}"#;
+        let redacted = redact_secrets(line);
+        assert!(!redacted.contains("sHh-secret"));
+        assert!(!redacted.contains("\"12:ab\""));
+        assert!(!redacted.contains("\"kk\""));
+        assert!(redacted.contains("\"appId\":\"cli_x\""));
+    }
+
+    #[test]
+    fn redacts_telegram_bot_token_in_url_path() {
+        let line = "GET https://api.telegram.org/bot123456789:AAHdqTcvCH1vGWJxfSeofSAs0K5PALDsaw/sendMessage failed";
+        assert_eq!(
+            redact_secrets(line),
+            "GET https://api.telegram.org/bot[REDACTED]/sendMessage failed"
+        );
+    }
+
+    #[test]
+    fn leaves_benign_lines_and_non_ascii_untouched(){
+        let line = "[out] [info]: [ 'ws', 'ws client ready' ] 已开启防休眠（Codex 任务进行中）";
+        assert_eq!(redact_secrets(line), line);
+        // A bare word containing a key name but no separator is untouched.
+        assert_eq!(redact_secrets("tokens counted: 42"), "tokens counted: 42");
+    }
 
     #[test]
     fn extracts_daemon_version_from_api_version_body() {
