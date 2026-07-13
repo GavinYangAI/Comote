@@ -517,3 +517,105 @@ test("wechat outbound queue lists replies and supports ack", async () => {
   assert.equal(ackResponse.status, 204);
   assert.deepEqual(afterAck, []);
 });
+
+// ---------------------------------------------------------------------------
+// E-4: /api/codex/transcript falls back to the connector's thread history
+// (thread/read via listRecentMessages) when the local transcript is empty.
+// ---------------------------------------------------------------------------
+
+async function fetchTranscript(state, query) {
+  const app = createServer(state);
+  const server = app.listen(0);
+  await new Promise((resolve) => server.once("listening", resolve));
+  const { port } = server.address();
+  const response = await fetch(`http://127.0.0.1:${port}/api/codex/transcript?${query}`);
+  const body = await response.json();
+  server.close();
+  return { response, body };
+}
+
+test("transcript API falls back to the connector's thread history when local is empty", async () => {
+  const state = createFakeState();
+  const calls = [];
+  state.transcript = {
+    listThread: (threadId) => ({ threadId, messages: [], total: 0, hasMore: false }),
+  };
+  state.connectors.desktop.listRecentMessages = async ({ threadId, limit }) => {
+    calls.push({ threadId, limit });
+    // The connector's real shape: oldest→newest, plus diagnostic underscore
+    // fields the API must not leak through.
+    return {
+      messages: [
+        { role: "user", text: "continue from Feishu" },
+        { role: "assistant", text: "done" },
+      ],
+      _rawSample: { id: "turn_1" },
+      _turnCount: 1,
+    };
+  };
+
+  const { response, body } = await fetchTranscript(state, "threadId=thread_9&limit=7");
+
+  assert.equal(response.status, 200);
+  // Same shape as the local transcript endpoint (newest-first messages), with
+  // source labeling the origin for the frontend.
+  assert.deepEqual(body, {
+    threadId: "thread_9",
+    messages: [
+      { role: "assistant", text: "done" },
+      { role: "user", text: "continue from Feishu" },
+    ],
+    total: 2,
+    hasMore: false,
+    source: "desktop",
+  });
+  assert.deepEqual(calls, [{ threadId: "thread_9", limit: 7 }]);
+});
+
+test("transcript API serves the local transcript when it has messages", async () => {
+  const state = createFakeState();
+  let desktopCalled = false;
+  state.transcript = {
+    listThread: (threadId) => ({
+      threadId,
+      messages: [{ role: "user", text: "hi", at: "2026-07-13T00:00:00.000Z" }],
+      total: 1,
+      hasMore: false,
+    }),
+  };
+  state.connectors.desktop.listRecentMessages = async () => {
+    desktopCalled = true;
+    return { messages: [] };
+  };
+
+  const { response, body } = await fetchTranscript(state, "threadId=thread_9");
+
+  assert.equal(response.status, 200);
+  assert.equal(body.source, "local");
+  assert.equal(body.messages.length, 1);
+  assert.equal(desktopCalled, false, "no connector round-trip when local has the record");
+});
+
+test("transcript API degrades to the empty local result when the connector read fails", async () => {
+  const state = createFakeState();
+  state.connectors.desktop.listRecentMessages = async () => {
+    throw new Error("Codex app-server 请求超时：thread/read");
+  };
+
+  const { response, body } = await fetchTranscript(state, "threadId=thread_9");
+
+  // Not connected / RPC failure must never become a 500 — the panel shows the
+  // (empty) local record instead.
+  assert.equal(response.status, 200);
+  assert.deepEqual(body, { threadId: "thread_9", messages: [], total: 0, hasMore: false, source: "local" });
+});
+
+test("transcript API returns empty local result when the connector has no record either", async () => {
+  const state = createFakeState();
+  state.connectors.desktop.listRecentMessages = async () => ({ messages: [], _rawSample: null, _turnCount: 0 });
+
+  const { response, body } = await fetchTranscript(state, "threadId=thread_9");
+
+  assert.equal(response.status, 200);
+  assert.deepEqual(body, { threadId: "thread_9", messages: [], total: 0, hasMore: false, source: "local" });
+});

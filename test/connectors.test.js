@@ -75,6 +75,7 @@ test("desktop connector surfaces the failure reason through getStatus", async ()
   const status = connector.getStatus();
   assert.equal(status.state, "not_connected");
   assert.match(status.lastError, /ECONNREFUSED/);
+  clearTimeout(connector.reconnectTimer); // don't let the first-connect retry run during the suite
 });
 
 test("desktop connector initializes through app-server JSON-RPC", async () => {
@@ -148,13 +149,18 @@ test("desktop connector treats 'Already initialized' as a successful connection"
   assert.equal(connector.getStatus().state, "connected");
 });
 
-test("desktop connector surfaces a connection failure instead of silently retrying", async () => {
+test("desktop connector surfaces a connection failure and schedules a quiet first-connect retry", async () => {
   const connector = new CodexDesktopConnector({
     transportFactory: () => new FailingTransport(),
   });
 
+  // The failure is surfaced to the caller immediately (no silent swallowing)…
   await assert.rejects(connector.initialize(), /ECONNREFUSED/);
   assert.equal(connector.getStatus().state, "not_connected");
+  // …while a low-frequency background retry is scheduled so the connector
+  // eventually comes up once codex is installed (A-5).
+  assert.ok(connector.reconnectTimer, "first-connect retry must be scheduled");
+  clearTimeout(connector.reconnectTimer);
 });
 
 test("desktop connector lists and starts Codex threads", async () => {
@@ -426,8 +432,14 @@ test("desktop connector lists the active workspace first, then project order", a
     }),
   );
   try {
-    const connector = new CodexDesktopConnector({ transport: new MemoryTransport(), codexStatePath: statePath });
-    const projects = await connector.listProjects();
+    const transport = new MemoryTransport();
+    const connector = new CodexDesktopConnector({ transport, codexStatePath: statePath });
+    // listProjects now also consults thread history for the merge (E-3);
+    // answer with an empty list so this test stays about workspace ordering.
+    const projectsPromise = connector.listProjects();
+    await flushAsyncWork();
+    transport.receive({ jsonrpc: "2.0", id: 1, result: { threads: [] } });
+    const projects = await projectsPromise;
     assert.deepEqual(
       projects.map((p) => [p.name, p.active]),
       [
@@ -1191,4 +1203,274 @@ test("resolveCodexCommand falls back to bare 'codex' on Linux when none exist", 
     }),
     "codex",
   );
+});
+
+// ---------------------------------------------------------------------------
+// E-3: listProjects merges the workspace list with thread-history projects.
+// ---------------------------------------------------------------------------
+
+test("listProjects merges workspace projects with thread-history projects", async () => {
+  const statePath = join(tmpdir(), `comote-codex-merge-${process.pid}.json`);
+  writeFileSync(
+    statePath,
+    JSON.stringify({
+      "active-workspace-roots": ["/repo/active"],
+      "project-order": ["/repo/comote"],
+      "electron-workspace-root-labels": { "/repo/comote": "Comote" },
+    }),
+  );
+  try {
+    const transport = new MemoryTransport();
+    const connector = new CodexDesktopConnector({ transport, codexStatePath: statePath });
+    const projectsPromise = connector.listProjects();
+    await flushAsyncWork();
+    assert.equal(transport.sent[0].method, "thread/list");
+    transport.receive({
+      jsonrpc: "2.0",
+      id: 1,
+      result: {
+        threads: [
+          // Already a workspace project — must be deduped, workspace entry wins.
+          { id: "t1", cwd: "/repo/comote", source: "cli" },
+          // Thread-only projects — appended after the workspace list, by name.
+          { id: "t2", cwd: "/repo/zeta", source: "cli" },
+          { id: "t3", cwd: "/repo/alpha" },
+        ],
+      },
+    });
+    const projects = await projectsPromise;
+    assert.deepEqual(
+      projects.map((p) => [p.name, p.path, p.source]),
+      [
+        ["active", "/repo/active", "codex-desktop"],
+        ["Comote", "/repo/comote", "codex-desktop"],
+        ["alpha", "/repo/alpha", "codex-desktop"],
+        ["zeta", "/repo/zeta", "codex-cli"],
+      ],
+    );
+    // Workspace ordering (active first) is preserved by the merge.
+    assert.equal(projects[0].active, true);
+  } finally {
+    rmSync(statePath, { force: true });
+  }
+});
+
+test("listProjects degrades to the workspace list when thread/list fails", async () => {
+  const statePath = join(tmpdir(), `comote-codex-degrade-${process.pid}.json`);
+  writeFileSync(statePath, JSON.stringify({ "active-workspace-roots": ["/repo/only"] }));
+  try {
+    const connector = new CodexDesktopConnector({
+      transport: new FailingTransport(),
+      codexStatePath: statePath,
+    });
+    const projects = await connector.listProjects();
+    assert.deepEqual(projects.map((p) => p.path), ["/repo/only"]);
+  } finally {
+    rmSync(statePath, { force: true });
+  }
+});
+
+test("listProjects still rejects when both sources are unavailable", async () => {
+  // Preserves discoverProjects' ability to tell "desktop offline" (keep the
+  // last known project list) apart from "reachable but empty" (clear it).
+  const connector = new CodexDesktopConnector({
+    transport: new FailingTransport(),
+    codexStatePath: "/nonexistent/codex-state.json",
+  });
+  await assert.rejects(connector.listProjects(), /ECONNREFUSED/);
+});
+
+// ---------------------------------------------------------------------------
+// C-4: the codex app-server child's stderr is captured (bounded) and surfaced
+// through lastError on initialize failure and disconnect.
+// ---------------------------------------------------------------------------
+
+async function waitFor(predicate, { timeout = 5000, interval = 5 } = {}) {
+  const start = Date.now();
+  while (!predicate()) {
+    if (Date.now() - start > timeout) {
+      throw new Error("waitFor: condition not met in time");
+    }
+    await new Promise((resolve) => setTimeout(resolve, interval));
+  }
+}
+
+test("StdioTransport keeps a bounded tail of the child's stderr", async () => {
+  // A child that writes >4KB to stderr and exits: the tail must retain the
+  // newest bytes and never exceed the 4KB cap.
+  const transport = new StdioTransport({
+    command: process.execPath,
+    args: ["-e", "process.stderr.write('x'.repeat(5000) + 'TAIL-END'); process.exit(1)"],
+  });
+  await transport.connect();
+  await waitFor(() => transport.getStderrTail().endsWith("TAIL-END"));
+  assert.ok(transport.getStderrTail().length <= 4096, "stderr tail must stay bounded");
+  await transport.close();
+});
+
+test("initialize failure surfaces the stderr tail through lastError, capped at 500 chars", async () => {
+  const transport = {
+    async connect() {
+      throw new Error("Codex app-server 连接已断开");
+    },
+    // Longer than the 500-char lastError cap on purpose.
+    getStderrTail: () => `${"y".repeat(600)} codex: 请先运行 codex login\n`,
+  };
+  const connector = new CodexDesktopConnector({ transport, command: "codex" });
+  await assert.rejects(connector.initialize(), /连接已断开/);
+  assert.match(connector.lastError, /连接已断开/);
+  assert.match(connector.lastError, /stderr: /);
+  assert.ok(connector.lastError.includes("codex: 请先运行 codex login"));
+  const stderrPart = connector.lastError.split("stderr: ")[1];
+  assert.ok(stderrPart.length <= 500, "lastError must not carry the full 4KB tail");
+  clearTimeout(connector.reconnectTimer);
+});
+
+test("initialize failure without a stderr-capable transport keeps the plain error", async () => {
+  // Injected transports (tests, future alternates) may not implement
+  // getStderrTail — the connector must defend with optional chaining.
+  const connector = new CodexDesktopConnector({ transportFactory: () => new FailingTransport() });
+  await assert.rejects(connector.initialize(), /ECONNREFUSED/);
+  assert.equal(connector.lastError, "ECONNREFUSED");
+  clearTimeout(connector.reconnectTimer);
+});
+
+test("a disconnect captures the stderr tail into lastError", async () => {
+  const transport = new MemoryTransport();
+  let transportCloseHandler = null;
+  transport.onClose = (handler) => {
+    transportCloseHandler = handler;
+  };
+  transport.getStderrTail = () => "thread 'main' panicked at 'not logged in'";
+  const connector = new CodexDesktopConnector({ transport });
+  await connector.client.connect();
+
+  transportCloseHandler?.();
+
+  assert.equal(connector.state, "reconnecting");
+  assert.match(connector.lastError, /stderr: thread 'main' panicked at 'not logged in'/);
+  clearTimeout(connector.reconnectTimer);
+});
+
+// ---------------------------------------------------------------------------
+// A-5: a FIRST connect failure schedules a quiet fixed-interval retry (the
+// exponential-backoff reconnect only ever ran after a successful connection).
+// ---------------------------------------------------------------------------
+
+// Transport that connects and answers `initialize` on its own, so retry loops
+// can complete without the test hand-feeding responses.
+class AutoInitTransport {
+  constructor() {
+    this.messageHandler = null;
+  }
+
+  async connect() {}
+
+  send(message) {
+    const payload = JSON.parse(message);
+    if (payload.method === "initialize") {
+      queueMicrotask(() =>
+        this.messageHandler?.(
+          JSON.stringify({ jsonrpc: "2.0", id: payload.id, result: { platformOs: "macos" } }),
+        ),
+      );
+    }
+  }
+
+  onMessage(handler) {
+    this.messageHandler = handler;
+  }
+
+  async close() {}
+}
+
+test("first-connect failure schedules a quiet retry that connects once codex appears", async () => {
+  let attempts = 0;
+  const connector = new CodexDesktopConnector({
+    firstConnectRetryMs: 5,
+    transportFactory: () => {
+      attempts += 1;
+      // codex "missing" on the first attempt, "installed" afterwards.
+      return attempts === 1 ? new FailingTransport() : new AutoInitTransport();
+    },
+  });
+  const events = [];
+  connector.onEvent = (event) => events.push(event.type);
+
+  await assert.rejects(connector.initialize(), /ECONNREFUSED/);
+  assert.ok(connector.reconnectTimer, "first-connect retry must be scheduled");
+  assert.equal(connector.state, "not_connected");
+
+  await waitFor(() => connector.state === "connected");
+  assert.ok(events.includes("reconnected"), "success goes through the normal reconnected event");
+  assert.ok(!events.includes("connectionLost"), "first-connect retries must stay silent");
+  assert.ok(!events.includes("connectionGaveUp"));
+});
+
+test("first-connect retry keeps polling silently while codex stays missing", async () => {
+  let attempts = 0;
+  const connector = new CodexDesktopConnector({
+    firstConnectRetryMs: 5,
+    transportFactory: () => {
+      attempts += 1;
+      return new FailingTransport();
+    },
+  });
+  const events = [];
+  connector.onEvent = (event) => events.push(event.type);
+
+  await assert.rejects(connector.initialize(), /ECONNREFUSED/);
+  // At least two background retries beyond the initial attempt.
+  await waitFor(() => attempts >= 3);
+  assert.equal(connector.state, "not_connected");
+  assert.deepEqual(events, [], "no events while retrying — unlimited but silent");
+  await waitFor(() => connector.reconnectTimer != null);
+  // Cleanup: an in-flight retry callback could reschedule after clearTimeout;
+  // marking the connector connected makes any straggler a no-op at next fire.
+  connector.state = "connected";
+  clearTimeout(connector.reconnectTimer);
+});
+
+test("manual initialize during a pending first-connect retry does not stack timers", async () => {
+  const connector = new CodexDesktopConnector({
+    firstConnectRetryMs: 60_000,
+    transportFactory: () => new FailingTransport(),
+  });
+  await assert.rejects(connector.initialize(), /ECONNREFUSED/);
+  const timer = connector.reconnectTimer;
+  assert.ok(timer);
+
+  // The UI retry button while the timer is pending: fails again immediately
+  // but must reuse the already-scheduled timer instead of adding another.
+  await assert.rejects(connector.initialize(), /ECONNREFUSED/);
+  assert.equal(connector.reconnectTimer, timer);
+  clearTimeout(connector.reconnectTimer);
+});
+
+test("a pending first-connect retry is a no-op after a manual initialize succeeded", async () => {
+  // A transport that fails until "codex gets installed", then self-answers.
+  const transport = new AutoInitTransport();
+  transport.fail = true;
+  const originalConnect = transport.connect.bind(transport);
+  transport.connect = async () => {
+    if (transport.fail) {
+      throw new Error("ECONNREFUSED");
+    }
+    return originalConnect();
+  };
+  const connector = new CodexDesktopConnector({ transport, firstConnectRetryMs: 5 });
+
+  await assert.rejects(connector.initialize(), /ECONNREFUSED/);
+  assert.ok(connector.reconnectTimer, "retry pending");
+
+  transport.fail = false;
+  await connector.initialize(); // manual retry (UI button) wins the race
+  assert.equal(connector.state, "connected");
+
+  const events = [];
+  connector.onEvent = (event) => events.push(event.type);
+  // Let the pending auto-retry fire: it must observe "connected" and do nothing.
+  await waitFor(() => connector.reconnectTimer == null);
+  assert.equal(connector.state, "connected");
+  assert.deepEqual(events, [], "no duplicate initialize/reconnected from the stale timer");
 });

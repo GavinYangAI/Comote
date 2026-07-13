@@ -161,6 +161,11 @@ export class JsonRpcClient {
  * Current Codex (0.131+) speaks newline-delimited JSON on stdio — the old
  * `--listen ws://` WebSocket transport was removed.
  */
+// Keep roughly the last 4KB of the child's stderr. Enough to hold the final
+// panic/log lines of a crashing or not-logged-in codex without growing
+// unboundedly on a chatty process.
+const STDERR_TAIL_MAX_CHARS = 4096;
+
 export class StdioTransport {
   constructor({ command = "codex", args = ["app-server"] } = {}) {
     this.command = command;
@@ -169,15 +174,24 @@ export class StdioTransport {
     this.messageHandler = null;
     this.closeHandler = null;
     this.buffer = "";
+    this.stderrTail = "";
   }
 
   async connect() {
     if (this.child) {
       return;
     }
+    // stderr is piped (not ignored): when codex is not logged in or crashes on
+    // startup, its stderr is the only diagnostic there is. We keep a bounded
+    // tail so the connector can surface it through lastError.
     const child = spawn(this.command, this.args, {
-      stdio: ["pipe", "pipe", "ignore"],
+      stdio: ["pipe", "pipe", "pipe"],
       env: spawnEnvFor(this.command),
+    });
+    this.stderrTail = "";
+    child.stderr?.setEncoding("utf8");
+    child.stderr?.on("data", (chunk) => {
+      this.stderrTail = (this.stderrTail + chunk).slice(-STDERR_TAIL_MAX_CHARS);
     });
     await new Promise((resolve, reject) => {
       child.once("spawn", resolve);
@@ -227,6 +241,12 @@ export class StdioTransport {
       throw new Error("codex app-server 进程未连接");
     }
     this.child.stdin.write(`${message}\n`);
+  }
+
+  // The bounded tail of the child's stderr (may be ""). Survives the child's
+  // exit so a post-mortem (initialize failure / disconnect) can still read it.
+  getStderrTail() {
+    return this.stderrTail;
   }
 
   onMessage(handler) {

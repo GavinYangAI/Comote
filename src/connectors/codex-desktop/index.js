@@ -15,6 +15,7 @@ export class CodexDesktopConnector {
     transportFactory = null,
     command = null,
     codexStatePath = `${homedir()}/.codex/.codex-global-state.json`,
+    firstConnectRetryMs = 30_000,
   } = {}) {
     this.transport = transport;
     this.command = command ?? resolveCodexCommand();
@@ -33,6 +34,10 @@ export class CodexDesktopConnector {
     this.reconnectTimer = null;
     this.heartbeatTimer = null;
     this.maxReconnectAttempts = 8;
+    // Fixed interval for the quiet first-connect retry loop (A-5). A first
+    // connect that fails usually means codex is not installed/running yet, so
+    // exponential backoff is wrong — poll slowly and silently forever instead.
+    this.firstConnectRetryMs = firstConnectRetryMs;
     this.lastTokenUsage = null;
     this.lastRateLimits = null;
     // itemId -> file changes, so a file-change approval can show the diff.
@@ -65,6 +70,15 @@ export class CodexDesktopConnector {
     }
     this.state = "reconnecting";
     this.stopHeartbeat();
+    // The dying child's stderr tail is the only clue to WHY it went away
+    // (not logged in, crash, …). Capture it now, before scheduleReconnect
+    // replaces the client (and with it the transport holding the tail).
+    const stderrTail = this.#stderrSummary();
+    if (stderrTail) {
+      this.lastError = this.lastError
+        ? `${this.lastError}\nstderr: ${stderrTail}`
+        : `codex app-server 连接已断开\nstderr: ${stderrTail}`;
+    }
     // A disconnect invalidates any in-flight turn: it can no longer reach
     // turn/completed, so its accumulated paths would otherwise bleed into the
     // next turn on the same thread after reconnect. Drop all accumulation —
@@ -100,6 +114,47 @@ export class CodexDesktopConnector {
       }
     }, delay);
     this.reconnectTimer.unref?.();
+  }
+
+  // A-5: quiet retry loop for a connector that has NEVER connected. Unlike
+  // scheduleReconnect (exponential backoff after a drop, bounded attempts,
+  // gives up loudly), this polls at a fixed slow interval forever and stays
+  // silent on failure — the common cause is simply that codex is not installed
+  // yet. On success it goes through the normal path and emits `reconnected`.
+  // Reuses `reconnectTimer` so the two mechanisms can never stack timers.
+  scheduleFirstConnectRetry() {
+    if (this.reconnectTimer) {
+      return;
+    }
+    this.reconnectTimer = setTimeout(async () => {
+      this.reconnectTimer = null;
+      // A manual initialize() (UI retry button) may have connected meanwhile.
+      if (this.state === "connected") {
+        return;
+      }
+      try {
+        await this.client.close().catch(() => {});
+        this.client = this.createClient();
+        await this.requestInitialize();
+        this.#emit({ type: "reconnected" });
+      } catch {
+        this.scheduleFirstConnectRetry();
+      }
+    }, this.firstConnectRetryMs);
+    // Never keep the process alive just to poll for codex.
+    this.reconnectTimer.unref?.();
+  }
+
+  // Bounded stderr summary for lastError: getStatus() feeds the UI/doctor, so
+  // cap at the last 500 chars rather than the transport's full 4KB tail. The
+  // transport is injectable (tests use in-memory ones without stderr), hence
+  // the optional-chaining defenses.
+  #stderrSummary() {
+    const tail = this.client?.transport?.getStderrTail?.();
+    if (typeof tail !== "string" || !tail.trim()) {
+      return null;
+    }
+    return tail.trim().slice(-500);
   }
 
   startHeartbeat() {
@@ -343,7 +398,19 @@ export class CodexDesktopConnector {
     if (this.state === "connected") {
       return this.getStatus();
     }
-    return this.requestInitialize();
+    try {
+      return await this.requestInitialize();
+    } catch (error) {
+      // First-connect failure (as opposed to a mid-session drop, which the
+      // exponential-backoff reconnect path owns — state === "reconnecting"
+      // there): schedule the quiet fixed-interval retry so the connector comes
+      // up on its own once the user installs/starts codex. The error still
+      // propagates so a manual retry (UI button) gets an immediate answer.
+      if (this.state !== "reconnecting") {
+        this.scheduleFirstConnectRetry();
+      }
+      throw error;
+    }
   }
 
   async requestInitialize() {
@@ -369,7 +436,12 @@ export class CodexDesktopConnector {
         this.startHeartbeat();
         return { alreadyInitialized: true };
       }
-      this.lastError = error?.message ?? String(error);
+      // Append the child's stderr tail (if the transport captured any): when
+      // codex spawns but dies immediately (not logged in, crash), the generic
+      // "连接已断开" alone says nothing actionable.
+      const base = error?.message ?? String(error);
+      const stderrTail = this.#stderrSummary();
+      this.lastError = stderrTail ? `${base}\nstderr: ${stderrTail}` : base;
       throw error;
     }
     this.state = "connected";
@@ -388,12 +460,44 @@ export class CodexDesktopConnector {
   }
 
   async listProjects({ limit = 100 } = {}) {
-    // Prefer Codex Desktop's own workspace list: the active workspace first,
-    // then its project order. Falls back to thread history if unavailable.
+    // Two sources, merged: Codex Desktop's own workspace list (active
+    // workspace first, then project order) AND projects derived from thread
+    // history. The workspace list alone hides any project that has
+    // conversations but is not (or no longer) a workspace — CLI-only work,
+    // removed workspaces. Deduped by path; workspace entries keep their order
+    // and win on conflict, thread-derived ones follow sorted by name.
     const workspaceProjects = readCodexWorkspaceProjects(this.codexStatePath);
-    if (workspaceProjects.length > 0) {
-      return workspaceProjects;
+    let threadProjects;
+    try {
+      threadProjects = await this.#projectsFromThreadHistory({ limit });
+    } catch (error) {
+      // thread/list unreachable (not connected, RPC error): degrade to the
+      // workspace list rather than failing the whole call. When there is no
+      // workspace list either, rethrow so callers keep distinguishing
+      // "desktop offline" from "desktop reachable but empty".
+      if (workspaceProjects.length > 0) {
+        return workspaceProjects;
+      }
+      throw error;
     }
+    if (workspaceProjects.length === 0) {
+      return threadProjects;
+    }
+    const seen = new Set(workspaceProjects.map((project) => project.path));
+    const merged = [...workspaceProjects];
+    for (const project of threadProjects) {
+      if (!seen.has(project.path)) {
+        seen.add(project.path);
+        merged.push(project);
+      }
+    }
+    return merged;
+  }
+
+  // Derives projects from thread history cwds. Source semantics unchanged:
+  // thread-derived projects are tagged codex-cli / codex-desktop (or both)
+  // per isCliThread. Sorted by name.
+  async #projectsFromThreadHistory({ limit }) {
     const response = await this.listThreads({ cwd: null, limit });
     const threads = normalizeThreadList(response);
     const projectsByPath = new Map();

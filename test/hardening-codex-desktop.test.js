@@ -30,7 +30,13 @@ test("[M7] listProjects derives a clean name from Windows-style workspace roots"
   );
   t.after(() => rmSync(statePath, { force: true }));
 
-  const connector = new CodexDesktopConnector({ codexStatePath: statePath });
+  // listProjects also consults thread history (E-3 merge); inject an offline
+  // transport so the test never spawns a real codex — the merge degrades to
+  // the workspace list, which is exactly what this test asserts on.
+  const connector = new CodexDesktopConnector({
+    codexStatePath: statePath,
+    transport: { async connect() { throw new Error("offline"); } },
+  });
   const projects = await connector.listProjects();
 
   const names = projects.map((p) => p.name);

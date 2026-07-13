@@ -198,8 +198,40 @@ async function handleApi(request, response, state) {
     if (threadId) {
       const limit = Number(url.searchParams.get("limit") || 20);
       const offset = Number(url.searchParams.get("offset") || 0);
-      sendJson(response, 200, state.transcript?.listThread?.(threadId, { limit, offset })
-        ?? { threadId, messages: [], total: 0, hasMore: false });
+      const local = state.transcript?.listThread?.(threadId, { limit, offset })
+        ?? { threadId, messages: [], total: 0, hasMore: false };
+      if ((local.messages?.length ?? 0) === 0) {
+        // No local record — a genuine Codex thread Comote never relayed (the
+        // local transcript only holds phone-bridge traffic). Fall back to
+        // reading the thread history straight from the connector (thread/read).
+        // Any failure (not connected, RPC error) degrades to the empty local
+        // result instead of a 500. `source` lets the frontend label the origin.
+        try {
+          const recent = await state.connectors?.desktop?.listRecentMessages?.({ threadId, limit });
+          const messages = (recent?.messages ?? [])
+            .map((message) => ({
+              role: message?.role === "user" ? "user" : "assistant",
+              text: message?.text ?? "",
+            }))
+            .filter((message) => message.text)
+            // The local transcript pages newest-first and the frontend
+            // reverses for display — match that order.
+            .reverse();
+          if (messages.length > 0) {
+            sendJson(response, 200, {
+              threadId,
+              messages,
+              total: messages.length,
+              hasMore: false,
+              source: "desktop",
+            });
+            return;
+          }
+        } catch {
+          // Fall through to the local (empty) result below.
+        }
+      }
+      sendJson(response, 200, { ...local, source: "local" });
       return;
     }
     sendJson(response, 200, state.transcript?.list?.() ?? []);
