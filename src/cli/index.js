@@ -67,7 +67,7 @@ function readPackageVersion() {
 
 export function usageText() {
   const lines = [];
-  lines.push("comote — local remote companion for Codex Desktop");
+  lines.push("comote — local remote companion for Codex");
   lines.push("");
   lines.push("Usage:");
   lines.push("  comote                 Boot the daemon (foreground)");

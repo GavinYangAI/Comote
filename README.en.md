@@ -4,7 +4,7 @@
 
 **A remote control for Codex, in your pocket · Runs locally · End-to-end private**
 
-Connect the [Codex Desktop](https://openai.com/codex) on your computer to Feishu / WeChat / DingTalk / Telegram, so you can keep directing your Codex agent from the subway, from a client's office, from bed at midnight — without exposing your machine to the public internet, renting a server, or installing a pile of middleware.
+Connect the [Codex](https://openai.com/codex) on your computer (the ChatGPT desktop app, formerly Codex Desktop; or the Codex CLI) to Feishu / WeChat / DingTalk / Telegram, so you can keep directing your Codex agent from the subway, from a client's office, from bed at midnight — without exposing your machine to the public internet, renting a server, or installing a pile of middleware.
 
 [中文](./README.md) · [Quick Start](#quick-start) · [FAQ](#faq) · [Repo](https://github.com/GavinYangAI/comote)
 
@@ -14,13 +14,13 @@ Connect the [Codex Desktop](https://openai.com/codex) on your computer to Feishu
 
 ## What is Comote
 
-Whether you use Codex to write code or to crunch data, organize documents, run research, and draft — Comote is the same phone remote for all of it. It's built for **anyone running Codex CLI / Codex Desktop locally**, not just programmers.
+Whether you use Codex to write code or to crunch data, organize documents, run research, and draft — Comote is the same phone remote for all of it. It's built for **anyone running Codex locally** (whether via the ChatGPT desktop app or the Codex CLI), not just programmers.
 
 **Out for lunch**, you remember how to fix that morning's bug. You pull out your phone and message in Feishu:
 
 > `Continue this morning's thread — change RetryPolicy.maxAttempts from 3 to 5 and run the tests`
 
-The Mac at the office receives it, Codex Desktop gets to work, and before you're back at your desk the Feishu card has updated: "Tests pass — want me to commit?" You tap "Approve".
+The Mac at the office receives it, Codex gets to work, and before you're back at your desk the Feishu card has updated: "Tests pass — want me to commit?" You tap "Approve".
 
 **In a meeting / on your commute**, a batch of chores comes to mind and you'd rather not wait until you're back at the computer:
 
@@ -46,7 +46,7 @@ By the time you're done and back at your desk, that tidy minutes table is alread
 - **Multiple channels in parallel** — Feishu, WeChat, DingTalk, and Telegram can all be bound at once without stepping on each other
 - **Extensible** — add a new IM by implementing a channel adapter; add a new agent backend by implementing a connector
 
-> **About the official Codex mobile app**: OpenAI ships its own ChatGPT/Codex mobile clients, but they only serve ChatGPT subscribers — people running Codex CLI / Codex Desktop with an API key can't use them, because the app simply can't see your local threads. Comote is for exactly those users: your Codex runs on your computer, on your own key, and the phone is just a remote. The day the official app supports API users remotely controlling local Codex, we'll retire.
+> **About the official Codex mobile app**: OpenAI ships its own ChatGPT/Codex mobile clients, but they only serve ChatGPT subscribers — people running local Codex (CLI or desktop app) with an API key can't use them, because the app simply can't see your local threads. Comote is for exactly those users: your Codex runs on your computer, on your own key, and the phone is just a remote. The day the official app supports API users remotely controlling local Codex, we'll retire.
 
 ## Supported channels
 
@@ -62,6 +62,17 @@ By the time you're done and back at your desk, that tidy minutes table is alread
 > **Languages**: the UI supports six languages — 中文 (default), English, 日本語, 한국어, Français, Español. Switch from the "Language" dropdown on the Web settings page; it **takes effect instantly and persists** (written to `settings.locale` in state.json) and covers all user-facing copy — each IM's chat replies and cards, and the Web settings page (server runtime logs in eventLog stay in the original language and don't follow the switch). It's also available over the API: `GET /api/settings` returns `{ locale, supported }`, `PUT /api/settings { locale }` switches.
 
 ## Quick Start
+
+### Prerequisites
+
+You need Codex on this machine — either one:
+
+- the **ChatGPT desktop app** (formerly Codex Desktop) — install it from [openai.com/codex](https://openai.com/codex); it bundles the codex binary;
+- the **Codex CLI** — `npm install -g @openai/codex`.
+
+And you need to be signed in: sign in inside the desktop app, or run `codex login` once.
+
+Comote talks to Codex through `codex app-server` (stdio JSON-RPC) and launches it as a child process automatically — **no Codex window needs to stay open**.
 
 ### 1. Download and install
 
@@ -130,12 +141,12 @@ WeChat / Feishu / DingTalk / Telegram bot
 │  └─ Codex Connector      │  ← speaks app-server JSON-RPC
 └────────────┬─────────────┘
              ▼
-   Codex Desktop / Codex CLI
+   codex app-server (the codex bundled with the ChatGPT desktop app, or the Codex CLI)
 ```
 
 The desktop side is wrapped with [Tauri](https://tauri.app/); the Node daemon launches as a sidecar and listens only on the loopback address.
 
-**Truly local-first: no step in the chain relays through the public internet.** The daemon binds only to `127.0.0.1`; all authorizations, tokens, and session history live locally under `~/.comote/`, nothing is uploaded to any server. The phone-side IM bot pushes to your daemon through each platform's own service (Feishu over a WebSocket long connection, DingTalk over a Stream long connection, WeChat over iLink getupdates polling, Telegram over getUpdates long polling), and the daemon talks to Codex Desktop over localhost.
+**Truly local-first: no step in the chain relays through the public internet.** The daemon binds only to `127.0.0.1`; all authorizations, tokens, and session history live locally under `~/.comote/`, nothing is uploaded to any server. The phone-side IM bot pushes to your daemon through each platform's own service (Feishu over a WebSocket long connection, DingTalk over a Stream long connection, WeChat over iLink getupdates polling, Telegram over getUpdates long polling), and the daemon talks directly to its local `codex app-server` child process.
 
 ## Configuration and reference
 
@@ -152,6 +163,7 @@ Common environment variables:
 |---|---|
 | `PORT` | daemon listen port (unset → built-in default; you normally don't touch it) |
 | `COMOTE_STATE_PATH` | path to the persisted state file (default `.comote/state.json`) |
+| `COMOTE_CODEX_PATH` | explicit full path to the codex executable — takes highest priority (for custom install locations) |
 | `COMOTE_LOCAL_API_TOKEN` | if set, every `/api/*` call must carry this token |
 | `COMOTE_WECHAT_ACCOUNT_ID` | distinguishes multiple WeChat accounts bound on one machine (default `default`) |
 
@@ -173,7 +185,7 @@ Command cheat sheet:
 <details>
 <summary>Want to run Comote on a headless Linux VPS with no monitor and no desktop environment? You can — there's a pure command-line headless daemon that needs no GUI / webkit.</summary>
 
-**What it is** — the full app-server connector (threads, streaming, exec / applyPatch approvals) works exactly the same, because Comote talks to `codex app-server` (a subcommand of the Codex CLI), **not** the Codex Desktop GUI. So no desktop environment is required.
+**What it is** — the full app-server connector (threads, streaming, exec / applyPatch approvals) works exactly the same, because Comote talks to `codex app-server` (a subcommand of codex), **not** to any GUI (such as the ChatGPT desktop app). So no desktop environment is required.
 
 **Prerequisites**
 
@@ -275,7 +287,7 @@ No — purely local. See [How it works](#how-it-works) above for the chain detai
 
 **Q: Can several people share one daemon?**
 
-Yes. Each chat identity must be bound / confirmed individually — authorization is per-identity. Note, though: all authorized identities share the same Codex Desktop and can see each other's thread lists.
+Yes. Each chat identity must be bound / confirmed individually — authorization is per-identity. Note, though: all authorized identities share the same local Codex and can see each other's thread lists.
 
 **Q: Is the WeChat integration compliant?**
 
@@ -295,7 +307,7 @@ The daemon is single-machine for now. If you have several computers, run a separ
 **Q: What happens if the connection drops?**
 
 - IM push service goes down: your messages can't come in for a while; once it recovers, Comote remembers where it last read and picks up from there, backfilling whatever piled up in the meantime.
-- Codex Desktop crashes: the daemon reconnects automatically and messages queue in the meantime.
+- Codex (the app-server child process) crashes: the daemon reconnects automatically and messages queue in the meantime.
 - The daemon goes down: your messages stay on the IM server side and the daemon picks them up once it's back.
 
 </details>

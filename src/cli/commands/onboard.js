@@ -52,11 +52,11 @@ export async function runWizard({
   const line = (s = "") => write(`${s}\n`);
 
   line(r.bold("Comote setup wizard"));
-  line(r.dim("Get your bot talking to Codex Desktop in a few steps."));
+  line(r.dim("Get your bot talking to Codex in a few steps."));
   line();
 
   // --- Step 1: connect Codex -----------------------------------------------
-  line(r.bold("[1/5] Connecting Codex Desktop…"));
+  line(r.bold("[1/5] Connecting Codex…"));
   let connected = false;
   try {
     await client.post("/api/connectors/codex-desktop/auto-connect");
@@ -68,10 +68,10 @@ export async function runWizard({
     line(r.yellow(`  Could not reach the Codex connector: ${error?.message || error}`));
   }
   if (connected) {
-    line(r.green("  Codex Desktop connected."));
+    line(r.green("  Codex connected."));
   } else {
-    line(r.yellow("  Codex Desktop is not connected."));
-    line(r.dim("  Install Codex Desktop and sign in, then re-run `comote onboard`."));
+    line(r.yellow("  Codex is not connected."));
+    line(r.dim("  Install the ChatGPT desktop app or Codex CLI (npm install -g @openai/codex) and sign in, then re-run `comote onboard`."));
     line(r.dim("  Continuing setup anyway so your channel is ready."));
   }
   line();
@@ -142,7 +142,7 @@ export async function runWizard({
   line();
   line(r.green("Setup complete."));
   if (!connected) {
-    line(r.yellow("Reminder: Codex Desktop was not connected — sign in before you chat."));
+    line(r.yellow("Reminder: Codex was not connected — sign in before you chat."));
   }
   return 0;
 }

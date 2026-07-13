@@ -807,7 +807,7 @@ test("onboard: happy token-channel path configures + starts the channel", async 
   assert.ok(start, "expected runtime/start to fire");
 
   // Codex connected + final guidance about authorizing the first sender.
-  assert.match(text, /Codex Desktop connected/);
+  assert.match(text, /Codex connected/);
   assert.match(text, /telegram is running/);
   assert.match(text, /comote identities pending/);
   assert.match(text, /comote confirm telegram:<id>/);
@@ -837,14 +837,14 @@ test("onboard: codex-not-connected warns but continues to channel setup", async 
 
   // Warns about Codex but still completes the rest of the wizard (exit 0).
   assert.equal(code, 0);
-  assert.match(text, /Codex Desktop is not connected/);
-  assert.match(text, /Install Codex Desktop and sign in/);
+  assert.match(text, /Codex is not connected/);
+  assert.match(text, /Install the ChatGPT desktop app or Codex CLI \(npm install -g @openai\/codex\) and sign in/);
   assert.match(text, /Continuing setup anyway/);
   // Config still happened despite the warning.
   assert.ok(
     client.calls.some((c) => c.method === "PUT" && c.path === "/api/channels/telegram/config"),
   );
-  assert.match(text, /Reminder: Codex Desktop was not connected/);
+  assert.match(text, /Reminder: Codex was not connected/);
 });
 
 // ---------------------------------------------------------------------------
