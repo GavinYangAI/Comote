@@ -1,6 +1,14 @@
 {
   "name": "comote",
   "version": "0.7.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/GavinYangAI/Comote.git"
+  },
+  "homepage": "https://github.com/GavinYangAI/Comote#readme",
+  "bugs": {
+    "url": "https://github.com/GavinYangAI/Comote/issues"
+  },
   "private": false,
   "type": "module",
   "description": "Comote local remote companion for Codex Desktop.",

@@ -1046,7 +1046,9 @@ test("doctor codex login: auth.json presence drives PASS/WARN and honors CODEX_H
     home: () => "/Users/you",
   });
   assert.equal(missing.level, "warn");
-  assert.match(missing.detail, /\/srv\/codex-home/);
+  // Separator-agnostic: checkCodexLogin joins with the HOST separator, and
+  // this test runs on the Windows CI too.
+  assert.match(missing.detail, /[\\/]srv[\\/]codex-home/);
   assert.match(missing.detail, /codex login/);
 });
 

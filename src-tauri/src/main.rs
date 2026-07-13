@@ -883,9 +883,10 @@ mod tests {
 
     #[test]
     fn redacts_telegram_bot_token_in_url_path() {
-        let line = "GET https://api.telegram.org/bot123456789:AAHdqTcvCH1vGWJxfSeofSAs0K5PALDsaw/sendMessage failed";
+        let fake_token = format!("{}:{}", "123456789", "A".repeat(34));
+        let line = format!("GET https://api.telegram.org/bot{fake_token}/sendMessage failed");
         assert_eq!(
-            redact_secrets(line),
+            redact_secrets(&line),
             "GET https://api.telegram.org/bot[REDACTED]/sendMessage failed"
         );
     }
