@@ -168,6 +168,10 @@ enum ExistingService {
 // extracted node.exe plus Node loading the bundled deps can take well over the
 // old 12s budget. Give it generous headroom before declaring failure.
 const READY_TIMEOUT: Duration = Duration::from_secs(40);
+// Number of trailing lines of the sidecar's own stderr log to fold into the
+// launch log when the daemon never comes up. A startup crash is only a few
+// lines; the cap guards a long-lived daemon that later died with a large log.
+const STDERR_TAIL_LINES: usize = 40;
 
 fn main() {
     let app = tauri::Builder::default()
@@ -256,6 +260,11 @@ fn main() {
                     navigate_to_service(&window_for_wait, PORT);
                 } else {
                     log_line(&log_for_wait, "Service did not become ready before timeout");
+                    // The reason the daemon never listened lives in its own
+                    // stderr log (the Windows manual path redirects there), not
+                    // in this launch log — fold the tail in so the one file the
+                    // failure page points at actually explains the failure.
+                    append_sidecar_stderr_tail(&log_for_wait);
                     show_launch_error(&window_for_wait, &log_for_wait);
                 }
             });
@@ -508,6 +517,17 @@ fn start_manual_comote_node(
             .create(true)
             .append(true)
             .open(log_dir.join("comote-node.stderr.log"))?;
+        // Record where the sidecar's own output goes: if the daemon starts but
+        // later dies, this is the only trail to it, and it makes the stderr log
+        // discoverable even when the tail-fold (on timeout) doesn't fire.
+        log_line(
+            log_path,
+            &format!(
+                "comote-node logs: stdout={} stderr={}",
+                log_dir.join("comote-node.stdout.log").to_string_lossy(),
+                log_dir.join("comote-node.stderr.log").to_string_lossy()
+            ),
+        );
         let executable = windows_manual_sidecar_candidates(resource_dir)
             .into_iter()
             .find(|candidate| candidate.exists())
@@ -732,6 +752,46 @@ fn save_keep_daemon_alive_to_dir(app_data_dir: &Path, enabled: bool) -> std::io:
 fn keep_daemon_alive_from_settings_body(body: &str) -> bool {
     let compact: String = body.chars().filter(|c| !c.is_whitespace()).collect();
     compact.contains("\"keepDaemonAlive\":true")
+}
+
+// The daemon's crash output (a failed import, a throw before listen(), an
+// EADDRINUSE) is written to comote-node.stderr.log by the Windows manual path —
+// NOT to comote-launch.log, which is the file the failure page tells users to
+// send. Fold the tail of that stderr log into the launch log so the one file
+// users are pointed at actually explains why startup failed. Each line goes
+// through log_line, so secrets in the sidecar output are redacted here too.
+// No-op when the stderr log is absent (non-Windows path) or empty.
+fn append_sidecar_stderr_tail(launch_log: &Path) {
+    let Some(dir) = launch_log.parent() else {
+        return;
+    };
+    let stderr_path = dir.join("comote-node.stderr.log");
+    let Ok(contents) = fs::read_to_string(&stderr_path) else {
+        return;
+    };
+    let tail = stderr_tail_lines(&contents, STDERR_TAIL_LINES);
+    if tail.is_empty() {
+        return;
+    }
+    log_line(
+        launch_log,
+        &format!(
+            "--- comote-node.stderr.log tail ({}) ---",
+            stderr_path.to_string_lossy()
+        ),
+    );
+    for line in tail {
+        log_line(launch_log, line);
+    }
+    log_line(launch_log, "--- end comote-node.stderr.log tail ---");
+}
+
+// The last `max_lines` non-blank lines of a log body, in original order. Pure /
+// no I/O so the tail logic can be unit-tested without touching the filesystem.
+fn stderr_tail_lines(contents: &str, max_lines: usize) -> Vec<&str> {
+    let lines: Vec<&str> = contents.lines().filter(|line| !line.trim().is_empty()).collect();
+    let start = lines.len().saturating_sub(max_lines);
+    lines[start..].to_vec()
 }
 
 fn log_line(log_path: &Path, message: &str) {
@@ -1015,6 +1075,61 @@ mod tests {
         assert!(candidates.contains(&resource_dir.join("comote-node-x86_64-pc-windows-msvc.exe")));
         assert!(candidates.contains(&resource_dir.join("comote-node-aarch64-pc-windows-msvc.exe")));
         assert!(candidates.contains(&resource_dir.join("binaries").join("comote-node.exe")));
+    }
+
+    #[test]
+    fn stderr_tail_keeps_last_lines_in_order_and_drops_blanks() {
+        let body = "line1\n\nline2\n   \nline3\nline4\n";
+        // Cap smaller than the content: keep the final N non-blank lines, order preserved.
+        assert_eq!(stderr_tail_lines(body, 2), vec!["line3", "line4"]);
+        // Cap larger than the content: all non-blank lines, blanks removed.
+        assert_eq!(stderr_tail_lines(body, 10), vec!["line1", "line2", "line3", "line4"]);
+        // Nothing worth showing.
+        assert!(stderr_tail_lines("\n   \n\n", 5).is_empty());
+        assert!(stderr_tail_lines("", 5).is_empty());
+    }
+
+    #[test]
+    fn append_sidecar_stderr_tail_folds_crash_reason_into_launch_log() {
+        let dir = std::env::temp_dir().join(format!(
+            "comote-stderr-tail-{}-{}",
+            std::process::id(),
+            line!()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        let launch_log = dir.join("comote-launch.log");
+        fs::write(&launch_log, "--- Comote launching ---\n").unwrap();
+        fs::write(
+            dir.join("comote-node.stderr.log"),
+            "Error: Cannot find module './app.js'\n    at ...\n",
+        )
+        .unwrap();
+
+        append_sidecar_stderr_tail(&launch_log);
+
+        let folded = fs::read_to_string(&launch_log).unwrap();
+        assert!(folded.contains("comote-node.stderr.log tail"));
+        assert!(folded.contains("Cannot find module './app.js'"));
+        assert!(folded.contains("end comote-node.stderr.log tail"));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn append_sidecar_stderr_tail_is_noop_without_stderr_log() {
+        let dir = std::env::temp_dir().join(format!(
+            "comote-stderr-none-{}-{}",
+            std::process::id(),
+            line!()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        let launch_log = dir.join("comote-launch.log");
+        fs::write(&launch_log, "before\n").unwrap();
+
+        // No comote-node.stderr.log next to it → nothing appended.
+        append_sidecar_stderr_tail(&launch_log);
+
+        assert_eq!(fs::read_to_string(&launch_log).unwrap(), "before\n");
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
