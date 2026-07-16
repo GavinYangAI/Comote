@@ -7,6 +7,16 @@ GitHub Release notes, so keep each version's heading as `## vX.Y.Z`.
 本文件记录 Comote 的更新内容。发版流程会按推送的 `vX.Y.Z` tag 自动抽取对应
 段落作为 GitHub Release 说明，请保持每个版本标题为 `## vX.Y.Z`。
 
+## v0.7.1
+
+### 🐛 Fixes
+
+- **Windows launch failures are now diagnosable.** When the bundled Node service never comes up, the daemon's own crash output (a failed import, an error before it starts listening, a port conflict) was written to a separate `comote-node.stderr.log` — but the failure screen only pointed at `comote-launch.log`, so the file users sent never contained the real reason. That stderr tail is now folded into `comote-launch.log`, and the sidecar log paths are recorded at startup. One file to send, and it explains the failure.
+
+### 🐛 修复
+
+- **Windows 启动失败现在可诊断了。** 内置 Node 服务起不来时，daemon 自身的崩溃输出（依赖加载失败、监听前抛异常、端口冲突等）原本被写到单独的 `comote-node.stderr.log`，而失败页只指向 `comote-launch.log`，导致用户发来的日志里根本没有真实原因。现在这份 stderr 的尾部会并入 `comote-launch.log`，并在启动时记录 sidecar 日志路径。只需发一个文件，且它能说明失败原因。
+
 ## v0.7.0
 
 ### ✨ What's New
