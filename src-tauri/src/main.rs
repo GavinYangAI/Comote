@@ -227,16 +227,55 @@ fn main() {
                     return Ok(());
                 }
                 ExistingService::Reusable(pid) => {
-                    log_line(
-                        &log_path,
-                        &format!(
-                            "Existing service matches app version (pid {}); reusing without starting sidecar",
-                            pid.map(|p| p.to_string()).unwrap_or_else(|| "unknown".into())
-                        ),
-                    );
-                    // Adopt the daemon by pid so a quit with keep-alive OFF can
-                    // still stop it. With no pid we can only leave it running.
-                    pid.map(ComoteChild::Pid)
+                    // A package version is not a source revision. During `tauri
+                    // dev`, always restart an adopted daemon so same-version
+                    // frontend/backend edits cannot be masked by keep-alive.
+                    if cfg!(debug_assertions) {
+                        let Some(pid) = pid else {
+                            log_line(
+                                &log_path,
+                                "Development launch found a reusable daemon without a pid; refusing stale reuse",
+                            );
+                            show_launch_error(&window, &log_path);
+                            app.manage(ComoteSidecar(Mutex::new(None)));
+                            return Ok(());
+                        };
+                        log_line(
+                            &log_path,
+                            &format!(
+                                "Development launch restarting existing daemon pid {pid} so current sources are loaded"
+                            ),
+                        );
+                        ComoteChild::Pid(pid).graceful_stop();
+                        if !wait_for_service_shutdown(PORT, Duration::from_secs(5)) {
+                            log_line(
+                                &log_path,
+                                "Existing development daemon did not release the service port",
+                            );
+                            show_launch_error(&window, &log_path);
+                            app.manage(ComoteSidecar(Mutex::new(None)));
+                            return Ok(());
+                        }
+                        match start_comote_sidecar(app, PORT, &log_path) {
+                            Ok(child) => Some(child),
+                            Err(error) => {
+                                log_line(&log_path, &format!("Failed to restart development sidecar: {error}"));
+                                show_launch_error(&window, &log_path);
+                                None
+                            }
+                        }
+                    } else {
+                        log_line(
+                            &log_path,
+                            &format!(
+                                "Existing service matches app version (pid {}); reusing without starting sidecar",
+                                pid.map(|p| p.to_string()).unwrap_or_else(|| "unknown".into())
+                            ),
+                        );
+                        // Adopt the daemon by pid so a quit with keep-alive OFF can
+                        // still stop it. With no pid we can only leave it running.
+                        pid.map(ComoteChild::Pid)
+                    }
                 }
                 ExistingService::None => match start_comote_sidecar(app, PORT, &log_path) {
                     Ok(child) => Some(child),
@@ -636,6 +675,17 @@ fn wait_for_service(port: u16, timeout: Duration) -> bool {
         thread::sleep(Duration::from_millis(200));
     }
     false
+}
+
+fn wait_for_service_shutdown(port: u16, timeout: Duration) -> bool {
+    let deadline = Instant::now() + timeout;
+    while Instant::now() < deadline {
+        if TcpStream::connect(("127.0.0.1", port)).is_err() {
+            return true;
+        }
+        thread::sleep(Duration::from_millis(100));
+    }
+    TcpStream::connect(("127.0.0.1", port)).is_err()
 }
 
 // Outcome of probing the daemon port. Distinguishing "nothing is listening"

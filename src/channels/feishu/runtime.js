@@ -1,9 +1,11 @@
 import { BaseChannelRuntime } from "../base/runtime.js";
 import { routerReplyToSemantic } from "../base/messages.js";
+import { EditableApprovalMessages } from "../base/editable-approval-messages.js";
 import { approvalResolvedCard } from "./cards.js";
 import { createFeishuRenderer } from "./renderer.js";
 import { classifyMedia, resolveWithinProject } from "../../core/paths.js";
 import { t } from "../../core/i18n/index.js";
+import { approvalDetail } from "../base/approval-format.js";
 
 // Re-exported for back-compat: the media size guard now lives in the renderer
 // (A5), but external references still import it from here.
@@ -41,6 +43,18 @@ export class FeishuRuntimeService extends BaseChannelRuntime {
       dedupMax: 500,
     });
     this.cardUpdateIntervalMs = cardUpdateIntervalMs;
+    this.approvalMessages = new EditableApprovalMessages({
+      update: async (message, resolution) => {
+        await this.driver.updateCard({
+          messageId: message.messageId,
+          card: approvalResolvedCard({
+            code: resolution.code,
+            decision: resolution.decision,
+            detail: resolution.approval ? approvalDetail(resolution.approval) : "",
+          }),
+        });
+      },
+    });
     // threadId -> { messageId, conversationId, lastSentAt, pendingCard, timer }
     this.cardSessions = new Map();
     // Feishu delivers events at-least-once and redelivers when the consumer is
@@ -57,6 +71,14 @@ export class FeishuRuntimeService extends BaseChannelRuntime {
   // one card shape.
   buildStatusCard(status) {
     return this.renderer.buildStatusCard(status);
+  }
+
+  rememberApprovalMessage(code, message) {
+    return this.approvalMessages.remember(code, message);
+  }
+
+  resolveApprovalMessage({ code, decision, approval = null, fallback = null }) {
+    return this.approvalMessages.resolve({ code, decision, approval, fallback });
   }
 
   // Override start() to preserve two feishu-specific guarantees the base does
@@ -350,15 +372,11 @@ export class FeishuRuntimeService extends BaseChannelRuntime {
         return this.deniedToast();
       }
       if (action.messageId && this.driver?.updateCard) {
-        await this.driver
-          .updateCard({
-            messageId: action.messageId,
-            card: approvalResolvedCard({
-              code: action.value.code,
-              decision: action.value.decision,
-            }),
-          })
-          .catch(() => {});
+        await this.resolveApprovalMessage({
+          code: action.value.code,
+          decision: action.value.decision,
+          fallback: { messageId: action.messageId, conversationId: action.chatId },
+        }).catch(() => {});
       }
       const accepted = action.value.decision === "accept" || action.value.decision === "acceptForSession";
       return {

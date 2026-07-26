@@ -48,11 +48,26 @@ export function approvalCardData({ shortCode, detail }) {
 
 export function approvalResolvedCardData({ code, decision }) {
   const accepted = decision === "accept" || decision === "acceptForSession";
+  const title = accepted ? t("card.approval.accepted", { code }) : t("card.approval.rejected", { code });
   return {
-    title: accepted ? t("card.approval.accepted", { code }) : t("card.approval.rejected", { code }),
+    title,
     body: accepted ? t("card.approval.acceptedBody") : t("card.approval.rejectedBody"),
     accepted,
+    done: true,
+    statusLabel: title,
+    statusType: accepted ? "primary" : "danger",
+    statusParams: null,
+    approveLabel: accepted ? title : "",
+    sessionLabel: "",
+    rejectLabel: accepted ? "" : title,
+    approveParams: null,
+    sessionParams: null,
+    rejectParams: null,
   };
+}
+
+export function approvalResolvedParamMap({ code, decision }) {
+  return toParamMap(approvalResolvedCardData({ code, decision }));
 }
 
 // Builds the picker template data. The loop container is bound to a JSON-stringified

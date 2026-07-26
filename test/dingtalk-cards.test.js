@@ -4,6 +4,7 @@ import {
   toParamMap,
   approvalCardData,
   approvalResolvedCardData,
+  approvalResolvedParamMap,
   pickerCardData,
   statusCardData,
   PICKER_OPTIONS_KEY,
@@ -61,4 +62,10 @@ test("approvalResolvedCardData reflects the decision", () => {
   assert.equal(approvalResolvedCardData({ code: "a1", decision: "acceptForSession" }).accepted, true);
   const rejected = approvalResolvedCardData({ code: "a1", decision: "decline" });
   assert.equal(rejected.accepted, false);
+  const map = approvalResolvedParamMap({ code: "a1", decision: "decline" });
+  assert.equal(map.done, "true");
+  assert.equal(map.statusType, "danger");
+  assert.equal(map.approveParams, "");
+  assert.equal(map.sessionParams, "");
+  assert.equal(map.rejectParams, "");
 });

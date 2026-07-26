@@ -24,20 +24,35 @@ export function createTelegramRenderer() {
       return { text: statusText(status), replyMarkup };
     },
 
-    async render(reply, { driver }) {
+    async render(reply, { driver, runtime = null }) {
       switch (reply.kind) {
         case "media":
           return this._renderMedia(reply, driver);
-        case "approval":
-          return driver.sendMessage({
+        case "approval": {
+          const text = describeApprovalForChat(reply.approval, { autoApproved: reply.autoApproved });
+          const result = await driver.sendMessage({
             chatId: reply.conversationId,
-            text: describeApprovalForChat(reply.approval, { autoApproved: reply.autoApproved }),
+            text,
             ...(reply.autoApproved ? {} : { replyMarkup: approvalKeyboard(reply.code) }),
           });
+          if (result?.message_id != null) {
+            runtime?.rememberApprovalMessage?.(reply.code, {
+              messageId: result.message_id,
+              conversationId: reply.conversationId,
+              approval: reply.approval,
+              text,
+            });
+          }
+          return result;
+        }
         case "picker":
           return this._renderPicker(reply, driver);
         case "approvalResolved":
-          return; // silent: handled by the callback_query
+          return runtime?.resolveApprovalMessage?.({
+            code: reply.code,
+            decision: reply.decision,
+            approval: reply.approval,
+          });
         case "status":
         case "text":
         default: {

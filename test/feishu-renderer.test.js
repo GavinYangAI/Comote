@@ -26,11 +26,29 @@ test("text reply renders as a card via sendCard", async () => {
 test("approval reply renders all approval choices", async () => {
   const r = createFeishuRenderer();
   const driver = stubDriver();
+  const remembered = [];
   await r.render({ kind: "approval", conversationId: "oc", code: "a1",
-    approval: { shortCode: "a1", method: "exec", params: { command: "rm -rf build" } } }, { driver });
+    approval: { shortCode: "a1", method: "exec", params: { command: "rm -rf build" } } }, {
+    driver,
+    runtime: { rememberApprovalMessage: (...args) => remembered.push(args) },
+  });
   const card = driver.calls[0][1].card;
   const action = card.elements.find((e) => e.tag === "action");
   assert.deepEqual(action.actions.map((b) => b.value.decision), ["accept", "acceptForSession", "decline"]);
+  assert.equal(remembered[0][0], "a1");
+  assert.equal(remembered[0][1].messageId, "c");
+});
+
+test("approvalResolved delegates to the runtime instead of sending a second card", async () => {
+  const r = createFeishuRenderer();
+  const driver = stubDriver();
+  const resolved = [];
+  await r.render({ kind: "approvalResolved", conversationId: "oc", code: "a1", decision: "acceptForSession" }, {
+    driver,
+    runtime: { resolveApprovalMessage: async (reply) => resolved.push(reply) },
+  });
+  assert.equal(driver.calls.length, 0);
+  assert.equal(resolved[0].decision, "acceptForSession");
 });
 
 test("auto-approved reply renders a notification card without actions", async () => {

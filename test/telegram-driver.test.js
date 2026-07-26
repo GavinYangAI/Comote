@@ -61,6 +61,7 @@ test("editMessageText + answerCallbackQuery hit the right methods", async () => 
   await d.editMessageText({ chatId: "1", messageId: 5, text: "z" });
   assert.match(fetchImpl.calls[0].url, /editMessageText$/);
   assert.equal(fetchImpl.calls[0].body.message_id, 5);
+  assert.deepEqual(fetchImpl.calls[0].body.reply_markup, { inline_keyboard: [] });
   await d.answerCallbackQuery({ callbackQueryId: "cq1" });
   assert.match(fetchImpl.calls[1].url, /answerCallbackQuery$/);
   assert.equal(fetchImpl.calls[1].body.callback_query_id, "cq1");

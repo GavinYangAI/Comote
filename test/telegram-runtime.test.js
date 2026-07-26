@@ -10,12 +10,12 @@ import { encodeCallback } from "../src/channels/telegram/cards.js";
 
 function makeRuntime(overrides = {}) {
   const router = { authorization: { isAuthorized: () => true }, resolveApproval: async () => {}, cancelThread: async () => {}, chooseProject: async () => "chosen", useSessionAsync: async () => "used" };
-  const calls = { resolve: [], cancel: [], answer: [] };
+  const calls = { resolve: [], cancel: [], answer: [], edit: [] };
   router.resolveApproval = async (code, decision, identity) => { calls.resolve.push([code, decision, identity]); };
   router.cancelThread = async (tid) => { calls.cancel.push(tid); };
   const driver = {
     async answerCallbackQuery(a) { calls.answer.push(a); },
-    async editMessageText() {},
+    async editMessageText(a) { calls.edit.push(a); },
     async sendMessage() { return { message_id: 1 }; },
   };
   const adapter = { commandRouter: router, sendReply: async () => ({ ok: true }) };
@@ -50,6 +50,10 @@ test("session approval callback maps to acceptForSession", async () => {
     from: { id: 42 },
   });
   assert.deepEqual(calls.resolve[0].slice(0, 2), ["A1", "acceptForSession"]);
+  assert.equal(calls.edit[0].messageId, 5);
+  assert.match(calls.edit[0].text, /已批准/);
+  assert.doesNotMatch(calls.edit[0].text, /已拒绝/);
+  assert.equal(calls.edit[0].replyMarkup, null);
 });
 
 test("review-2 (B-4): a not-owner rejection from the router is swallowed gracefully", async () => {

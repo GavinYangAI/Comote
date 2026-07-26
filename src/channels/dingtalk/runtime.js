@@ -1,9 +1,9 @@
 // src/channels/dingtalk/runtime.js
 import { BaseChannelRuntime } from "../base/runtime.js";
 import { routerReplyToSemantic } from "../base/messages.js";
+import { EditableApprovalMessages } from "../base/editable-approval-messages.js";
 import { createDingTalkRenderer } from "./renderer.js";
-import { approvalResolvedCardData } from "./cards.js";
-import { toParamMap } from "./cards.js";
+import { approvalResolvedParamMap } from "./cards.js";
 
 // DingTalk runtime. Inbound (Stream), outbound queue delivery via the renderer,
 // status and driver wiring are owned by BaseChannelRuntime. This subclass adds the
@@ -26,11 +26,27 @@ export class DingTalkRuntimeService extends BaseChannelRuntime {
       dedupMax: 500,
     });
     this.cardUpdateIntervalMs = cardUpdateIntervalMs;
+    this.approvalMessages = new EditableApprovalMessages({
+      update: async (message, resolution) => {
+        await this.driver.updateCard({
+          outTrackId: message.outTrackId,
+          cardParamMap: approvalResolvedParamMap(resolution),
+        });
+      },
+    });
     // threadId -> { outTrackId, conversationId, lastSentAt, pendingCard, timer }
     this.cardSessions = new Map();
     // Card-action callbacks arrive through the driver onAction hook; the base
     // start() wires this into driver.startEventStream.
     this.onAction = (action) => this.handleCardAction(action);
+  }
+
+  rememberApprovalMessage(code, message) {
+    return this.approvalMessages.remember(code, message);
+  }
+
+  resolveApprovalMessage({ code, decision, approval = null, fallback = null }) {
+    return this.approvalMessages.resolve({ code, decision, approval, fallback });
   }
 
   // Status cards are built by the renderer so callers share one shape.
@@ -167,9 +183,10 @@ export class DingTalkRuntimeService extends BaseChannelRuntime {
         });
         return {};
       }
-      const resolved = approvalResolvedCardData({ code: params.code, decision });
+      const resolved = approvalResolvedParamMap({ code: params.code, decision });
+      this.approvalMessages.markResolved(params.code);
       // In-frame card update: flip the card to its resolved face.
-      return { cardUpdateOptions: { updateCardDataByKey: true }, cardData: { cardParamMap: toParamMap({ title: resolved.title, body: resolved.body, done: true }) } };
+      return { cardUpdateOptions: { updateCardDataByKey: true }, cardData: { cardParamMap: resolved } };
     }
 
     if (params.action === "pick") {

@@ -7,7 +7,7 @@ function fakeDriver() {
   const calls = [];
   return {
     calls,
-    async sendMessage(a) { calls.push(["sendMessage", a]); },
+    async sendMessage(a) { calls.push(["sendMessage", a]); return { message_id: 41 }; },
     async sendPhoto(a) { calls.push(["sendPhoto", a]); },
     async sendDocument(a) { calls.push(["sendDocument", a]); },
   };
@@ -133,11 +133,16 @@ test("picker with items renders inline buttons; empty items → numbered text", 
   assert.equal(d.calls[0][1].replyMarkup ?? null, null);
 });
 
-test("approvalResolved is silent", async () => {
+test("approvalResolved edits through the runtime and sends no second message", async () => {
   const r = createTelegramRenderer();
   const d = fakeDriver();
-  await r.render({ kind: "approvalResolved", conversationId: "9" }, { driver: d });
+  const resolved = [];
+  await r.render({ kind: "approvalResolved", conversationId: "9", code: "A1", decision: "accept" }, {
+    driver: d,
+    runtime: { resolveApprovalMessage: async (reply) => resolved.push(reply) },
+  });
   assert.equal(d.calls.length, 0);
+  assert.equal(resolved[0].code, "A1");
 });
 
 test("media image under the limit sends a photo; missing file degrades to text", async () => {

@@ -1,6 +1,8 @@
 // src/channels/telegram/runtime.js
 import { BaseChannelRuntime } from "../base/runtime.js";
 import { routerReplyToSemantic } from "../base/messages.js";
+import { EditableApprovalMessages } from "../base/editable-approval-messages.js";
+import { describeResolvedApprovalForChat } from "../base/approval-format.js";
 import { createTelegramRenderer } from "./renderer.js";
 import { decodeCallback, chunkMessage, BOT_COMMANDS } from "./cards.js";
 import { resolveWithinProject, classifyMedia } from "../../core/paths.js";
@@ -27,12 +29,30 @@ export class TelegramRuntimeService extends BaseChannelRuntime {
     });
     this.ensurePairingCode = ensurePairingCode;
     this.cardUpdateIntervalMs = cardUpdateIntervalMs;
+    this.approvalMessages = new EditableApprovalMessages({
+      update: async (message, resolution) => {
+        await this.driver.editMessageText({
+          chatId: message.conversationId,
+          messageId: message.messageId,
+          text: describeResolvedApprovalForChat(resolution.approval, resolution),
+          replyMarkup: null,
+        });
+      },
+    });
     // threadId -> { messageId, conversationId, lastSentAt, pendingCard, timer }
     this.cardSessions = new Map();
     // threadId -> files[] remembered for pushfile callbacks after the card detaches.
     this.threadFiles = new Map();
     this._maxThreadFiles = 200;
     this.onAction = (cq) => this.handleCallbackQuery(cq);
+  }
+
+  rememberApprovalMessage(code, message) {
+    return this.approvalMessages.remember(code, message);
+  }
+
+  resolveApprovalMessage({ code, decision, approval = null, fallback = null }) {
+    return this.approvalMessages.resolve({ code, decision, approval, fallback });
   }
 
   async start() {
@@ -215,6 +235,19 @@ export class TelegramRuntimeService extends BaseChannelRuntime {
           code: params.code,
           clickerId,
         });
+        return;
+      }
+      const messageId = cq.message?.message_id ?? null;
+      if (conversationId && messageId != null) {
+        await this.resolveApprovalMessage({
+          code: params.code,
+          decision,
+          fallback: {
+            messageId,
+            conversationId,
+            text: cq.message?.text ?? "",
+          },
+        }).catch(() => {});
       }
       return;
     }

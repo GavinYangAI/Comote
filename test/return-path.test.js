@@ -312,7 +312,7 @@ test("a Codex approval for a Feishu thread is delivered as a card", async () => 
     "thread_f",
   );
 
-  const calls = { sent: [] };
+  const calls = { sent: [], updated: [] };
   state.runtime.feishu.__setTestDriver({
     getStatus: () => ({ state: "configured" }),
     verifyEvent: () => true,
@@ -320,7 +320,9 @@ test("a Codex approval for a Feishu thread is delivered as a card", async () => 
       calls.sent.push(message);
       return { messageId: "om_approval" };
     },
-    async updateCard() {},
+    async updateCard(message) {
+      calls.updated.push(message);
+    },
   });
 
   transport.receive({
@@ -334,6 +336,21 @@ test("a Codex approval for a Feishu thread is delivered as a card", async () => 
   assert.equal(calls.sent.length, 1);
   const action = calls.sent[0].card.elements.find((el) => el.tag === "action");
   assert.deepEqual(action.actions.map((b) => b.value.decision), ["accept", "acceptForSession", "decline"]);
+
+  await desktop.resolveApproval("a1", "acceptForSession");
+  await tick();
+
+  assert.equal(calls.updated.length, 1, "the original approval card was edited in place");
+  assert.equal(calls.updated[0].messageId, "om_approval");
+  const resolvedActions = calls.updated[0].card.elements.find((el) => el.tag === "action").actions;
+  assert.equal(resolvedActions.length, 1);
+  assert.equal(resolvedActions[0].type, "primary");
+  assert.equal("value" in resolvedActions[0], false);
+
+  const approvalLogs = state.eventLog.list({ limit: 20 }).filter((entry) => entry.message.includes("审批 a1"));
+  assert.equal(approvalLogs.length, 1);
+  assert.match(approvalLogs[0].message, /本次会话/);
+  assert.doesNotMatch(approvalLogs[0].message, /拒绝/);
 });
 
 test("completed card fallback tail localizes to en", async () => {

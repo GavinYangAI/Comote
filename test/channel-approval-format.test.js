@@ -1,6 +1,12 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { describeApprovalForChat, approvalDetail, summarizeChanges, countDiffLines } from "../src/channels/base/approval-format.js";
+import {
+  describeApprovalForChat,
+  describeResolvedApprovalForChat,
+  approvalDetail,
+  summarizeChanges,
+  countDiffLines,
+} from "../src/channels/base/approval-format.js";
 
 test("countDiffLines counts +/- excluding headers", () => {
   const { added, removed } = countDiffLines("+++ a\n+x\n+y\n--- b\n-z");
@@ -26,6 +32,16 @@ test("auto-approved chat text notifies without manual approval instructions", ()
   );
   assert.match(text, /自动模式/);
   assert.doesNotMatch(text, /\/approve|\/deny/);
+});
+
+test("resolved chat text treats a session approval as approved", () => {
+  const text = describeResolvedApprovalForChat(
+    { method: "exec", params: { command: "npm test" } },
+    { code: "a1", decision: "acceptForSession" },
+  );
+  assert.match(text, /已批准/);
+  assert.match(text, /npm test/);
+  assert.doesNotMatch(text, /已拒绝|\/approve|\/deny/);
 });
 
 test("summarizeChanges lists changed paths with stats", () => {

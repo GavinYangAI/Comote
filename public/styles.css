@@ -1154,6 +1154,37 @@ code {
   gap: 8px;
 }
 
+.approval-row {
+  align-items: start;
+  flex-wrap: wrap;
+}
+
+.approval-copy {
+  flex: 1 1 240px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.approval-copy > strong {
+  display: block;
+  overflow-wrap: anywhere;
+}
+
+.approval-actions {
+  display: grid;
+  flex: 1 1 360px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  max-width: 520px;
+  min-width: 0;
+  margin-left: auto;
+}
+
+.approval-actions button {
+  width: 100%;
+  min-width: 0;
+  white-space: normal;
+}
+
 .meta {
   color: var(--subtle);
   font-size: 12.5px;
@@ -2368,6 +2399,11 @@ code {
 }
 
 @media (max-width: 560px) {
+  .approval-actions {
+    grid-template-columns: 1fr;
+    max-width: none;
+  }
+
   .top-bar {
     flex-direction: row;
     align-items: center;

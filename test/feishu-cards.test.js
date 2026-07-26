@@ -88,9 +88,21 @@ test("approvalCard includes the /approve text-command fallback (works when butto
 });
 
 test("approvalResolvedCard reflects the decision", () => {
-  assert.match(approvalResolvedCard({ code: "a1", decision: "accept" }).header.title.content, /已批准/);
-  assert.match(approvalResolvedCard({ code: "a1", decision: "acceptForSession" }).header.title.content, /已批准/);
-  assert.match(approvalResolvedCard({ code: "a1", decision: "decline" }).header.title.content, /已拒绝/);
+  const accepted = approvalResolvedCard({ code: "a1", decision: "acceptForSession", detail: "`npm test`" });
+  assert.match(accepted.header.title.content, /已批准/);
+  assert.equal(accepted.header.template, "green");
+  assert.equal(accepted.elements[0].content, "`npm test`");
+  const acceptedActions = accepted.elements.find((element) => element.tag === "action").actions;
+  assert.equal(acceptedActions.length, 1);
+  assert.equal(acceptedActions[0].type, "primary");
+  assert.equal("value" in acceptedActions[0], false, "resolved button must have no callback value");
+
+  const rejected = approvalResolvedCard({ code: "a1", decision: "decline" });
+  assert.match(rejected.header.title.content, /已拒绝/);
+  assert.equal(rejected.header.template, "red");
+  const rejectedButton = rejected.elements.find((element) => element.tag === "action").actions[0];
+  assert.equal(rejectedButton.type, "danger");
+  assert.equal("value" in rejectedButton, false);
 });
 
 test("pickerCard renders one button per item with pick values", () => {

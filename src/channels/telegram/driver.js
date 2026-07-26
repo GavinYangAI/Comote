@@ -53,7 +53,14 @@ export class TelegramDriver {
   }
 
   async editMessageText({ chatId, messageId, text, parseMode = null, replyMarkup = null }) {
-    return this._call("editMessageText", { chat_id: chatId, message_id: messageId, text, ...(parseMode ? { parse_mode: parseMode } : {}), ...(replyMarkup ? { reply_markup: replyMarkup } : {}) });
+    return this._call("editMessageText", {
+      chat_id: chatId,
+      message_id: messageId,
+      text,
+      ...(parseMode ? { parse_mode: parseMode } : {}),
+      // An explicit empty keyboard removes the original callback buttons.
+      reply_markup: replyMarkup ?? { inline_keyboard: [] },
+    });
   }
 
   async answerCallbackQuery({ callbackQueryId, text = null }) {

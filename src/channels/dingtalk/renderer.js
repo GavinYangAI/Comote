@@ -52,16 +52,20 @@ export function createDingTalkRenderer({ templates = {} } = {}) {
       return t(pickKind === "project" ? "card.picker.project" : "card.picker.conversation");
     },
 
-    async render(reply, { driver }) {
+    async render(reply, { driver, runtime = null }) {
       switch (reply.kind) {
         case "media":
           return this._renderMedia(reply, driver);
         case "approval":
-          return this._renderApproval(reply, driver);
+          return this._renderApproval(reply, driver, runtime);
         case "picker":
           return this._renderPicker(reply, driver);
         case "approvalResolved":
-          return; // silent: handled by the card callback PUT / next agent reply
+          return runtime?.resolveApprovalMessage?.({
+            code: reply.code,
+            decision: reply.decision,
+            approval: reply.approval,
+          });
         case "status":
         case "text":
         default: {
@@ -78,7 +82,7 @@ export function createDingTalkRenderer({ templates = {} } = {}) {
       }
     },
 
-    async _renderApproval(reply, driver) {
+    async _renderApproval(reply, driver, runtime = null) {
       if (reply.autoApproved || !this.templates.approval) {
         await driver.sendMarkdown({
           receiveId: reply.conversationId,
@@ -88,9 +92,10 @@ export function createDingTalkRenderer({ templates = {} } = {}) {
         return;
       }
       const data = approvalCardData({ shortCode: reply.code, detail: approvalDetail(reply.approval) });
-      await driver.createCard({
+      const outTrackId = `approval:${reply.code}:${randomUUID()}`;
+      const result = await driver.createCard({
         cardTemplateId: this.templates.approval,
-        outTrackId: `approval:${reply.code}:${randomUUID()}`,
+        outTrackId,
         receiveId: reply.conversationId,
         cardParamMap: toParamMap({
           title: data.title,
@@ -103,6 +108,12 @@ export function createDingTalkRenderer({ templates = {} } = {}) {
           rejectParams: data.rejectParams,
         }),
       });
+      runtime?.rememberApprovalMessage?.(reply.code, {
+        outTrackId: result?.outTrackId ?? outTrackId,
+        conversationId: reply.conversationId,
+        approval: reply.approval,
+      });
+      return result;
     },
 
     async _renderPicker(reply, driver) {

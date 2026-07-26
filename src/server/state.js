@@ -928,7 +928,28 @@ export function createComoteState({
       return;
     }
     if (event.type === "approvalResolved") {
-      eventLog.info(`审批 ${event.approval.shortCode} 已处理`, { decision: event.decision });
+      const binding = commandRouter.getThreadBinding(event.approval.threadId);
+      const stack = binding ? channelStacks.get(binding.channel) : null;
+      if (binding && typeof stack?.runtime?.resolveApprovalMessage === "function") {
+        outboundReplies.enqueue({
+          channel: binding.channel,
+          conversationId: binding.conversationId,
+          ...(binding.accountId ? { accountId: binding.accountId } : {}),
+          kind: "approvalResolved",
+          code: event.approval.shortCode,
+          approval: event.approval,
+          decision: event.decision,
+          dedupeKey: `approval-resolved:${event.approval.id}`,
+        });
+        deliverIfPush(binding.channel);
+        persistInBackground();
+      }
+      const outcome = event.decision === "decline"
+        ? "已拒绝"
+        : event.decision === "acceptForSession"
+          ? "已批准（本次会话）"
+          : "已批准";
+      eventLog.info(`审批 ${event.approval.shortCode} ${outcome}`, { decision: event.decision });
       return;
     }
     if (event.type === "connectionLost") {

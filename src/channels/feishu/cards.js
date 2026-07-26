@@ -162,25 +162,34 @@ export function approvalCard({ shortCode, detail, autoApproved = false }) {
   };
 }
 
-export function approvalResolvedCard({ code, decision }) {
+export function approvalResolvedCard({ code, decision, detail = "" }) {
   const accepted = decision === "accept" || decision === "acceptForSession";
+  const status = accepted
+    ? t("card.approval.accepted", { code })
+    : t("card.approval.rejected", { code });
+  const elements = [];
+  if (detail) {
+    elements.push({ tag: "markdown", content: String(detail) });
+  }
+  elements.push({
+    tag: "action",
+    actions: [
+      {
+        tag: "button",
+        text: { tag: "plain_text", content: status },
+        // Feishu has no green success button type. Primary is the documented
+        // blue fallback; rejected approvals use the red danger type.
+        type: accepted ? "primary" : "danger",
+      },
+    ],
+  });
   return {
     config: { wide_screen_mode: true },
     header: {
-      title: {
-        tag: "plain_text",
-        content: accepted
-          ? t("card.approval.accepted", { code })
-          : t("card.approval.rejected", { code }),
-      },
-      template: accepted ? "green" : "grey",
+      title: { tag: "plain_text", content: status },
+      template: accepted ? "green" : "red",
     },
-    elements: [
-      {
-        tag: "markdown",
-        content: accepted ? t("card.approval.acceptedBody") : t("card.approval.rejectedBody"),
-      },
-    ],
+    elements,
   };
 }
 

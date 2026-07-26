@@ -35,12 +35,17 @@ test("identity rows and channel summaries constrain long dynamic text", async ()
 });
 
 test("desktop approvals expose the allow-for-session decision", async () => {
-  const [js, i18n] = await Promise.all([
+  const [js, i18n, css] = await Promise.all([
     readFile("public/app.js", "utf8"),
     readFile("public/i18n.js", "utf8"),
+    readFile("public/styles.css", "utf8"),
   ]);
   assert.match(js, /\|acceptForSession/);
   assert.match(i18n, /web\.approvals\.acceptForSession/);
+  assert.match(js, /class="list-row approval-row"/);
+  assert.match(css, /\.approval-copy\s*\{[^}]*min-width:\s*0/s);
+  assert.match(css, /\.approval-actions\s*\{[^}]*flex:\s*1 1 360px[^}]*grid-template-columns:\s*repeat\(3/s);
+  assert.match(css, /@media \(max-width: 560px\)[\s\S]*\.approval-actions\s*\{[^}]*grid-template-columns:\s*1fr/s);
 });
 
 test("phone commands expose localized hover and keyboard tooltips", async () => {

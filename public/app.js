@@ -716,7 +716,7 @@ function renderApprovals(result) {
           .map((approval) => {
             const command = approval.params?.command ?? approval.params?.reason ?? approval.method;
             const cwd = approval.params?.cwd ?? "";
-            return `<li class="list-row"><span><strong>${escapeHtml(command)}</strong><div class="meta">${escapeHtml(approval.id)}</div><div class="meta">${escapeHtml(cwd)}</div></span><span class="button-row"><button data-approval="${escapeAttr(approval.id)}|accept">${tWeb("web.approvals.accept")}</button><button class="secondary-button" data-approval="${escapeAttr(approval.id)}|acceptForSession">${tWeb("web.approvals.acceptForSession")}</button><button class="secondary-button" data-approval="${escapeAttr(approval.id)}|decline">${tWeb("web.approvals.decline")}</button></span></li>`;
+            return `<li class="list-row approval-row"><span class="approval-copy"><strong>${escapeHtml(command)}</strong><div class="meta">${escapeHtml(approval.id)}</div><div class="meta">${escapeHtml(cwd)}</div></span><span class="button-row approval-actions"><button data-approval="${escapeAttr(approval.id)}|accept">${tWeb("web.approvals.accept")}</button><button class="secondary-button" data-approval="${escapeAttr(approval.id)}|acceptForSession">${tWeb("web.approvals.acceptForSession")}</button><button class="secondary-button" data-approval="${escapeAttr(approval.id)}|decline">${tWeb("web.approvals.decline")}</button></span></li>`;
           })
           .join("");
 }

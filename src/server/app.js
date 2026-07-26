@@ -305,7 +305,6 @@ async function handleApi(request, response, state) {
       return;
     }
     const result = await state.connectors.desktop.resolveApproval(approvalId, decision);
-    state.eventLog?.info(`审批已${decision === "decline" ? "拒绝" : "批准"}`, { approvalId, decision });
     sendJson(response, 200, result);
     return;
   }
