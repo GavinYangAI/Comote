@@ -473,6 +473,7 @@ test("handleCardAction resolves an approval and refreshes the card", async () =>
 
 test("handleCardAction treats a session approval as accepted", async () => {
   const resolved = [];
+  const updated = [];
   const runtime = makeRuntime({
     adapter: {
       handleInbound: async () => ({ kind: "text" }),
@@ -482,7 +483,16 @@ test("handleCardAction treats a session approval as accepted", async () => {
       },
     },
     outboundQueue: new OutboundQueue(),
-    driver: { getStatus: () => ({ state: "configured" }), verifyEvent: () => true },
+    driver: {
+      getStatus: () => ({ state: "configured" }),
+      verifyEvent: () => true,
+      async updateCard(message) { updated.push(message); },
+    },
+  });
+  runtime.rememberApprovalMessage("a1", {
+    messageId: "om_remembered",
+    conversationId: "oc_chat",
+    approval: { shortCode: "a1" },
   });
 
   const result = await runtime.handleCardAction({
@@ -491,6 +501,7 @@ test("handleCardAction treats a session approval as accepted", async () => {
   });
 
   assert.deepEqual(resolved, [["a1", "acceptForSession"]]);
+  assert.equal(updated[0].messageId, "om_remembered", "remembered cards update without callback message ids");
   assert.match(result.toast.content, /已批准/);
 });
 

@@ -528,7 +528,6 @@ export function createComoteState({
     streamTextByThread.clear();
     activityByThread.clear();
     progressByThread.clear();
-    changedFilesDeliveredThreads.clear();
     for (const stack of channelStacks.values()) {
       if (stack.plugin.meta.capabilities?.reactions) {
         void stack.runtime.completeAllInboundFeedback?.();
@@ -788,14 +787,6 @@ export function createComoteState({
   // threadId -> latest tool/file milestones rendered inside the live card.
   // Keep a short tail so platform message limits remain predictable.
   const activityByThread = new Map();
-  // Threads whose changed-file delivery already ran this turn. A turn can emit
-  // more than one agentMessage; only the FIRST claims the live card and delivers
-  // the turn's changed files. Subsequent agentMessages must enqueue their own
-  // text but MUST NOT re-run deliverChangedFilesAndFinish — its fresh-millisecond
-  // dedupeKey stamp would slip past the outbound queue's dedup and deliver the
-  // changed files twice. Cleared on turnStarted and turnCompleted.
-  const changedFilesDeliveredThreads = new Set();
-
   // Workflow B milestone state, keyed by threadId. Each entry tracks the running
   // sequence (dedupeKey source), the per-turn delivery count, the last delivered
   // {kind,label} (consecutive-dedup), the throttle timestamp + a pending coalesce
@@ -865,7 +856,6 @@ export function createComoteState({
 
   function routeDesktopEvent(event) {
     if (event.type === "turnStarted") {
-      changedFilesDeliveredThreads.delete(event.threadId);
       activityByThread.delete(event.threadId);
       // Advance the per-thread turn nonce for EVERY channel — both the milestone
       // key and the agent: fallback key fold it in, and push channels (milestones
@@ -926,29 +916,18 @@ export function createComoteState({
       }
       const completedLive = liveCardRuntime(completedBinding?.channel);
       if (completedLive && completedLive.hasThreadCard(event.threadId)) {
-        // Reached only for the rare turn with NO agentMessage (codex normally
-        // emits agentMessage first, which claims the card and runs the B/C split
-        // in deliverChangedFilesAndFinish). Here the card just renders all files
-        // as buttons — no inline-text split, no dingtalk auto-attach, no tooMany
-        // cap. Acceptable for this edge case; files stay reachable via /file.
         const tail = streamTextByThread.get(event.threadId) ?? t("state.completed.fallback");
-        completedLive
-          .finishThreadCard(
-            event.threadId,
-            completedLive.buildStatusCard({
-              phase: "completed",
-              threadId: event.threadId,
-              text: tail,
-              activities: activityByThread.get(event.threadId) ?? [],
-              done: true,
-              files: buildChangedFiles(event.threadId, event.changedPaths),
-            }),
-          )
-          .catch(() => {});
+        const claimedSession = completedLive.detachThreadCard(event.threadId);
+        void deliverChangedFilesAndFinish(completedLive, completedBinding, {
+          ...event,
+          text: tail,
+          activities: [...(activityByThread.get(event.threadId) ?? [])],
+        }, claimedSession).catch((error) => {
+          completedLive.lastError = error.message;
+        });
       }
       streamTextByThread.delete(event.threadId);
       activityByThread.delete(event.threadId);
-      changedFilesDeliveredThreads.delete(event.threadId);
       sleepGuard.release(event.threadId);
       eventLog.info("Codex turn 完成", { threadId: event.threadId });
       return;
@@ -956,6 +935,30 @@ export function createComoteState({
     if (event.type === "approvalResolved") {
       const binding = commandRouter.getThreadBinding(event.approval.threadId);
       const stack = binding ? channelStacks.get(binding.channel) : null;
+      const resolvedLive = liveCardRuntime(binding?.channel);
+      if (resolvedLive?.hasThreadCard(event.approval.threadId)) {
+        const resolvedLine = t(
+          event.decision === "decline" ? "card.approval.rejected" : "card.approval.accepted",
+          { code: event.approval.shortCode },
+        );
+        const activities = activityByThread.get(event.approval.threadId) ?? [];
+        if (activities.at(-1) !== resolvedLine) {
+          activities.push(resolvedLine);
+          if (activities.length > 8) activities.shift();
+          activityByThread.set(event.approval.threadId, activities);
+        }
+        const progress = progressByThread.get(event.approval.threadId);
+        resolvedLive.updateThreadCard(
+          event.approval.threadId,
+          resolvedLive.buildStatusCard({
+            phase: "progress",
+            threadId: event.approval.threadId,
+            steps: progress?.count ?? activities.length,
+            text: streamTextByThread.get(event.approval.threadId) ?? "",
+            activities,
+          }),
+        );
+      }
       if (binding && typeof stack?.runtime?.resolveApprovalMessage === "function") {
         outboundReplies.enqueue({
           channel: binding.channel,
@@ -1102,34 +1105,18 @@ export function createComoteState({
         return;
       }
       const msgLive = liveCardRuntime(binding.channel);
-      if (msgLive) {
-        streamTextByThread.delete(event.threadId);
-        if (changedFilesDeliveredThreads.has(event.threadId)) {
-          // A prior agentMessage this turn already claimed the card and delivered
-          // the turn's changed files. Re-running deliverChangedFilesAndFinish would
-          // re-enqueue those files under a fresh-millisecond dedupeKey the queue
-          // cannot collapse — a double delivery. Enqueue only this message's text.
-          outboundReplies.enqueue({
-            channel: binding.channel,
-            conversationId: binding.conversationId,
-            ...(binding.accountId ? { accountId: binding.accountId } : {}),
-            kind: "text",
-            text: event.text ?? "",
-            dedupeKey: agentDedupeKey(event),
-          });
-          deliverIfPush(binding.channel);
-          persistInBackground();
-          return;
-        }
-        changedFilesDeliveredThreads.add(event.threadId);
-        // Claim the live card SYNCHRONOUSLY now, before the async file work below.
-        // agentMessage is the live-card completion path; detaching here means a
-        // racing turnCompleted sees no card (hasThreadCard=false) and skips, so the
-        // turn's files are delivered exactly once (here), never doubled.
-        const claimedSession = msgLive.detachThreadCard(event.threadId);
-        void deliverChangedFilesAndFinish(msgLive, binding, event, claimedSession).catch((error) => {
-          msgLive.lastError = error.message;
-        });
+      if (msgLive?.hasThreadCard(event.threadId)) {
+        const text = event.text ?? "";
+        streamTextByThread.set(event.threadId, text);
+        msgLive.updateThreadCard(
+          event.threadId,
+          msgLive.buildStatusCard({
+            phase: "streaming",
+            threadId: event.threadId,
+            text,
+            activities: activityByThread.get(event.threadId) ?? [],
+          }),
+        );
         persistInBackground();
         return;
       }
@@ -1210,10 +1197,9 @@ export function createComoteState({
     if (event.type === "error") {
       // A turn can end via error with no following turnCompleted. Release the
       // sleep guard here too, otherwise caffeinate is held awake until the next
-      // (successful) turn completes — or indefinitely. Clear the per-turn
-      // changed-files marker for the same reason.
+      // (successful) turn completes — or indefinitely. Clear per-turn state for
+      // the same reason.
       sleepGuard.release(event.threadId);
-      changedFilesDeliveredThreads.delete(event.threadId);
       teardownMilestoneState(event.threadId);
       const binding = commandRouter.getThreadBinding(event.threadId);
       const errorStack = binding ? channelStacks.get(binding.channel) : null;
@@ -1472,7 +1458,7 @@ export function createComoteState({
   // Splits a completed turn's changed files (Task 3) and delivers them: small
   // text inlines + the rest become card buttons (fileButtons channels) or
   // auto-sent attachments. Finishes the live card with the button files. Used
-  // fire-and-forget from the agentMessage handler so routeDesktopEvent stays sync.
+  // fire-and-forget from the turnCompleted handler so routeDesktopEvent stays sync.
   async function deliverChangedFilesAndFinish(live, binding, event, claimedSession) {
     const channel = binding.channel;
     const supportsButtons = Boolean(channelStacks.get(channel)?.plugin.meta.capabilities?.fileButtons);
@@ -1494,7 +1480,7 @@ export function createComoteState({
       phase: "completed",
       threadId: event.threadId,
       text: event.text ?? "",
-      activities: activityByThread.get(event.threadId) ?? [],
+      activities: event.activities ?? activityByThread.get(event.threadId) ?? [],
       done: true,
       files: plan.buttonFiles,
     });

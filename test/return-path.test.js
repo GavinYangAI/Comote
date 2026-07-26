@@ -197,6 +197,9 @@ test("Codex streaming for a Feishu thread drives a live card", async () => {
     params: { threadId: "thread_f", item: { type: "agentMessage", id: "i1", text: "final answer" } },
   });
   await tick();
+  assert.equal(calls.sent.length, 1, "an agent message does not create a replacement card");
+  transport.receive({ jsonrpc: "2.0", method: "turn/completed", params: { threadId: "thread_f" } });
+  await tick();
 
   const lastUpdate = calls.updated.at(-1);
   assert.ok(lastUpdate, "the card was updated");
@@ -277,9 +280,8 @@ test("completed card includes push buttons for changed files", async () => {
     },
   });
 
-  // In the REAL Codex Desktop flow, the agent replies with text first: an
-  // item/completed agentMessage (which finalizes and DROPS the card session)
-  // arrives BEFORE turn/completed. The push buttons must render on THIS card.
+  // The agent reply arrives before turn/completed. It updates the live card but
+  // must not close it because another agent item or approval can still follow.
   transport.receive({
     jsonrpc: "2.0",
     method: "item/completed",
@@ -289,8 +291,9 @@ test("completed card includes push buttons for changed files", async () => {
     },
   });
   await tick();
+  assert.equal(calls.sent.length, 1, "the live turn still owns its original card");
 
-  // turn/completed arrives after the card session is already gone.
+  // turn/completed is the sole completion boundary and adds the file buttons.
   transport.receive({
     jsonrpc: "2.0",
     method: "turn/completed",
@@ -397,6 +400,16 @@ test("a live Feishu turn shows approval and resumes work in the same card", asyn
   await tick();
   transport.receive({
     jsonrpc: "2.0",
+    method: "item/completed",
+    params: {
+      threadId: "thread_live_approval",
+      item: { type: "agentMessage", id: "commentary_1", text: "I will inspect the pull request first." },
+    },
+  });
+  await tick();
+  assert.equal(calls.sent.length, 1, "commentary keeps using the original live card");
+  transport.receive({
+    jsonrpc: "2.0",
     method: "item/commandExecution/requestApproval",
     id: "rpc_live",
     params: { threadId: "thread_live_approval", command: "npm test", cwd: "/repo" },
@@ -411,6 +424,28 @@ test("a live Feishu turn shows approval and resumes work in the same card", asyn
   await tick();
   assert.equal(calls.sent.length, 1, "approval resolution sends no new card");
   assert.equal(calls.updated.at(-1).messageId, "om_one_message");
+  assert.match(
+    JSON.stringify(calls.updated.at(-1).card),
+    /已批准 \[a1\]/,
+    "the resumed live card visibly records the approval decision",
+  );
+
+  transport.receive({
+    jsonrpc: "2.0",
+    method: "item/completed",
+    params: {
+      threadId: "thread_live_approval",
+      item: { type: "agentMessage", id: "final_1", text: "The pull request review is complete." },
+    },
+  });
+  transport.receive({
+    jsonrpc: "2.0",
+    method: "turn/completed",
+    params: { threadId: "thread_live_approval" },
+  });
+  await tick();
+  assert.equal(calls.sent.length, 1, "the complete turn used one Feishu message");
+  assert.match(JSON.stringify(calls.updated.at(-1).card), /review is complete/);
 });
 
 test("completed card fallback tail localizes to en", async () => {

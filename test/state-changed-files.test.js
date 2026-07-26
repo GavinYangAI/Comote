@@ -84,6 +84,11 @@ function fireTurn(transport, threadId, changedPaths, text) {
       item: { type: "agentMessage", id: `m:${threadId}`, text },
     },
   });
+  transport.receive({
+    jsonrpc: "2.0",
+    method: "turn/completed",
+    params: { threadId },
+  });
 }
 
 test("feishu (fileButtons): small .md inlines as text, .png becomes a card button", async () => {

@@ -462,11 +462,13 @@ export class FeishuRuntimeService extends BaseChannelRuntime {
         });
         return this.deniedToast();
       }
-      if (action.messageId && this.driver?.updateCard) {
+      if (this.driver?.updateCard) {
         await this.resolveApprovalMessage({
           code: action.value.code,
           decision: action.value.decision,
-          fallback: { messageId: action.messageId, conversationId: action.chatId },
+          fallback: action.messageId
+            ? { messageId: action.messageId, conversationId: action.chatId }
+            : null,
         }).catch(() => {});
       }
       const accepted = action.value.decision === "accept" || action.value.decision === "acceptForSession";
