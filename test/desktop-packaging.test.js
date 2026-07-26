@@ -27,5 +27,6 @@ test("desktop packaging targets the requested Tauri installer artifacts", async 
     "comote-server/node_modules",
   );
   assert.deepEqual(tauriDevConfig.bundle.resources, []);
+  assert.match(packageJson.scripts["desktop:dev"], /prepare-desktop-dev\.mjs/);
   assert.match(packageJson.scripts["desktop:dev"], /--config src-tauri\/tauri\.dev\.conf\.json/);
 });

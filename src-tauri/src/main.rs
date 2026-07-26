@@ -591,6 +591,13 @@ fn start_manual_comote_node(
                     "comote-node.exe was not found",
                 )
             })?;
+        // Never execute Cargo's copied sidecar in development. Windows locks a
+        // running executable, while tauri-build unconditionally removes and
+        // recopies target/debug/comote-node.exe before the app can stop an
+        // adopted daemon. Running this stable app-data copy leaves every build
+        // input/output replaceable when an IDE starts desktop:dev again.
+        #[cfg(debug_assertions)]
+        let executable = stage_windows_development_sidecar(&executable, &log_dir)?;
         log_line(
             log_path,
             &format!(
@@ -634,6 +641,20 @@ fn windows_manual_sidecar_candidates(resource_dir: &Path) -> Vec<PathBuf> {
             .join("binaries")
             .join("comote-node-aarch64-pc-windows-msvc.exe"),
     ]
+}
+
+#[cfg(any(all(target_os = "windows", debug_assertions), test))]
+fn stage_windows_development_sidecar(
+    source: &Path,
+    app_data_dir: &Path,
+) -> std::io::Result<PathBuf> {
+    fs::create_dir_all(app_data_dir)?;
+    let staged = app_data_dir.join("comote-node.dev.exe");
+    if staged.exists() {
+        fs::remove_file(&staged)?;
+    }
+    fs::copy(source, &staged)?;
+    Ok(staged)
 }
 
 // Strips the Windows verbatim/extended-length prefix (\\?\) that Tauri's
@@ -1140,6 +1161,29 @@ mod tests {
         assert!(candidates.contains(&resource_dir.join("comote-node-x86_64-pc-windows-msvc.exe")));
         assert!(candidates.contains(&resource_dir.join("comote-node-aarch64-pc-windows-msvc.exe")));
         assert!(candidates.contains(&resource_dir.join("binaries").join("comote-node.exe")));
+    }
+
+    #[test]
+    fn stages_windows_development_sidecar_outside_build_output() {
+        let dir = std::env::temp_dir().join(format!(
+            "comote-dev-sidecar-{}-{}",
+            std::process::id(),
+            line!()
+        ));
+        let build_dir = dir.join("target").join("debug");
+        let app_data_dir = dir.join("app-data");
+        fs::create_dir_all(&build_dir).unwrap();
+        let source = build_dir.join("comote-node.exe");
+        fs::write(&source, b"first build").unwrap();
+
+        let staged = stage_windows_development_sidecar(&source, &app_data_dir).unwrap();
+        assert_eq!(staged, app_data_dir.join("comote-node.dev.exe"));
+        assert_eq!(fs::read(&staged).unwrap(), b"first build");
+
+        fs::write(&source, b"second build").unwrap();
+        let staged = stage_windows_development_sidecar(&source, &app_data_dir).unwrap();
+        assert_eq!(fs::read(&staged).unwrap(), b"second build");
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
