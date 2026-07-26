@@ -1,0 +1,35 @@
+import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
+import test from "node:test";
+
+test("desktop navigation switches between exclusive application views", async () => {
+  const [html, js, css] = await Promise.all([
+    readFile("public/index.html", "utf8"),
+    readFile("public/app.js", "utf8"),
+    readFile("public/styles.css", "utf8"),
+  ]);
+
+  const navTargets = [...html.matchAll(/class="nav-item[^"]*" href="#([^"]+)"/g)].map((match) => match[1]);
+  assert.ok(navTargets.length >= 6);
+  for (const target of navTargets) {
+    assert.match(html, new RegExp(`<section id="${target}" class="[^"]*app-page`));
+  }
+
+  assert.equal((html.match(/class="[^"]*app-page active[^"]*"/g) ?? []).length, 1);
+  assert.match(js, /window\.addEventListener\("hashchange"/);
+  assert.doesNotMatch(js, /IntersectionObserver/);
+  assert.match(css, /\.app-page\.active\s*\{\s*display:\s*block/);
+  assert.doesNotMatch(css, /--ui-zoom|zoom:\s*var\(--ui-zoom\)/);
+});
+
+test("identity rows and channel summaries constrain long dynamic text", async () => {
+  const [js, css] = await Promise.all([
+    readFile("public/app.js", "utf8"),
+    readFile("public/styles.css", "utf8"),
+  ]);
+
+  assert.match(js, /class="identity-id" title=/);
+  assert.match(css, /\.list-row-copy\s*\{[^}]*min-width:\s*0/s);
+  assert.match(css, /\.identity-meta \.identity-id\s*\{[^}]*text-overflow:\s*ellipsis/s);
+  assert.match(css, /\.channel-row-head \.ch-summary[\s\S]*text-overflow:\s*ellipsis/);
+});

@@ -331,11 +331,11 @@ function renderIdentities(result) {
   const identities = result.value;
   target.innerHTML =
     identities.length === 0
-      ? `<li><strong>${tWeb("web.identities.empty.title")}</strong><div class="meta">${tWeb("web.identities.empty.hint")}</div></li>`
+      ? `<li class="empty-list-item"><strong>${tWeb("web.identities.empty.title")}</strong><div class="meta">${tWeb("web.identities.empty.hint")}</div></li>`
       : identities
           .map(
             (identity) =>
-              `<li class="list-row"><span><strong>${escapeHtml(identity.displayName)}</strong><div class="meta">${channelName(identity.channel)} · ${escapeHtml(identity.stableId)} · ${roleName(identity.role)}</div></span><button class="secondary-button" data-remove-identity="${escapeAttr(identity.channel)}|${escapeAttr(identity.stableId)}">${tWeb("web.identities.remove")}</button></li>`,
+              `<li class="list-row"><div class="list-row-copy"><strong>${escapeHtml(identity.displayName)}</strong><div class="meta identity-meta"><span>${channelName(identity.channel)}</span><span class="identity-id" title="${escapeAttr(identity.stableId)}">${escapeHtml(identity.stableId)}</span><span>${roleName(identity.role)}</span></div></div><button class="secondary-button row-action" data-remove-identity="${escapeAttr(identity.channel)}|${escapeAttr(identity.stableId)}">${tWeb("web.identities.remove")}</button></li>`,
           )
           .join("");
 }
@@ -349,11 +349,11 @@ function renderCandidates(result) {
   const candidates = result.value;
   target.innerHTML =
     candidates.length === 0
-      ? `<li><strong>${tWeb("web.candidates.empty.title")}</strong><div class="meta">${tWeb("web.candidates.empty.hint")}</div></li>`
+      ? `<li class="empty-list-item"><strong>${tWeb("web.candidates.empty.title")}</strong><div class="meta">${tWeb("web.candidates.empty.hint")}</div></li>`
       : candidates
           .map(
             (identity) =>
-              `<li class="list-row"><span><strong>${escapeHtml(identity.displayName)}</strong><div class="meta">${channelName(identity.channel)} · ${escapeHtml(identity.stableId)}</div></span><button data-confirm-identity="${escapeAttr(identity.channel)}|${escapeAttr(identity.stableId)}|${escapeAttr(identity.displayName)}">${tWeb("web.candidates.confirm")}</button></li>`,
+              `<li class="list-row"><div class="list-row-copy"><strong>${escapeHtml(identity.displayName)}</strong><div class="meta identity-meta"><span>${channelName(identity.channel)}</span><span class="identity-id" title="${escapeAttr(identity.stableId)}">${escapeHtml(identity.stableId)}</span></div></div><button class="row-action" data-confirm-identity="${escapeAttr(identity.channel)}|${escapeAttr(identity.stableId)}|${escapeAttr(identity.displayName)}">${tWeb("web.candidates.confirm")}</button></li>`,
           )
           .join("");
 }
@@ -496,15 +496,18 @@ function connectedRowHtml(ch) {
   const summary = channelSummaryLine(ch, tWeb);
   const expanded = expandedChannelId === ch.id;
   const toggleLabel = expanded ? tWeb("web.channel.collapse") : tWeb("web.channel.manage");
+  const detailId = `channel-detail-${ch.id}`;
   return `
     <article class="channel-row ${expanded ? "expanded" : ""}" data-channel="${escapeAttr(ch.id)}">
-      <div class="channel-row-head" data-toggle="${escapeAttr(ch.id)}">
+      <div class="channel-row-head">
         <div class="channel-tile ${escapeAttr(ch.id)}-icon" aria-hidden="true">${escapeHtml(icon)}</div>
-        <div><div class="ch-name">${escapeHtml(ch.displayName ?? ch.id)}</div>${summary ? `<div class="ch-summary">${escapeHtml(summary)}</div>` : ""}</div>
+        <div class="channel-copy"><div class="ch-name">${escapeHtml(ch.displayName ?? ch.id)}</div>${summary ? `<div class="ch-summary" title="${escapeAttr(summary)}">${escapeHtml(summary)}</div>` : ""}</div>
         <span class="${badgeClass}">${escapeHtml(badge.text)}</span>
-        <button type="button" class="secondary-button" data-toggle="${escapeAttr(ch.id)}">${escapeHtml(toggleLabel)} ${expanded ? "▴" : "▾"}</button>
+        <button type="button" class="channel-disclosure" data-toggle="${escapeAttr(ch.id)}" aria-expanded="${expanded}" aria-controls="${escapeAttr(detailId)}" aria-label="${escapeAttr(toggleLabel)}" title="${escapeAttr(toggleLabel)}">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
+        </button>
       </div>
-      ${expanded ? `<div class="channel-row-body">${channelDetailHtml(ch)}</div>` : ""}
+      ${expanded ? `<div id="${escapeAttr(detailId)}" class="channel-row-body">${channelDetailHtml(ch)}</div>` : ""}
     </article>`;
 }
 
@@ -515,17 +518,22 @@ function availableTileHtml(ch) {
   const expanded = expandedChannelId === ch.id;
   if (expanded) {
     return `<article class="channel-add-tile expanded" data-channel="${escapeAttr(ch.id)}">
-      <div class="channel-row-head" data-toggle="${escapeAttr(ch.id)}" style="padding:0 0 8px">
+      <div class="channel-row-head">
         <div class="channel-tile ${escapeAttr(ch.id)}-icon" aria-hidden="true">${escapeHtml(icon)}</div>
-        <div class="ch-name">${escapeHtml(ch.displayName ?? ch.id)}</div>
-        <button type="button" class="secondary-button" data-toggle="${escapeAttr(ch.id)}" style="margin-left:auto">${escapeHtml(tWeb("web.channel.collapse"))} ▴</button>
+        <div class="channel-copy"><div class="ch-name">${escapeHtml(ch.displayName ?? ch.id)}</div><div class="ch-summary">${escapeHtml(tWeb("web.channel.state.notConfigured"))}</div></div>
+        <button type="button" class="channel-disclosure" data-toggle="${escapeAttr(ch.id)}" aria-expanded="true" aria-label="${escapeAttr(tWeb("web.channel.collapse"))}" title="${escapeAttr(tWeb("web.channel.collapse"))}">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
+        </button>
       </div>
       ${channelDetailHtml(ch)}</article>`;
   }
   return `<article class="channel-add-tile" data-channel="${escapeAttr(ch.id)}">
     <div class="channel-tile ${escapeAttr(ch.id)}-icon" aria-hidden="true">${escapeHtml(icon)}</div>
-    <div class="ch-name">${escapeHtml(ch.displayName ?? ch.id)}</div>
-    <button type="button" class="btn-primary-card" data-toggle="${escapeAttr(ch.id)}">+ ${escapeHtml(tWeb("web.channel.add"))}</button>
+    <div class="channel-copy"><div class="ch-name">${escapeHtml(ch.displayName ?? ch.id)}</div><div class="ch-summary">${escapeHtml(tWeb("web.channel.state.notConfigured"))}</div></div>
+    <button type="button" class="secondary-button channel-add-button" data-toggle="${escapeAttr(ch.id)}">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+      <span>${escapeHtml(tWeb("web.channel.add"))}</span>
+    </button>
   </article>`;
 }
 
@@ -1454,7 +1462,7 @@ function escapeAttr(value) {
   return escapeHtml(value);
 }
 
-// --- Navigation: keep the side-nav highlight and eyebrow in sync with scroll ---
+// --- Navigation: one application view per side-nav destination. ---
 const NAV_LABEL_KEYS = {
   connectPhone: "web.nav.connectPhone",
   phoneCommands: "web.nav.phoneCommands",
@@ -1468,39 +1476,43 @@ const NAV_LABEL_KEYS = {
 
 function setupNavigation() {
   const navItems = [...document.querySelectorAll(".nav-item")];
+  const pages = Object.keys(NAV_LABEL_KEYS)
+    .map((id) => document.getElementById(id))
+    .filter(Boolean);
+  const pageAliases = { codexNotice: "connectPhone", readiness: "connectPhone" };
 
   function activate(sectionId) {
+    const requestedId = pageAliases[sectionId] ?? sectionId;
+    const pageId = pages.some((page) => page.id === requestedId) ? requestedId : "connectPhone";
+
     for (const item of navItems) {
-      item.classList.toggle("active", item.getAttribute("href") === `#${sectionId}`);
+      const active = item.getAttribute("href") === `#${pageId}`;
+      item.classList.toggle("active", active);
+      if (active) item.setAttribute("aria-current", "page");
+      else item.removeAttribute("aria-current");
     }
+    for (const page of pages) {
+      page.classList.toggle("active", page.id === pageId);
+    }
+
+    window.scrollTo({ top: 0, behavior: "auto" });
   }
 
   for (const item of navItems) {
-    item.addEventListener("click", () => {
+    item.addEventListener("click", (event) => {
       const sectionId = item.getAttribute("href").slice(1);
-      activate(sectionId);
-      if (sectionId === "advanced") {
-        document.querySelector("#advanced").open = true;
+      if (window.location.hash === `#${sectionId}`) {
+        event.preventDefault();
+        activate(sectionId);
       }
     });
   }
 
-  const sections = Object.keys(NAV_LABEL_KEYS)
-    .map((id) => document.getElementById(id))
-    .filter(Boolean);
-  const observer = new IntersectionObserver(
-    (entries) => {
-      const visible = entries
-        .filter((entry) => entry.isIntersecting)
-        .sort((a, b) => b.intersectionRatio - a.intersectionRatio)[0];
-      if (visible) {
-        activate(visible.target.id);
-      }
-    },
-    { rootMargin: "-20% 0px -60% 0px", threshold: [0, 0.25, 0.5, 1] },
-  );
-  for (const section of sections) {
-    observer.observe(section);
+  window.addEventListener("hashchange", () => activate(window.location.hash.slice(1)));
+  const initialId = window.location.hash.slice(1);
+  activate(initialId);
+  if (!initialId || (!NAV_LABEL_KEYS[initialId] && !pageAliases[initialId])) {
+    history.replaceState(null, "", "#connectPhone");
   }
 }
 

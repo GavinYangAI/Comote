@@ -403,11 +403,7 @@ fn start_comote_sidecar(
     let app_data_dir = app.path().app_data_dir()?;
     fs::create_dir_all(&app_data_dir)?;
 
-    let server_entry = resource_dir
-        .join("comote-server")
-        .join("src")
-        .join("server")
-        .join("index.js");
+    let server_entry = server_entry_path(&resource_dir);
     let state_path = app_data_dir.join("state.json");
 
     log_line(
@@ -488,6 +484,25 @@ fn start_comote_sidecar(
 
         Ok(ComoteChild::Shell(child))
     }
+}
+
+#[cfg(debug_assertions)]
+fn server_entry_path(_resource_dir: &Path) -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .expect("src-tauri must be inside the Comote repository")
+        .join("src")
+        .join("server")
+        .join("index.js")
+}
+
+#[cfg(not(debug_assertions))]
+fn server_entry_path(resource_dir: &Path) -> PathBuf {
+    resource_dir
+        .join("comote-server")
+        .join("src")
+        .join("server")
+        .join("index.js")
 }
 
 // Launches comote-node directly (no Tauri shell). On Windows this is the primary
