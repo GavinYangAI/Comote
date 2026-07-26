@@ -155,13 +155,34 @@
           </div>
 
           <div class="command-grid">
-            <code>/projects</code>
-            <code>/open 1</code>
-            <code>/sessions</code>
-            <code>/new fix tests</code>
-            <code>/approve &lt;id&gt;</code>
-            <code>/automode true</code>
-            <code>/cancel</code>
+            <div class="command-chip">
+              <code tabindex="0" aria-describedby="command-projects-tooltip">/projects</code>
+              <span id="command-projects-tooltip" class="command-tooltip" role="tooltip" data-i18n="web.commands.tooltip.projects">作用：列出可操作的项目。&#10;用法：/projects</span>
+            </div>
+            <div class="command-chip">
+              <code tabindex="0" aria-describedby="command-open-tooltip">/open 1</code>
+              <span id="command-open-tooltip" class="command-tooltip" role="tooltip" data-i18n="web.commands.tooltip.open">作用：选择要操作的项目。&#10;用法：/open &lt;编号|绝对路径&gt;</span>
+            </div>
+            <div class="command-chip">
+              <code tabindex="0" aria-describedby="command-sessions-tooltip">/sessions</code>
+              <span id="command-sessions-tooltip" class="command-tooltip" role="tooltip" data-i18n="web.commands.tooltip.sessions">作用：列出当前项目的 Codex 对话。&#10;用法：/sessions</span>
+            </div>
+            <div class="command-chip">
+              <code tabindex="0" aria-describedby="command-new-tooltip">/new fix tests</code>
+              <span id="command-new-tooltip" class="command-tooltip" role="tooltip" data-i18n="web.commands.tooltip.new">作用：新建对话并发送第一条任务。&#10;用法：/new &lt;消息&gt;</span>
+            </div>
+            <div class="command-chip">
+              <code tabindex="0" aria-describedby="command-approve-tooltip">/approve &lt;id&gt;</code>
+              <span id="command-approve-tooltip" class="command-tooltip" role="tooltip" data-i18n="web.commands.tooltip.approve">作用：批准一次待处理的 Codex 请求。&#10;用法：/approve &lt;审批编号&gt;</span>
+            </div>
+            <div class="command-chip">
+              <code tabindex="0" aria-describedby="command-automode-tooltip">/automode true</code>
+              <span id="command-automode-tooltip" class="command-tooltip" role="tooltip" data-i18n="web.commands.tooltip.automode">作用：切换当前对话的自动审批。&#10;用法：/automode &lt;true|false&gt;</span>
+            </div>
+            <div class="command-chip">
+              <code tabindex="0" aria-describedby="command-cancel-tooltip">/cancel</code>
+              <span id="command-cancel-tooltip" class="command-tooltip" role="tooltip" data-i18n="web.commands.tooltip.cancel">作用：取消当前 Codex 任务或退出选择。&#10;用法：/cancel</span>
+            </div>
           </div>
         </section>
 

@@ -42,3 +42,23 @@ test("desktop approvals expose the allow-for-session decision", async () => {
   assert.match(js, /\|acceptForSession/);
   assert.match(i18n, /web\.approvals\.acceptForSession/);
 });
+
+test("phone commands expose localized hover and keyboard tooltips", async () => {
+  const [html, css] = await Promise.all([
+    readFile("public/index.html", "utf8"),
+    readFile("public/styles.css", "utf8"),
+  ]);
+  assert.equal((html.match(/class="command-chip"/g) ?? []).length, 7);
+  assert.equal((html.match(/role="tooltip"/g) ?? []).length, 7);
+  assert.equal((html.match(/<code tabindex="0" aria-describedby=/g) ?? []).length, 7);
+  for (const command of ["projects", "open", "sessions", "new", "approve", "automode", "cancel"]) {
+    assert.match(html, new RegExp(`data-i18n="web\\.commands\\.tooltip\\.${command}"`));
+    assert.match(html, new RegExp(`aria-describedby="command-${command}-tooltip"`));
+    assert.match(html, new RegExp(`id="command-${command}-tooltip"`));
+  }
+  assert.match(css, /\.command-chip:hover \.command-tooltip/);
+  assert.match(css, /\.command-chip:focus-within \.command-tooltip/);
+  assert.match(css, /\.command-chip code:focus-visible/);
+  assert.match(css, /white-space:\s*pre-line/);
+  assert.match(css, /max-width:\s*min\(320px, calc\(100vw - 40px\)\)/);
+});

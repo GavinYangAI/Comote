@@ -29,3 +29,11 @@ test("tWeb localizes and falls back", () => {
   assert.equal(tWeb("web.nav.connectPhone"), "连接手机");
   assert.equal(tWeb("__missing__"), "__missing__");
 });
+
+test("command tooltips localize both effect and usage", () => {
+  setWebLocale("en");
+  const text = tWeb("web.commands.tooltip.automode");
+  assert.match(text, /Effect:/);
+  assert.match(text, /Usage: \/automode <true\|false>/);
+  setWebLocale("zh");
+});

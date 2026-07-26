@@ -1037,6 +1037,76 @@ textarea {
   gap: 10px;
 }
 
+.command-chip {
+  position: relative;
+  min-width: 0;
+}
+
+.command-chip:hover,
+.command-chip:focus-within {
+  z-index: 20;
+}
+
+.command-chip code {
+  height: 100%;
+  cursor: help;
+}
+
+.command-chip code:focus-visible {
+  outline: 2px solid var(--teal);
+  outline-offset: 2px;
+}
+
+.command-tooltip {
+  position: absolute;
+  left: 50%;
+  bottom: calc(100% + 9px);
+  z-index: 30;
+  width: max-content;
+  max-width: min(320px, calc(100vw - 40px));
+  padding: 9px 11px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: var(--radius-sm);
+  background: var(--ink);
+  box-shadow: var(--shadow-lg);
+  color: #ffffff;
+  font-family: var(--font-sans);
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 1.55;
+  letter-spacing: 0;
+  text-align: left;
+  white-space: pre-line;
+  pointer-events: none;
+  opacity: 0;
+  visibility: hidden;
+  transform: translateX(-50%);
+  transition: opacity 120ms ease, visibility 120ms ease;
+}
+
+.command-chip:nth-child(3n + 1) .command-tooltip {
+  left: 0;
+  transform: none;
+}
+
+.command-chip:nth-child(3n) .command-tooltip {
+  right: 0;
+  left: auto;
+  transform: none;
+}
+
+.command-chip:hover .command-tooltip,
+.command-chip:focus-within .command-tooltip {
+  opacity: 1;
+  visibility: visible;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .command-tooltip {
+    transition: none;
+  }
+}
+
 code {
   display: block;
   border: 1px solid var(--line);
@@ -2288,6 +2358,12 @@ code {
   .readiness-list,
   .command-grid {
     grid-template-columns: 1fr;
+  }
+
+  .command-chip:nth-child(n) .command-tooltip {
+    right: auto;
+    left: 0;
+    transform: none;
   }
 
   .channel-add-grid {
