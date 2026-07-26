@@ -516,8 +516,87 @@ test("/new falls back to Codex CLI when Desktop is disconnected", async () => {
   router.handleMessage({ identity, text: "/open 1" });
   const reply = await router.handleMessageAsync({ identity, text: "/new inspect repo" });
 
-  assert.match(reply.text, /已启动 Codex CLI 备用会话/);
+  assert.match(reply.text, /已通过 Codex CLI 启动会话/);
   assert.match(reply.text, /CLI response/);
+});
+
+test("preferred CLI wins for a new session even while Desktop is connected", async () => {
+  const authorization = new AuthorizationStore();
+  const projects = new ProjectStore();
+  const sessions = new SessionStore();
+  const identity = { channel: "wechat", stableId: "wxid_owner", displayName: "Alice" };
+  let desktopStarted = false;
+  const codexDesktop = {
+    getStatus: () => ({ state: "connected" }),
+    startThread: async () => {
+      desktopStarted = true;
+      return { thread: { id: "desktop_thread" } };
+    },
+  };
+  const codexCli = {
+    getStatus: () => ({ state: "available" }),
+    runPrompt: async () => ({ id: "019_cli_thread", output: "CLI preferred" }),
+  };
+  const router = new CommandRouter({
+    authorization,
+    projects,
+    sessions,
+    codexDesktop,
+    codexCli,
+    getPreferredConnector: () => "cli",
+  });
+  authorization.confirmIdentity(identity);
+  projects.replaceProjects([{ name: "comote", path: "/repo", source: "codex-desktop", status: "available" }]);
+
+  router.handleMessage({ identity, text: "/open 1" });
+  const reply = await router.handleMessageAsync({ identity, text: "/new inspect repo" });
+
+  assert.equal(desktopStarted, false);
+  assert.match(reply.text, /CLI preferred/);
+  assert.equal(sessions.getActiveSession("/repo", "wechat:wxid_owner").connector, "cli");
+});
+
+test("a thread opened with CLI preference continues through codex exec resume", async () => {
+  const authorization = new AuthorizationStore();
+  const projects = new ProjectStore();
+  const sessions = new SessionStore();
+  const identity = { channel: "wechat", stableId: "wxid_owner", displayName: "Alice" };
+  let desktopResumed = false;
+  const cliCalls = [];
+  const codexDesktop = {
+    getStatus: () => ({ state: "connected" }),
+    listThreads: async () => ({ threads: [{ id: "019_thread", title: "Existing task", cwd: "/repo" }] }),
+    resumeThread: async () => {
+      desktopResumed = true;
+      return { thread: { id: "019_thread" } };
+    },
+  };
+  const codexCli = {
+    getStatus: () => ({ state: "available" }),
+    runPrompt: async (options) => {
+      cliCalls.push(options);
+      return { id: options.resumeId, output: "continued in CLI" };
+    },
+  };
+  const router = new CommandRouter({
+    authorization,
+    projects,
+    sessions,
+    codexDesktop,
+    codexCli,
+    getPreferredConnector: () => "cli",
+  });
+  authorization.confirmIdentity(identity);
+  projects.replaceProjects([{ name: "comote", path: "/repo", source: "codex-desktop", status: "available" }]);
+
+  router.handleMessage({ identity, text: "/open 1" });
+  await router.handleMessageAsync({ identity, text: "/use 1" });
+  const reply = await router.handleMessageAsync({ identity, text: "continue" });
+
+  assert.equal(desktopResumed, false);
+  assert.equal(cliCalls[0].resumeId, "019_thread");
+  assert.match(reply.text, /continued in CLI/);
+  assert.equal(sessions.getActiveSession("/repo", "wechat:wxid_owner").connector, "cli");
 });
 
 test("projects reply carries a picker descriptor", async () => {

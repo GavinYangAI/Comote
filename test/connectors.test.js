@@ -398,6 +398,65 @@ test("cli connector omits --image when there are no images", async () => {
   assert.ok(!calls[0].args.includes("--image"));
 });
 
+test("cli connector captures the real Codex thread id and final message from JSONL", async () => {
+  const calls = [];
+  const connector = new CodexCliConnector({
+    command: "codex",
+    execFileAsync: async (file, args) => {
+      calls.push({ file, args });
+      return {
+        stdout: [
+          JSON.stringify({ type: "thread.started", thread_id: "019abcde-1234" }),
+          JSON.stringify({ type: "item.completed", item: { type: "agent_message", text: "done" } }),
+        ].join("\n"),
+        stderr: "",
+      };
+    },
+  });
+
+  const result = await connector.runPrompt({ cwd: "/repo", text: "fix it" });
+
+  assert.equal(result.id, "019abcde-1234");
+  assert.equal(result.output, "done");
+  assert.ok(calls[0].args.includes("--json"));
+});
+
+test("cli connector resumes a selected Codex thread", async () => {
+  const calls = [];
+  const connector = new CodexCliConnector({
+    command: "codex",
+    execFileAsync: async (file, args) => {
+      calls.push({ file, args });
+      return {
+        stdout: JSON.stringify({
+          type: "item.completed",
+          item: { type: "agent_message", text: "continued" },
+        }),
+        stderr: "",
+      };
+    },
+  });
+
+  const result = await connector.runPrompt({
+    cwd: "/repo",
+    text: "continue",
+    resumeId: "019abcde-1234",
+  });
+
+  assert.deepEqual(calls[0].args, [
+    "exec",
+    "--skip-git-repo-check",
+    "-C",
+    "/repo",
+    "resume",
+    "--json",
+    "019abcde-1234",
+    "continue",
+  ]);
+  assert.equal(result.id, "019abcde-1234");
+  assert.equal(result.output, "continued");
+});
+
 test("desktop connector emits thread events and routes approvals by short code", async () => {
   const transport = new MemoryTransport();
   const connector = new CodexDesktopConnector({ transport });

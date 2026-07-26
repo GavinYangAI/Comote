@@ -1580,80 +1580,6 @@ code {
   border-radius: var(--radius-sm);
 }
 
-/* ============================================================
-   RESPONSIVE — narrow desktop / tablet
-   ============================================================ */
-@media (max-width: 960px) {
-  .app-frame {
-    grid-template-columns: 1fr;
-  }
-
-  .side-nav {
-    position: static;
-    height: auto;
-    flex-direction: row;
-    flex-wrap: wrap;
-    gap: 12px;
-    padding: 12px 16px;
-    border-bottom: 1px solid var(--line);
-  }
-
-  .side-brand {
-    width: 100%;
-  }
-
-  .nav-list {
-    flex-direction: row;
-    flex-wrap: wrap;
-    gap: 4px;
-    width: 100%;
-  }
-
-  .nav-item {
-    justify-content: center;
-    padding: 0 10px;
-  }
-
-  .section-block,
-  .advanced,
-  .system-notice,
-  .top-bar {
-    width: min(100% - 32px, 760px);
-  }
-
-  .channel-grid,
-  .user-grid,
-  .advanced-grid,
-  .command-grid {
-    grid-template-columns: 1fr;
-  }
-
-  .readiness-list {
-    grid-template-columns: repeat(2, 1fr);
-  }
-
-  .inline-form {
-    grid-template-columns: 1fr;
-  }
-}
-
-@media (max-width: 640px) {
-  .top-bar,
-  .inline-heading,
-  .system-notice {
-    align-items: flex-start;
-    flex-direction: column;
-  }
-
-  .readiness-list {
-    grid-template-columns: 1fr;
-  }
-
-  .nav-list {
-    grid-template-columns: 1fr 1fr;
-  }
-}
-
 /* ---- Channels page redesign (connected / available + accordion) ---- */
 .channel-section-title { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 18px 2px 8px; }
 .channel-section:first-child .channel-section-title { margin-top: 4px; }
@@ -1762,6 +1688,13 @@ code {
   color: var(--muted);
   font-size: 14px;
   transition: background-color 0.13s, color 0.13s;
+}
+
+.nav-item > span:not(.nav-count) {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .nav-item:hover {
@@ -2243,6 +2176,86 @@ code {
   padding: 0;
 }
 
+.connector-preference-panel {
+  align-self: start;
+}
+
+.segmented-selector {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0;
+  margin: 16px 0 10px;
+  padding: 3px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--surface-low);
+}
+
+.segment-option {
+  position: relative;
+  min-width: 0;
+  cursor: pointer;
+}
+
+.segment-option input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.segment-option > span {
+  display: grid;
+  min-height: 62px;
+  align-content: center;
+  gap: 2px;
+  padding: 9px 12px;
+  border: 1px solid transparent;
+  border-radius: calc(var(--radius-md) - 2px);
+  color: var(--muted);
+  text-align: center;
+  transition: background-color 0.13s, border-color 0.13s, color 0.13s;
+}
+
+.segment-option strong {
+  overflow-wrap: anywhere;
+  font-size: 14px;
+  line-height: 1.3;
+}
+
+.segment-option small {
+  font-size: 11.5px;
+  line-height: 1.3;
+}
+
+.segment-option:hover > span {
+  color: var(--ink);
+}
+
+.segment-option input:checked + span {
+  border-color: var(--line);
+  background: var(--surface);
+  color: var(--teal-text);
+  box-shadow: var(--shadow-sm);
+}
+
+.segment-option input:focus-visible + span {
+  outline: 2px solid var(--teal);
+  outline-offset: 2px;
+}
+
+.segment-option input:disabled + span {
+  cursor: wait;
+  opacity: 0.62;
+}
+
+.setting-save-status {
+  min-height: 18px;
+  color: var(--subtle);
+  font-size: 12px;
+}
+
 .kv {
   border-radius: var(--radius-md);
 }
@@ -2261,6 +2274,27 @@ code {
   #users .user-grid,
   .advanced-grid {
     grid-template-columns: 1fr;
+  }
+
+  .command-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .command-chip:nth-child(n) .command-tooltip {
+    right: auto;
+    left: 50%;
+    transform: translateX(-50%);
+  }
+
+  .command-chip:nth-child(2n + 1) .command-tooltip {
+    left: 0;
+    transform: none;
+  }
+
+  .command-chip:nth-child(2n) .command-tooltip {
+    right: 0;
+    left: auto;
+    transform: none;
   }
 }
 
@@ -2305,6 +2339,11 @@ code {
     padding: 8px 10px;
     border: 0;
     border-radius: var(--radius-md);
+  }
+
+  .nav-item > span:not(.nav-count) {
+    overflow: visible;
+    text-overflow: clip;
   }
 
   .top-bar,
@@ -2357,6 +2396,10 @@ code {
 
   .readiness-list,
   .command-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .segmented-selector {
     grid-template-columns: 1fr;
   }
 

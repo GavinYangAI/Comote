@@ -224,6 +224,29 @@
             <h2 data-i18n="web.advanced.title">高级设置</h2>
           </div>
           <section class="advanced-grid">
+            <article class="panel connector-preference-panel">
+              <h3 data-i18n="web.advanced.connectorTitle">会话后端</h3>
+              <p class="setting-note" data-i18n="web.advanced.connectorHint">选择新建或打开会话时优先使用的 Codex 接口。当前会话不会切换。</p>
+              <fieldset id="preferredConnector" class="segmented-selector">
+                <legend class="visually-hidden" data-i18n="web.advanced.connectorLabel">优先使用</legend>
+                <label class="segment-option">
+                  <input type="radio" name="preferredConnector" value="desktop">
+                  <span>
+                    <strong>Codex Desktop</strong>
+                    <small data-i18n="web.advanced.connectorDesktopHint">支持实时进度和审批</small>
+                  </span>
+                </label>
+                <label class="segment-option">
+                  <input type="radio" name="preferredConnector" value="cli">
+                  <span>
+                    <strong>Codex CLI</strong>
+                    <small data-i18n="web.advanced.connectorCliHint">通过本机命令行运行</small>
+                  </span>
+                </label>
+              </fieldset>
+              <p id="preferredConnectorStatus" class="setting-save-status" aria-live="polite" data-i18n="web.advanced.connectorEffective">将在下一次新建或打开会话时生效。</p>
+            </article>
+
             <article class="panel">
               <h3 data-i18n="web.advanced.projects">Codex 项目</h3>
               <div class="actions">

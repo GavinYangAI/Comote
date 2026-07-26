@@ -53,7 +53,7 @@ export class SessionStore {
     }
   }
 
-  createSession({ projectPath, title, firstMessage, identityKey = null }) {
+  createSession({ projectPath, title, firstMessage, identityKey = null, connector = null }) {
     if (!projectPath) {
       throw new Error("projectPath is required");
     }
@@ -64,6 +64,7 @@ export class SessionStore {
       state: "idle",
       messages: firstMessage ? [{ role: "user", text: firstMessage }] : [],
       updatedAt: new Date().toISOString(),
+      ...(connector ? { connector } : {}),
     };
 
     const sessions = this.sessionsByProject.get(projectPath) ?? [];
@@ -73,7 +74,15 @@ export class SessionStore {
     return { ...session, messages: [...session.messages] };
   }
 
-  upsertExternalSession({ projectPath, id, title, state = "idle", messages = [], identityKey = null }) {
+  upsertExternalSession({
+    projectPath,
+    id,
+    title,
+    state = "idle",
+    messages = [],
+    identityKey = null,
+    connector = null,
+  }) {
     if (!projectPath || !id) {
       throw new Error("projectPath and id are required");
     }
@@ -82,6 +91,7 @@ export class SessionStore {
     if (existing) {
       existing.title = title ?? existing.title;
       existing.state = state ?? existing.state;
+      existing.connector = connector ?? existing.connector;
       existing.updatedAt = new Date().toISOString();
       this.setActive(projectPath, existing.id, identityKey);
       return { ...existing, messages: [...existing.messages] };
@@ -95,6 +105,7 @@ export class SessionStore {
       messages: [...messages],
       updatedAt: new Date().toISOString(),
       external: true,
+      ...(connector ? { connector } : {}),
     };
     sessions.push(session);
     this.sessionsByProject.set(projectPath, sessions);
@@ -109,12 +120,16 @@ export class SessionStore {
     }));
   }
 
-  useSession(projectPath, sessionIdOrNumber, identityKey = null) {
+  useSession(projectPath, sessionIdOrNumber, identityKey = null, connector = null) {
     const sessions = this.sessionsByProject.get(projectPath) ?? [];
     const byNumber = sessions[Number(sessionIdOrNumber) - 1];
     const session = sessions.find((candidate) => candidate.id === sessionIdOrNumber) ?? byNumber;
     if (!session) {
       throw new Error(`unknown session: ${sessionIdOrNumber}`);
+    }
+    if (connector) {
+      session.connector = connector;
+      session.updatedAt = new Date().toISOString();
     }
     this.setActive(projectPath, session.id, identityKey);
     return { ...session, messages: [...session.messages] };

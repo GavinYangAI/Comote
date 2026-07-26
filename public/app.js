@@ -141,6 +141,59 @@ async function setupKeepAliveToggle() {
   });
 }
 
+function setupPreferredConnectorSelector(settings) {
+  const fieldset = document.querySelector("#preferredConnector");
+  const status = document.querySelector("#preferredConnectorStatus");
+  const radios = [...document.querySelectorAll('input[name="preferredConnector"]')];
+  if (!fieldset || !status || radios.length === 0) {
+    return;
+  }
+
+  let committed = settings?.preferredConnector === "cli" ? "cli" : "desktop";
+  const setStatus = (key) => {
+    status.dataset.i18n = key;
+    status.textContent = tWeb(key);
+  };
+  const setDisabled = (disabled) => {
+    for (const radio of radios) {
+      radio.disabled = disabled;
+    }
+  };
+
+  const initial = radios.find((radio) => radio.value === committed);
+  if (initial) {
+    initial.checked = true;
+  }
+
+  fieldset.addEventListener("change", async (event) => {
+    const radio = event.target.closest('input[name="preferredConnector"]');
+    if (!radio?.checked || radio.value === committed) {
+      return;
+    }
+    const previous = committed;
+    setDisabled(true);
+    setStatus("web.advanced.connectorSaving");
+    try {
+      const saved = await getJson("/api/settings", {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ preferredConnector: radio.value }),
+      });
+      committed = saved.preferredConnector === "cli" ? "cli" : "desktop";
+      setStatus("web.advanced.connectorSaved");
+    } catch (error) {
+      const previousRadio = radios.find((candidate) => candidate.value === previous);
+      if (previousRadio) {
+        previousRadio.checked = true;
+      }
+      setStatus("web.advanced.connectorSaveFailed");
+      console.error("preferred connector save failed", error);
+    } finally {
+      setDisabled(false);
+    }
+  });
+}
+
 // Generic per-channel login state: id -> { loginId, pollTimer, startCtx }.
 const activeLogin = {};
 let expandedChannelId = null; // accordion: at most one channel expanded at a time
@@ -1814,7 +1867,12 @@ async function init() {
   setupNavigation();
   setupChannelCards();
   setBridgeStatus(tWeb("web.status.starting"));
-  const settings = await safeGet("/api/settings", { locale: "zh", supported: ["zh"], localeExplicit: true });
+  const settings = await safeGet("/api/settings", {
+    locale: "zh",
+    supported: ["zh"],
+    localeExplicit: true,
+    preferredConnector: "desktop",
+  });
   let locale = settings.value?.locale ?? "zh";
   // First launch (no committed locale): follow the OS language, English if unmatched,
   // and persist the choice so subsequent launches respect it (and a manual switch).
@@ -1836,6 +1894,7 @@ async function init() {
   setWebLocale(locale);
   applyTranslations(document);
   populateLangSelect();
+  setupPreferredConnectorSelector(settings.value);
   await refreshVersionStatus();
   await render(); // paint immediately with whatever the daemon returns
   startAutoRefresh();

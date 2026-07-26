@@ -494,6 +494,7 @@ test("GET /api/settings returns locale and supported list", async () => {
   assert.equal(response.status, 200);
   assert.equal(body.locale, "en");
   assert.equal(body.localeExplicit, true, "a persisted locale is an explicit choice");
+  assert.equal(body.preferredConnector, "desktop");
   assert.ok(body.supported.includes("ja"));
 
   // i18n locale is a module-level global; reset so other test files aren't polluted.
@@ -548,6 +549,41 @@ test("PUT /api/settings sets a valid locale and rejects an invalid one", async (
 
   // i18n locale is a module-level global; reset so other test files aren't polluted.
   setI18nLocale("zh");
+});
+
+test("PUT /api/settings persists a valid connector preference and rejects an invalid one", async () => {
+  let snapshot = null;
+  const state = createComoteState({
+    stateStore: { save: async (value) => { snapshot = value; } },
+    autoStartWeChatRuntime: false,
+    autoStartFeishuRuntime: false,
+    autoStartDingTalkRuntime: false,
+    autoStartTelegramRuntime: false,
+  });
+  const app = createServer(state);
+  const server = app.listen(0);
+  await new Promise((resolve) => server.once("listening", resolve));
+
+  const { port } = server.address();
+  const validResponse = await fetch(`http://127.0.0.1:${port}/api/settings`, {
+    method: "PUT",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ preferredConnector: "cli" }),
+  });
+  const valid = await validResponse.json();
+  const invalidResponse = await fetch(`http://127.0.0.1:${port}/api/settings`, {
+    method: "PUT",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ preferredConnector: "other" }),
+  });
+  server.close();
+
+  assert.equal(validResponse.status, 200);
+  assert.equal(valid.preferredConnector, "cli");
+  assert.equal(state.getSettings().preferredConnector, "cli");
+  assert.equal(snapshot.settings.preferredConnector, "cli");
+  assert.equal(invalidResponse.status, 400);
+  assert.equal(state.getSettings().preferredConnector, "cli");
 });
 
 test("wechat outbound queue lists replies and supports ack", async () => {

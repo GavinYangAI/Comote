@@ -15,6 +15,7 @@ const PUBLIC_DIR = join(ROOT, "public");
 // pathological thread cannot balloon the response pipeline.
 const DESKTOP_TRANSCRIPT_FETCH_CAP = 1000;
 const APPROVAL_DECISIONS = new Set(["accept", "acceptForSession", "decline"]);
+const CONNECTOR_PREFERENCES = new Set(["desktop", "cli"]);
 
 const MIME_TYPES = {
   ".html": "text/html; charset=utf-8",
@@ -75,20 +76,40 @@ async function handleApi(request, response, state) {
   }
 
   if (request.method === "GET" && url.pathname === "/api/settings") {
-    sendJson(response, 200, { locale: state.getSettings().locale, localeExplicit: state.getSettings().localeExplicit ?? false, supported: SUPPORTED_LOCALES });
+    const settings = state.getSettings();
+    sendJson(response, 200, {
+      locale: settings.locale,
+      localeExplicit: settings.localeExplicit ?? false,
+      preferredConnector: settings.preferredConnector ?? "desktop",
+      supported: SUPPORTED_LOCALES,
+    });
     return;
   }
 
   if (request.method === "PUT" && url.pathname === "/api/settings") {
     const body = await readJsonBody(request);
-    const locale = body?.locale;
-    if (!SUPPORTED_LOCALES.includes(locale)) {
+    const hasLocale = Object.hasOwn(body ?? {}, "locale");
+    const hasPreferredConnector = Object.hasOwn(body ?? {}, "preferredConnector");
+    if (!hasLocale && !hasPreferredConnector) {
+      sendJson(response, 400, { error: "no supported settings supplied" });
+      return;
+    }
+    if (hasLocale && !SUPPORTED_LOCALES.includes(body.locale)) {
       sendJson(response, 400, { error: "unsupported locale" });
       return;
     }
-    state.setLocale(locale);
+    if (hasPreferredConnector && !CONNECTOR_PREFERENCES.has(body.preferredConnector)) {
+      sendJson(response, 400, { error: "unsupported connector preference" });
+      return;
+    }
+    if (hasLocale) {
+      state.setLocale(body.locale);
+    }
+    if (hasPreferredConnector) {
+      state.setPreferredConnector(body.preferredConnector);
+    }
     await state.persist?.();
-    sendJson(response, 200, { locale });
+    sendJson(response, 200, state.getSettings());
     return;
   }
 

@@ -62,3 +62,26 @@ test("phone commands expose localized hover and keyboard tooltips", async () => 
   assert.match(css, /white-space:\s*pre-line/);
   assert.match(css, /max-width:\s*min\(320px, calc\(100vw - 40px\)\)/);
 });
+
+test("advanced settings expose a persistent Codex connector selector", async () => {
+  const [html, js, css] = await Promise.all([
+    readFile("public/index.html", "utf8"),
+    readFile("public/app.js", "utf8"),
+    readFile("public/styles.css", "utf8"),
+  ]);
+
+  assert.match(html, /id="preferredConnector" class="segmented-selector"/);
+  assert.match(html, /name="preferredConnector" value="desktop"/);
+  assert.match(html, /name="preferredConnector" value="cli"/);
+  assert.match(js, /JSON\.stringify\(\{ preferredConnector: radio\.value \}\)/);
+  assert.match(css, /\.segmented-selector\s*\{[^}]*grid-template-columns:\s*repeat\(2/s);
+});
+
+test("narrow-window layout has one responsive system and a stable sidebar", async () => {
+  const css = await readFile("public/styles.css", "utf8");
+
+  assert.doesNotMatch(css, /@media \(max-width: 960px\)/);
+  assert.match(css, /@media \(max-width: 820px\)[\s\S]*\.nav-list\s*\{[^}]*flex-flow:\s*row nowrap/);
+  assert.match(css, /\.nav-item > span:not\(\.nav-count\)[\s\S]*white-space:\s*nowrap/);
+  assert.match(css, /@media \(max-width: 1100px\)[\s\S]*\.command-grid\s*\{[^}]*repeat\(2/);
+});

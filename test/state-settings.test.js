@@ -23,3 +23,23 @@ test("an invalid persisted locale is normalized in both i18n and settings", () =
   assert.equal(state.getSettings().locale, "zh");
   setLocale("zh");
 });
+
+test("connector preference defaults to Desktop and restores a valid persisted choice", () => {
+  const defaults = createComoteState({ persisted: {} });
+  const restored = createComoteState({ persisted: { settings: { preferredConnector: "cli" } } });
+  const invalid = createComoteState({ persisted: { settings: { preferredConnector: "other" } } });
+
+  assert.equal(defaults.getSettings().preferredConnector, "desktop");
+  assert.equal(restored.getSettings().preferredConnector, "cli");
+  assert.equal(invalid.getSettings().preferredConnector, "desktop");
+});
+
+test("setPreferredConnector validates and updates the live setting", () => {
+  const state = createComoteState({ persisted: {} });
+
+  state.setPreferredConnector("cli");
+
+  assert.equal(state.getSettings().preferredConnector, "cli");
+  assert.throws(() => state.setPreferredConnector("other"), /unsupported connector preference/);
+  assert.equal(state.getSettings().preferredConnector, "cli");
+});

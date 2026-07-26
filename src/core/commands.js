@@ -36,6 +36,7 @@ export class CommandRouter {
     maxTurnsPerHour = 60,
     transcript = null,
     scanLocalProjects = defaultScanLocalProjects,
+    getPreferredConnector = null,
   }) {
     this.authorization = authorization;
     this.projects = projects;
@@ -44,6 +45,9 @@ export class CommandRouter {
     this.codexCli = codexCli;
     this.outboundQueue = outboundQueue;
     this.transcript = transcript;
+    this.getPreferredConnector = typeof getPreferredConnector === "function"
+      ? getPreferredConnector
+      : () => "desktop";
     // Headless/Linux fallback project source: enumerates folders under a root
     // when there is no Codex Desktop to list workspaces. Injectable for tests.
     this.scanLocalProjects = scanLocalProjects;
@@ -68,6 +72,31 @@ export class CommandRouter {
     // notice to everyone who already saw it.
     this.noticedIdentities = new Set((persisted.noticedIdentities ?? []).slice(-MAX_REMEMBERED_IDENTITIES));
     this.greetedIdentities = new Set((persisted.greetedIdentities ?? []).slice(-MAX_REMEMBERED_IDENTITIES));
+  }
+
+  preferredConnector() {
+    return this.getPreferredConnector() === "cli" ? "cli" : "desktop";
+  }
+
+  isDesktopAvailable() {
+    return this.codexDesktop?.getStatus?.().state === "connected";
+  }
+
+  isCliAvailable() {
+    if (!this.codexCli?.runPrompt) {
+      return false;
+    }
+    return this.codexCli.getStatus?.().state !== "not_found";
+  }
+
+  connectorForNextSession() {
+    if (this.preferredConnector() === "cli" && this.isCliAvailable()) {
+      return "cli";
+    }
+    if (this.isDesktopAvailable()) {
+      return "desktop";
+    }
+    return this.isCliAvailable() ? "cli" : null;
   }
 
   // Serializable routing state for persistence. Transient UI state
@@ -582,7 +611,12 @@ export class CommandRouter {
 
   useSession(identity, selector) {
     const projectPath = this.requireCurrentProject(identity);
-    const session = this.sessions.useSession(projectPath, selector, this.identityKey(identity));
+    const session = this.sessions.useSession(
+      projectPath,
+      selector,
+      this.identityKey(identity),
+      this.connectorForNextSession(),
+    );
     return t("cmd.use.switched", { title: session.title, id: session.id });
   }
 
@@ -639,12 +673,21 @@ export class CommandRouter {
       const threads = response.data ?? response.threads ?? [];
       const thread = threads[Number(selector) - 1] ?? threads.find((candidate) => candidate.id === selector);
       if (thread) {
-        const resumed = await this.resumeDesktopThread(thread.id, projectPath);
+        const connector = this.connectorForNextSession();
+        const resumed = connector === "desktop"
+          ? await this.resumeDesktopThread(thread.id, projectPath)
+          : null;
         const activeThread = resumed?.thread ?? thread;
         const title = this.threadTitle(activeThread, thread);
         const threadId = activeThread.id ?? thread.id;
         this.bindThreadForIdentity(identity, threadId, projectPath);
-        this.sessions.upsertExternalSession({ projectPath, id: threadId, title, identityKey: key });
+        this.sessions.upsertExternalSession({
+          projectPath,
+          id: threadId,
+          title,
+          identityKey: key,
+          connector,
+        });
         this.pendingByIdentity.delete(key);
         const recent = await this.recentDesktopThreadLines(threadId, 3);
         const recentBlock = recent.length > 0
@@ -665,6 +708,7 @@ export class CommandRouter {
       title: message || "New Comote session",
       firstMessage: message,
       identityKey: this.identityKey(identity),
+      connector: this.connectorForNextSession(),
     });
     return t("cmd.new.created", { title: session.title, id: session.id });
   }
@@ -680,8 +724,9 @@ export class CommandRouter {
     // failed hand-off to Codex does not count against the user's hourly budget.
     const reservation = this.enforceTurnRate(identity);
     const images = this.collectImagePaths(attachments, projectPath);
+    const connector = this.connectorForNextSession();
     try {
-      if (this.codexDesktop?.getStatus?.().state === "connected") {
+      if (connector === "desktop") {
         const started = await this.codexDesktop.startThread({ cwd: projectPath });
         const threadId = started.thread.id;
         this.bindThreadForIdentity(identity, threadId, projectPath);
@@ -693,18 +738,25 @@ export class CommandRouter {
           title: message || threadId,
           messages: message ? [{ role: "user", text: message }] : [],
           identityKey: key,
+          connector: "desktop",
         });
         this.pendingByIdentity.delete(key);
         return t("cmd.new.sentDesktop", { id: threadId });
       }
-      if (this.codexCli?.runPrompt) {
+      if (connector === "cli") {
         const result = await this.codexCli.runPrompt({ cwd: projectPath, text: message, images });
+        this.bindThreadForIdentity(identity, result.id, projectPath);
+        this.transcript?.record(result.id, "user", message);
+        if (result.output) {
+          this.transcript?.record(result.id, "assistant", result.output);
+        }
         this.sessions.upsertExternalSession({
           projectPath,
           id: result.id,
           title: message || result.id,
           messages: message ? [{ role: "user", text: message }] : [],
           identityKey: key,
+          connector: "cli",
         });
         this.pendingByIdentity.delete(key);
         return t("cmd.new.startedCli", { name: message || result.id, output: result.output });
@@ -806,13 +858,38 @@ export class CommandRouter {
     if (!activeSession) {
       throw new Error(t("cmd.session.needActive"));
     }
-    if (this.codexDesktop?.getStatus?.().state !== "connected") {
-      // CLI fallback sessions (ids "cli_*", started by /new when only the
-      // Codex CLI was available) are one-shot: codex exec cannot resume them.
-      // Explain the way out instead of a bare "not connected" (B-7).
+    const connector = activeSession.connector
+      ?? (String(activeSession.id).startsWith("cli_") ? "cli" : "desktop");
+    if (connector === "cli") {
+      // Older Comote versions stored a synthetic cli_* id, which Codex cannot
+      // resume. New CLI sessions persist the real thread id from JSONL output.
       if (String(activeSession.id).startsWith("cli_")) {
         throw new Error(t("cmd.session.cliNoResume"));
       }
+      if (!this.isCliAvailable()) {
+        throw new Error(t("cmd.cli.notAvailable"));
+      }
+      const reservation = this.enforceTurnRate(identity);
+      const images = this.collectImagePaths(attachments, projectPath);
+      try {
+        this.bindThreadForIdentity(identity, activeSession.id, projectPath);
+        const result = await this.codexCli.runPrompt({
+          cwd: projectPath,
+          text,
+          images,
+          resumeId: activeSession.id,
+        });
+        this.transcript?.record(activeSession.id, "user", text);
+        if (result.output) {
+          this.transcript?.record(activeSession.id, "assistant", result.output);
+        }
+        return t("cmd.send.cliCompleted", { id: activeSession.id, output: result.output });
+      } catch (error) {
+        this.refundTurnStart(identity, reservation);
+        throw error;
+      }
+    }
+    if (this.codexDesktop?.getStatus?.().state !== "connected") {
       throw new Error(t("cmd.desktop.notConnected"));
     }
     // Reserve quota up front; refund it if the turn never actually starts.

@@ -41,6 +41,11 @@ const DISCONNECT_NOTICE = "与 Codex Desktop 的连接已断开";
 const MILESTONE_MIN_INTERVAL_MS = 8_000;
 const MILESTONE_MAX_PER_TURN = 6;
 const HEARTBEAT_MS = 90_000;
+const CONNECTOR_PREFERENCES = new Set(["desktop", "cli"]);
+
+function normalizeConnectorPreference(value) {
+  return CONNECTOR_PREFERENCES.has(value) ? value : "desktop";
+}
 
 export function createComoteState({
   persisted = {},
@@ -63,6 +68,7 @@ export function createComoteState({
   const settings = {
     locale: setI18nLocale(persisted?.settings?.locale ?? DEFAULT_LOCALE),
     localeExplicit: Boolean(persisted?.settings?.locale),
+    preferredConnector: normalizeConnectorPreference(persisted?.settings?.preferredConnector),
   };
 
   const authorization = new AuthorizationStore({ identities: persisted.identities ?? [] });
@@ -144,6 +150,7 @@ export function createComoteState({
     persisted: persisted.router ?? {},
     transcript,
     scanLocalProjects,
+    getPreferredConnector: () => settings.preferredConnector,
   });
   const registry = createRegistry([feishuPlugin, wechatPlugin, dingtalkPlugin, telegramPlugin]);
 
@@ -664,6 +671,13 @@ export function createComoteState({
       settings.locale = applied;
       settings.localeExplicit = true;
       return applied;
+    },
+    setPreferredConnector(preferredConnector) {
+      if (!CONNECTOR_PREFERENCES.has(preferredConnector)) {
+        throw new Error("unsupported connector preference");
+      }
+      settings.preferredConnector = preferredConnector;
+      return preferredConnector;
     },
     async persist() {
       if (!stateStore) {
