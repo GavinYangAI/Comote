@@ -37,7 +37,33 @@ test("openThreadCard sends a message and tracks the message id", async () => {
   const opened = await rt.openThreadCard({ threadId: "t1", conversationId: "9", card: rt.buildStatusCard({ phase: "started", threadId: "t1" }) });
   assert.equal(opened, true);
   assert.equal(calls.send[0].chatId, "9");
+  assert.equal(calls.send[0].parseMode, "HTML");
   assert.equal(rt.hasThreadCard("t1"), true);
+});
+
+test("live status falls back to plain text when Telegram rejects HTML entities", async () => {
+  const { rt, calls } = makeRuntime();
+  let first = true;
+  rt.driver.sendMessage = async (message) => {
+    calls.send.push(message);
+    if (first) {
+      first = false;
+      const error = new Error("Bad Request: can't parse entities");
+      error.code = 400;
+      throw error;
+    }
+    return { message_id: 42 };
+  };
+  const opened = await rt.openThreadCard({
+    threadId: "t1",
+    conversationId: "9",
+    card: rt.buildStatusCard({ phase: "progress", threadId: "t1", activities: ["read <config>"] }),
+  });
+  assert.equal(opened, true);
+  assert.equal(calls.send.length, 2);
+  assert.equal(calls.send[0].parseMode, "HTML");
+  assert.equal(calls.send[1].parseMode ?? null, null);
+  assert.match(calls.send[1].text, /read <config>/);
 });
 
 test("openThreadCard with no conversationId degrades to false", async () => {
@@ -64,6 +90,34 @@ test("a 'message is not modified' edit error is swallowed", async () => {
   const ok = await rt._edit(rt.cardSessions.get("t1"), { text: "a" });
   assert.equal(ok, true);
   assert.equal(rt.lastError, null);
+});
+
+test("live status edit falls back to plain text when Telegram rejects HTML", async () => {
+  const { rt, calls } = makeRuntime();
+  await rt.openThreadCard({
+    threadId: "t1",
+    conversationId: "9",
+    card: rt.buildStatusCard({ phase: "started", threadId: "t1" }),
+  });
+  let first = true;
+  rt.driver.editMessageText = async (message) => {
+    calls.edit.push(message);
+    if (first) {
+      first = false;
+      const error = new Error("Bad Request: can't parse entities");
+      error.code = 400;
+      throw error;
+    }
+  };
+  const ok = await rt._edit(
+    rt.cardSessions.get("t1"),
+    rt.buildStatusCard({ phase: "progress", threadId: "t1", activities: [{ label: "run", detail: "npm test" }] }),
+  );
+  assert.equal(ok, true);
+  assert.equal(calls.edit.length, 2);
+  assert.equal(calls.edit[0].parseMode, "HTML");
+  assert.equal(calls.edit[1].parseMode ?? null, null);
+  assert.match(calls.edit[1].text, /npm test/);
 });
 
 test("live approval pauses edits and resumes the same Telegram message", async () => {

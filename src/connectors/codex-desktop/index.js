@@ -227,6 +227,7 @@ export class CodexDesktopConnector {
         type: "milestone",
         kind: "file",
         label: firstChangePathBasename(params.changes),
+        detail: fileChangeDetail(params.changes),
         threadId: params.threadId ?? null,
       });
       return;
@@ -300,6 +301,7 @@ export class CodexDesktopConnector {
           type: "milestone",
           kind: "command",
           label: commandLabel(params.item?.command),
+          detail: commandDetail(params.item),
           threadId: params.threadId ?? null,
         });
       }
@@ -315,6 +317,7 @@ export class CodexDesktopConnector {
           type: "milestone",
           kind: "command",
           label: commandLabel(params.item.command),
+          detail: commandDetail(params.item),
           status: "failed",
           threadId: params.threadId ?? null,
         });
@@ -658,6 +661,27 @@ export function commandLabel(command) {
   if (typeof command !== "string") return null;
   const first = command.trim().split(/\s+/)[0];
   return first || null;
+}
+
+// Compact tool parameters for IM cards. Commands are usually short, but a
+// generated shell script can be large enough to exceed platform card limits.
+export function commandDetail(item = {}) {
+  return compactToolDetail({
+    ...(item.command != null ? { command: item.command } : {}),
+    ...(item.cwd != null ? { cwd: item.cwd } : {}),
+  });
+}
+
+function fileChangeDetail(changes) {
+  const paths = extractChangePaths(changes);
+  return paths.length > 0 ? compactToolDetail({ paths }) : null;
+}
+
+function compactToolDetail(value, max = 300) {
+  if (!value || Object.keys(value).length === 0) return null;
+  const text = JSON.stringify(value, null, 2);
+  if (text.length <= max) return text;
+  return `${text.slice(0, max - 3)}...`;
 }
 
 // Pure helper: basename of the first changed path in a patch update, used as a

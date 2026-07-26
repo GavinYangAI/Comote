@@ -123,7 +123,23 @@ export class TelegramRuntimeService extends BaseChannelRuntime {
   // card = { text, replyMarkup } from buildStatusCard.
   async openThreadCard({ threadId, conversationId, card }) {
     if (!conversationId) return false;
-    const msg = await this.driver.sendMessage({ chatId: conversationId, text: card.text, replyMarkup: card.replyMarkup ?? null });
+    let msg;
+    try {
+      msg = await this.driver.sendMessage({
+        chatId: conversationId,
+        text: card.text,
+        parseMode: card.parseMode ?? null,
+        replyMarkup: card.replyMarkup ?? null,
+      });
+    } catch (error) {
+      const parseRejected = card.parseMode && error?.code === 400 && /can't parse entities/i.test(error?.message ?? "");
+      if (!parseRejected || card.plainText == null) throw error;
+      msg = await this.driver.sendMessage({
+        chatId: conversationId,
+        text: card.plainText,
+        replyMarkup: card.replyMarkup ?? null,
+      });
+    }
     // Remember who owns this thread so a different (even authorized) user cannot
     // drive someone else's card via a forwarded/leaked button. Telegram's
     // accountId on the binding is the sender's id (== identity.stableId).
@@ -249,18 +265,41 @@ export class TelegramRuntimeService extends BaseChannelRuntime {
   }
 
   async _edit(session, card) {
+    let editError;
     try {
-      await this.driver.editMessageText({ chatId: session.conversationId, messageId: session.messageId, text: card.text, replyMarkup: card.replyMarkup ?? null });
+      await this.driver.editMessageText({
+        chatId: session.conversationId,
+        messageId: session.messageId,
+        text: card.text,
+        parseMode: card.parseMode ?? null,
+        replyMarkup: card.replyMarkup ?? null,
+      });
       return true;
     } catch (error) {
-      const message = error?.message ?? "";
+      const parseRejected = card.parseMode && error?.code === 400 && /can't parse entities/i.test(error?.message ?? "");
+      if (parseRejected && card.plainText != null) {
+        try {
+          await this.driver.editMessageText({
+            chatId: session.conversationId,
+            messageId: session.messageId,
+            text: card.plainText,
+            replyMarkup: card.replyMarkup ?? null,
+          });
+          return true;
+        } catch (fallbackError) {
+          editError = fallbackError;
+        }
+      } else {
+        editError = error;
+      }
+      const message = editError?.message ?? "";
       // Telegram rejects an identical edit with "message is not modified" — benign.
       if (/not modified/i.test(message)) return true;
       // Defensive backstop: completion cards pre-clamp their body (tail kept), so
       // this rarely fires — but a "message is too long" 400 would otherwise strand
       // the card mid-progress. Fall back to chunked fresh sends so the reply survives.
       if (/too long|message_too_long|MESSAGE_TOO_LONG/i.test(message)) {
-        const delivered = await this._sendChunked(session.conversationId, card.text).catch((err) => { this.lastError = err.message; return false; });
+        const delivered = await this._sendChunked(session.conversationId, card.plainText ?? card.text).catch((err) => { this.lastError = err.message; return false; });
         return delivered;
       }
       this.lastError = message;

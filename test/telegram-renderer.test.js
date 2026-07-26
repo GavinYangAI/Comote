@@ -165,6 +165,8 @@ test("buildStatusCard returns text + cancel keyboard while in-flight, no keyboar
   const r = createTelegramRenderer();
   const live = r.buildStatusCard({ phase: "progress", threadId: "t1", steps: 1, text: "go" });
   assert.match(live.text, /go/);
+  assert.equal(live.parseMode, "HTML");
+  assert.match(live.plainText, /go/);
   assert.equal(live.replyMarkup.inline_keyboard[0][0].callback_data, "ck:t1");
   const done = r.buildStatusCard({ phase: "completed", threadId: "t1", text: "done", done: true });
   assert.equal(done.replyMarkup ?? null, null);

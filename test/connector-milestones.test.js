@@ -41,12 +41,14 @@ test("item/started commandExecution emits a command milestone with the command's
   transport.receive({
     jsonrpc: "2.0",
     method: "item/started",
-    params: { threadId: "t1", item: { type: "commandExecution", command: "npm run test -- --watch" } },
+    params: { threadId: "t1", item: { type: "commandExecution", command: "npm run test -- --watch", cwd: "/repo" } },
   });
   const [ms] = milestones(events);
   assert.ok(ms, "a milestone was emitted");
   assert.equal(ms.kind, "command");
   assert.equal(ms.label, "npm");
+  assert.match(ms.detail, /"command": "npm run test -- --watch"/);
+  assert.match(ms.detail, /"cwd": "\/repo"/);
   assert.equal(ms.threadId, "t1");
 });
 
@@ -83,6 +85,7 @@ test("item/fileChange/patchUpdated emits a file milestone labeled with the chang
   const ms = milestones(events).find((m) => m.kind === "file");
   assert.ok(ms, "a file milestone was emitted");
   assert.equal(ms.label, "state.js");
+  assert.match(ms.detail, /src\/server\/state\.js/);
   assert.equal(ms.threadId, "t1");
 });
 

@@ -7,6 +7,7 @@ import {
   approvalKeyboard,
   pickerKeyboard,
   cancelKeyboard,
+  statusHtml,
   statusText,
   generatePairingCode,
   markdownToTelegramHtml,
@@ -104,6 +105,23 @@ test("statusText includes tool activity in the same message", () => {
   const text = statusText({ phase: "progress", activities: ["running npm", "edited app.js"] });
   assert.match(text, /running npm/);
   assert.match(text, /edited app\.js/);
+});
+
+test("statusHtml puts tool activity in an expandable blockquote", () => {
+  const html = statusHtml({
+    phase: "progress",
+    text: "answer <ready>",
+    activities: [
+      { label: "running npm", detail: '{"command":"npm test","cwd":"/repo"}' },
+      "read <config>",
+    ],
+  });
+  assert.match(html, /<blockquote expandable>/);
+  assert.match(html, /running npm/);
+  assert.match(html, /npm test/);
+  assert.match(html, /\/repo/);
+  assert.match(html, /read &lt;config&gt;/);
+  assert.match(html, /answer &lt;ready&gt;/);
 });
 
 test("generatePairingCode is 8 chars from the safe alphabet, deterministic under injected rng", () => {

@@ -117,13 +117,50 @@ export function cancelKeyboard(threadId) {
 export function statusText({ phase, steps = 0, text = "", activities = [] }) {
   const title = t(PHASE_TITLE[phase] ?? PHASE_TITLE.progress);
   const stepLine = steps > 0 ? t("card.steps.running", { steps }) : t("card.steps.starting");
+  const toolItems = activities.map(formatActivityText).join("\n");
+  const tools = activities.length > 0
+    ? `${t("card.tools.title", { count: activities.length })}\n${toolItems}`
+    : "";
   // Clamp the body so the assembled card stays under Telegram's 4096-char ceiling;
   // a too-long editMessageText would 400 and strand the card mid-progress.
-  const body = clampStatusBody(String(text ?? ""));
+  const body = clampStatusBody(String(text ?? ""), Math.max(500, STATUS_BODY_LIMIT - tools.length));
+  return [title, stepLine, tools, body].filter(Boolean).join("\n\n");
+}
+
+// Telegram supports expandable blockquotes in HTML messages. Keep the normal
+// answer visible and place tool activity in a collapsed block so live updates
+// stay readable without losing operational detail.
+export function statusHtml({ phase, steps = 0, text = "", activities = [] }) {
+  const title = escapeHtml(t(PHASE_TITLE[phase] ?? PHASE_TITLE.progress));
+  const stepLine = escapeHtml(steps > 0 ? t("card.steps.running", { steps }) : t("card.steps.starting"));
+  const toolPlainText = activities.map(formatActivityText).join("\n");
+  const body = markdownToTelegramHtml(
+    clampStatusBody(String(text ?? ""), Math.max(500, STATUS_BODY_LIMIT - toolPlainText.length)),
+  );
   const tools = activities.length > 0
-    ? `${t("card.tools.title", { count: activities.length })}\n${activities.map((item) => `• ${item}`).join("\n")}`
+    ? `<blockquote expandable><b>${escapeHtml(t("card.tools.title", { count: activities.length }))}</b>\n${activities.map(formatActivityHtml).join("\n")}</blockquote>`
     : "";
   return [title, stepLine, tools, body].filter(Boolean).join("\n\n");
+}
+
+function activityParts(activity) {
+  if (typeof activity === "string") return { label: activity, detail: "" };
+  return {
+    label: String(activity?.label ?? ""),
+    detail: String(activity?.detail ?? "").trim(),
+  };
+}
+
+function formatActivityText(activity) {
+  const { label, detail } = activityParts(activity);
+  if (!detail) return `- ${label}`;
+  return `- ${label}\n${detail.split("\n").map((line) => `  ${line}`).join("\n")}`;
+}
+
+function formatActivityHtml(activity) {
+  const { label, detail } = activityParts(activity);
+  if (!detail) return `- ${escapeHtml(label)}`;
+  return `- <b>${escapeHtml(label)}</b>\n${escapeHtml(detail)}`;
 }
 
 // Trims the status body to STATUS_BODY_LIMIT, keeping the tail (the latest output

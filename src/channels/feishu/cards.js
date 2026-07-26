@@ -74,8 +74,15 @@ export function statusCard({ phase, threadId = null, steps = 0, text = "", done 
   }
   if (activities.length > 0) {
     elements.push({
-      tag: "markdown",
-      content: `**${t("card.tools.title", { count: activities.length })}**\n${activities.map((item) => `- ${item}`).join("\n")}`,
+      tag: "collapsible_panel",
+      expanded: false,
+      header: {
+        title: {
+          tag: "plain_text",
+          content: t("card.tools.title", { count: activities.length }),
+        },
+      },
+      elements: renderMarkdown(activities.map(formatActivityMarkdown).join("\n\n")),
     });
   }
   if (text) {
@@ -223,6 +230,14 @@ export function pickerCard({ kind, title, items = [], text = "" }) {
 
 function stepsLine(steps) {
   return steps > 0 ? t("card.steps.running", { steps }) : t("card.steps.starting");
+}
+
+function formatActivityMarkdown(activity) {
+  if (typeof activity === "string") return `- ${activity}`;
+  const label = String(activity?.label ?? "");
+  const detail = String(activity?.detail ?? "").trim();
+  if (!detail) return `- ${label}`;
+  return `- **${label}**\n\`\`\`\n${detail.replace(/\`\`\`/g, "` ` `")}\n\`\`\``;
 }
 
 function truncate(value, max) {

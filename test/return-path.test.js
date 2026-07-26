@@ -215,6 +215,75 @@ test("Codex streaming for a Feishu thread drives a live card", async () => {
   assert.equal(state.outboundReplies.list({ channel: "feishu" }).length, 0);
 });
 
+test("a live card preserves every agent message produced during one turn", async () => {
+  const { transport, desktop, state } = buildState();
+  await desktop.client.connect();
+  state.commandRouter.conversationByIdentity.set("feishu:ou_owner", {
+    channel: "feishu",
+    conversationId: "oc_chat",
+  });
+  state.commandRouter.bindThreadForIdentity(
+    { channel: "feishu", stableId: "ou_owner" },
+    "thread_multi_output",
+  );
+
+  const calls = { sent: [], updated: [] };
+  state.runtime.feishu.__setTestDriver({
+    getStatus: () => ({ state: "configured" }),
+    verifyEvent: () => true,
+    async sendCard(message) {
+      calls.sent.push(message);
+      return { messageId: "om_multi" };
+    },
+    async updateCard(message) {
+      calls.updated.push(message);
+      return { code: 0 };
+    },
+  });
+
+  transport.receive({ jsonrpc: "2.0", method: "turn/started", params: { threadId: "thread_multi_output" } });
+  await tick();
+  transport.receive({
+    jsonrpc: "2.0",
+    method: "item/updated",
+    params: {
+      threadId: "thread_multi_output",
+      item: { type: "agentMessage", id: "commentary_1", text: "First, I inspected the code." },
+    },
+  });
+  transport.receive({
+    jsonrpc: "2.0",
+    method: "item/completed",
+    params: {
+      threadId: "thread_multi_output",
+      item: { type: "agentMessage", id: "commentary_1", text: "First, I inspected the code." },
+    },
+  });
+  transport.receive({
+    jsonrpc: "2.0",
+    method: "item/completed",
+    params: {
+      threadId: "thread_multi_output",
+      item: { type: "agentMessage", id: "final_1", text: "Then, I completed the fix." },
+    },
+  });
+  transport.receive({
+    jsonrpc: "2.0",
+    method: "turn/completed",
+    params: { threadId: "thread_multi_output" },
+  });
+  await waitFor(() => calls.updated.length > 0);
+
+  const finalCard = JSON.stringify(calls.updated.at(-1).card);
+  assert.match(finalCard, /First, I inspected the code\./);
+  assert.match(finalCard, /Then, I completed the fix\./);
+  assert.ok(
+    finalCard.indexOf("First, I inspected the code.") < finalCard.indexOf("Then, I completed the fix."),
+    "agent outputs keep their original order",
+  );
+  assert.equal(finalCard.match(/First, I inspected the code\./g)?.length, 1, "delta completion does not duplicate one item");
+});
+
 // Lets queued microtasks (the async card calls) settle.
 function tick() {
   return new Promise((resolve) => setTimeout(resolve, 5));

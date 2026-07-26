@@ -90,7 +90,7 @@ export function pickerCardData({ pickKind, title, text = "", items = [], convers
 export function statusCardData({ phase, threadId = null, steps = 0, text = "", done = false, activities = [] }) {
   const titleKey = PHASE_TITLE[phase] ?? PHASE_TITLE.progress;
   const tools = activities.length > 0
-    ? `**${t("card.tools.title", { count: activities.length })}**\n${activities.map((item) => `- ${item}`).join("\n")}`
+    ? `**${t("card.tools.title", { count: activities.length })}**\n${activities.map(formatActivityMarkdown).join("\n")}`
     : "";
   return {
     title: t(titleKey),
@@ -101,6 +101,14 @@ export function statusCardData({ phase, threadId = null, steps = 0, text = "", d
     cancelLabel: t("card.cancelButton"),
     cancelParams: threadId && !done ? { action: "cancel", threadId } : null,
   };
+}
+
+function formatActivityMarkdown(activity) {
+  if (typeof activity === "string") return `- ${activity}`;
+  const label = String(activity?.label ?? "");
+  const detail = String(activity?.detail ?? "").trim();
+  if (!detail) return `- ${label}`;
+  return `- **${label}**\n${detail.split("\n").map((line) => `  ${line}`).join("\n")}`;
 }
 
 function truncate(value, max) {

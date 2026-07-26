@@ -3,7 +3,7 @@ import { stat } from "node:fs/promises";
 import { basename } from "node:path";
 import { t } from "../../core/i18n/index.js";
 import { describeApprovalForChat } from "../base/approval-format.js";
-import { approvalKeyboard, pickerKeyboard, cancelKeyboard, filesKeyboard, statusText, chunkMessage, markdownToTelegramHtml } from "./cards.js";
+import { approvalKeyboard, pickerKeyboard, cancelKeyboard, filesKeyboard, statusHtml, statusText, chunkMessage, markdownToTelegramHtml } from "./cards.js";
 
 // Telegram: photos ≤10MB via sendPhoto, documents ≤50MB via sendDocument; degrade
 // past the ceiling. Telegram natively supports inline keyboards, so approval/picker
@@ -21,7 +21,12 @@ export function createTelegramRenderer() {
       if (status.done && status.threadId && status.files?.length) {
         replyMarkup = filesKeyboard(status.threadId, status.files);
       }
-      return { text: statusText(status), replyMarkup };
+      return {
+        text: statusHtml(status),
+        plainText: statusText(status),
+        parseMode: "HTML",
+        replyMarkup,
+      };
     },
 
     buildApprovalCard({ code, approval, autoApproved = false }) {

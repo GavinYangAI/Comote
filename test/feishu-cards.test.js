@@ -61,10 +61,18 @@ test("statusCard renders tool activity inside the card", () => {
   const card = statusCard({
     phase: "progress",
     threadId: "t1",
-    activities: ["running npm", "edited app.js"],
+    activities: [
+      { label: "running npm", detail: '{"command":"npm test","cwd":"/repo"}' },
+      "edited app.js",
+    ],
   });
-  const body = card.elements.map((element) => element.content ?? "").join("\n");
+  const panel = card.elements.find((element) => element.tag === "collapsible_panel");
+  assert.ok(panel, "tool activity uses Feishu's collapsible panel");
+  assert.equal(panel.expanded, false);
+  const body = panel.elements.map((element) => element.content ?? "").join("\n");
   assert.match(body, /running npm/);
+  assert.match(body, /npm test/);
+  assert.match(body, /\/repo/);
   assert.match(body, /edited app\.js/);
 });
 

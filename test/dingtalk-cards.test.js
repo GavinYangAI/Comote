@@ -56,8 +56,14 @@ test("statusCardData maps phase to a localized title + body text", () => {
 });
 
 test("statusCardData includes tool activity in the card body", () => {
-  const data = statusCardData({ phase: "progress", text: "answer", activities: ["running npm"] });
+  const data = statusCardData({
+    phase: "progress",
+    text: "answer",
+    activities: [{ label: "running npm", detail: '{"command":"npm test","cwd":"/repo"}' }],
+  });
   assert.match(data.body, /running npm/);
+  assert.match(data.body, /npm test/);
+  assert.match(data.body, /\/repo/);
   assert.match(data.body, /answer/);
 });
 

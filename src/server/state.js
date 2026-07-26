@@ -526,6 +526,7 @@ export function createComoteState({
       }),
     );
     streamTextByThread.clear();
+    streamItemsByThread.clear();
     activityByThread.clear();
     progressByThread.clear();
     for (const stack of channelStacks.values()) {
@@ -782,8 +783,41 @@ export function createComoteState({
   // --- Codex Desktop return path: route thread events back to the phone ---
   // threadId -> { count, lastSentAt } for throttled progress updates.
   const progressByThread = new Map();
-  // threadId -> latest accumulated streaming text, for Feishu live cards.
+  // threadId -> all agent-message text assembled for the current turn.
   const streamTextByThread = new Map();
+  // A turn can contain multiple agent-message items (for example commentary
+  // followed by a final answer). Track each item separately so a later item
+  // updates its own slot instead of replacing everything already shown.
+  const streamItemsByThread = new Map();
+  function updateStreamText(threadId, itemId, text, { completed = false } = {}) {
+    let state = streamItemsByThread.get(threadId);
+    if (!state) {
+      state = { order: [], textByItem: new Map(), anonymousKey: null, nextAnonymous: 1 };
+      streamItemsByThread.set(threadId, state);
+    }
+    let key = itemId ? `item:${itemId}` : state.anonymousKey;
+    if (!key) {
+      key = `anonymous:${state.nextAnonymous}`;
+      state.nextAnonymous += 1;
+      state.anonymousKey = key;
+    }
+    if (!state.textByItem.has(key)) {
+      state.order.push(key);
+    }
+    const incoming = String(text ?? "");
+    const previous = state.textByItem.get(key) ?? "";
+    // An empty completion/update must not erase a non-empty streamed prefix.
+    state.textByItem.set(key, incoming || previous);
+    if (completed && !itemId) {
+      state.anonymousKey = null;
+    }
+    const combined = state.order
+      .map((orderedKey) => state.textByItem.get(orderedKey) ?? "")
+      .filter(Boolean)
+      .join("\n\n");
+    streamTextByThread.set(threadId, combined);
+    return combined;
+  }
   // threadId -> latest tool/file milestones rendered inside the live card.
   // Keep a short tail so platform message limits remain predictable.
   const activityByThread = new Map();
@@ -856,6 +890,8 @@ export function createComoteState({
 
   function routeDesktopEvent(event) {
     if (event.type === "turnStarted") {
+      streamTextByThread.delete(event.threadId);
+      streamItemsByThread.delete(event.threadId);
       activityByThread.delete(event.threadId);
       // Advance the per-thread turn nonce for EVERY channel — both the milestone
       // key and the agent: fallback key fold it in, and push channels (milestones
@@ -927,6 +963,7 @@ export function createComoteState({
         });
       }
       streamTextByThread.delete(event.threadId);
+      streamItemsByThread.delete(event.threadId);
       activityByThread.delete(event.threadId);
       sleepGuard.release(event.threadId);
       eventLog.info("Codex turn 完成", { threadId: event.threadId });
@@ -1050,9 +1087,11 @@ export function createComoteState({
       if (milestoneLive) {
         const item = { kind: event.kind, label: event.label ?? null, status: event.status ?? null };
         const line = milestoneText(item);
+        const activity = { label: line, detail: event.detail ?? null };
         const activities = activityByThread.get(event.threadId) ?? [];
-        if (activities.at(-1) !== line) {
-          activities.push(line);
+        const previous = activities.at(-1);
+        if (typeof previous === "string" || previous?.label !== activity.label || previous?.detail !== activity.detail) {
+          activities.push(activity);
           if (activities.length > 8) activities.shift();
           activityByThread.set(event.threadId, activities);
         }
@@ -1079,13 +1118,13 @@ export function createComoteState({
       if (!deltaLive) {
         return;
       }
-      streamTextByThread.set(event.threadId, event.text ?? "");
+      const text = updateStreamText(event.threadId, event.itemId, event.text);
       deltaLive.updateThreadCard(
         event.threadId,
         deltaLive.buildStatusCard({
           phase: "streaming",
           threadId: event.threadId,
-          text: event.text ?? "",
+          text,
           activities: activityByThread.get(event.threadId) ?? [],
         }),
       );
@@ -1106,8 +1145,7 @@ export function createComoteState({
       }
       const msgLive = liveCardRuntime(binding.channel);
       if (msgLive?.hasThreadCard(event.threadId)) {
-        const text = event.text ?? "";
-        streamTextByThread.set(event.threadId, text);
+        const text = updateStreamText(event.threadId, event.itemId, event.text, { completed: true });
         msgLive.updateThreadCard(
           event.threadId,
           msgLive.buildStatusCard({
@@ -1220,12 +1258,14 @@ export function createComoteState({
           )
           .catch(() => {});
         streamTextByThread.delete(event.threadId);
+        streamItemsByThread.delete(event.threadId);
         activityByThread.delete(event.threadId);
         progressByThread.delete(event.threadId);
         eventLog.error("Codex 错误", { threadId: event.threadId, message: event.message });
         return;
       }
       streamTextByThread.delete(event.threadId);
+      streamItemsByThread.delete(event.threadId);
       activityByThread.delete(event.threadId);
       progressByThread.delete(event.threadId);
       eventLog.error("Codex 错误", { threadId: event.threadId, message: event.message });
