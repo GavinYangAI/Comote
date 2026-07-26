@@ -41,6 +41,17 @@ test("approve callback resolves the approval + answers the callback query", asyn
   assert.equal(calls.answer[0].callbackQueryId, "cq1");
 });
 
+test("session approval callback maps to acceptForSession", async () => {
+  const { rt, calls } = makeRuntime();
+  await rt.handleCallbackQuery({
+    id: "cq-session",
+    data: "as:A1",
+    message: { chat: { id: 42 }, message_id: 5 },
+    from: { id: 42 },
+  });
+  assert.deepEqual(calls.resolve[0].slice(0, 2), ["A1", "acceptForSession"]);
+});
+
 test("review-2 (B-4): a not-owner rejection from the router is swallowed gracefully", async () => {
   const { rt, calls } = makeRuntime();
   calls.resolve.length = 0;
@@ -168,7 +179,7 @@ test("start() registers the bot command menu via setMyCommands (B-8)", async () 
   await rt.start();
   assert.equal(registered.length, 1, "command menu registered once on start");
   const names = registered[0].map((c) => c.command);
-  for (const want of ["status", "projects", "sessions", "use", "new", "tail", "approve", "deny", "cancel", "file", "help"]) {
+  for (const want of ["status", "projects", "sessions", "use", "new", "tail", "approve", "deny", "automode", "cancel", "file", "help"]) {
     assert.ok(names.includes(want), `menu includes /${want}`);
   }
   for (const c of registered[0]) {

@@ -23,14 +23,28 @@ test("text reply renders as a card via sendCard", async () => {
   assert.equal(driver.calls[0][1].receiveId, "oc");
 });
 
-test("approval reply renders an approve/reject card", async () => {
+test("approval reply renders all approval choices", async () => {
   const r = createFeishuRenderer();
   const driver = stubDriver();
   await r.render({ kind: "approval", conversationId: "oc", code: "a1",
     approval: { shortCode: "a1", method: "exec", params: { command: "rm -rf build" } } }, { driver });
   const card = driver.calls[0][1].card;
   const action = card.elements.find((e) => e.tag === "action");
-  assert.deepEqual(action.actions.map((b) => b.value.decision), ["accept", "decline"]);
+  assert.deepEqual(action.actions.map((b) => b.value.decision), ["accept", "acceptForSession", "decline"]);
+});
+
+test("auto-approved reply renders a notification card without actions", async () => {
+  const r = createFeishuRenderer();
+  const driver = stubDriver();
+  await r.render({
+    kind: "approval",
+    conversationId: "oc",
+    code: "a1",
+    autoApproved: true,
+    approval: { shortCode: "a1", method: "exec", params: { command: "npm test" } },
+  }, { driver });
+  const card = driver.calls[0][1].card;
+  assert.ok(!card.elements.some((element) => element.tag === "action"));
 });
 
 test("picker reply renders pick buttons", async () => {

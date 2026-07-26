@@ -391,6 +391,29 @@ test("handleCardAction resolves an approval and refreshes the card", async () =>
   assert.match(result.toast.content, /已批准/);
 });
 
+test("handleCardAction treats a session approval as accepted", async () => {
+  const resolved = [];
+  const runtime = makeRuntime({
+    adapter: {
+      handleInbound: async () => ({ kind: "text" }),
+      commandRouter: {
+        authorization: { isAuthorized: () => true },
+        resolveApproval: async (code, decision) => resolved.push([code, decision]),
+      },
+    },
+    outboundQueue: new OutboundQueue(),
+    driver: { getStatus: () => ({ state: "configured" }), verifyEvent: () => true },
+  });
+
+  const result = await runtime.handleCardAction({
+    open_id: "ou_owner",
+    action: { value: { kind: "approval", code: "a1", decision: "acceptForSession" } },
+  });
+
+  assert.deepEqual(resolved, [["a1", "acceptForSession"]]);
+  assert.match(result.toast.content, /已批准/);
+});
+
 test("review-2 (B-4): a not-owner rejection from the router becomes a denied toast", async () => {
   const runtime = makeRuntime({
     adapter: {

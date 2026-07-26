@@ -83,6 +83,12 @@ test("reject maps to decline", async () => {
   assert.deepEqual(resolved[0], { code: "a2", decision: "decline" });
 });
 
+test("session approval maps to acceptForSession", async () => {
+  const { runtime, resolved } = makeRuntime();
+  await runtime.handleCardAction(cardPayload({ params: { action: "approve_session", code: "a3" } }));
+  assert.deepEqual(resolved[0], { code: "a3", decision: "acceptForSession" });
+});
+
 test("pick callback dispatches async and returns immediately", async () => {
   const { runtime, enqueued } = makeRuntime();
   const res = await runtime.handleCardAction(cardPayload({ params: { action: "pick", pickKind: "project", index: "1", conv: "staff-9" } }));

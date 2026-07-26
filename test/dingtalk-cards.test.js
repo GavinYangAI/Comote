@@ -24,6 +24,7 @@ test("approvalCardData carries title/detail + button params", () => {
   assert.equal(typeof data.title, "string");
   assert.equal(data.detail, "rm -rf build");
   assert.deepEqual(data.approveParams, { action: "approve", code: "a1b2" });
+  assert.deepEqual(data.sessionParams, { action: "approve_session", code: "a1b2" });
   assert.deepEqual(data.rejectParams, { action: "reject", code: "a1b2" });
 });
 
@@ -57,6 +58,7 @@ test("approvalResolvedCardData reflects the decision", () => {
   const accepted = approvalResolvedCardData({ code: "a1", decision: "accept" });
   assert.match(accepted.title, /a1/);
   assert.equal(accepted.accepted, true);
+  assert.equal(approvalResolvedCardData({ code: "a1", decision: "acceptForSession" }).accepted, true);
   const rejected = approvalResolvedCardData({ code: "a1", decision: "decline" });
   assert.equal(rejected.accepted, false);
 });

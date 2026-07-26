@@ -99,12 +99,28 @@ test("empty text reply sends nothing", async () => {
   assert.equal(d.calls.length, 0);
 });
 
-test("approval reply sends message with approve/reject inline keyboard", async () => {
+test("approval reply sends message with all approval choices", async () => {
   const r = createTelegramRenderer();
   const d = fakeDriver();
   await r.render({ kind: "approval", conversationId: "9", code: "A1", approval: { command: "rm -rf", cwd: "/tmp" } }, { driver: d });
   assert.equal(d.calls[0][0], "sendMessage");
   assert.equal(d.calls[0][1].replyMarkup.inline_keyboard[0][0].callback_data, "ap:A1");
+  assert.equal(d.calls[0][1].replyMarkup.inline_keyboard[0][1].callback_data, "as:A1");
+});
+
+test("auto-approved notification has no inline keyboard or manual commands", async () => {
+  const r = createTelegramRenderer();
+  const d = fakeDriver();
+  await r.render({
+    kind: "approval",
+    conversationId: "9",
+    code: "A1",
+    autoApproved: true,
+    approval: { shortCode: "A1", method: "exec", params: { command: "npm test" } },
+  }, { driver: d });
+  assert.equal(d.calls[0][0], "sendMessage");
+  assert.equal(d.calls[0][1].replyMarkup, undefined);
+  assert.doesNotMatch(d.calls[0][1].text, /\/approve|\/deny/);
 });
 
 test("picker with items renders inline buttons; empty items → numbered text", async () => {

@@ -14,6 +14,7 @@ const PUBLIC_DIR = join(ROOT, "public");
 // in one thread/read pass — enough for any realistic scroll-back, bounded so a
 // pathological thread cannot balloon the response pipeline.
 const DESKTOP_TRANSCRIPT_FETCH_CAP = 1000;
+const APPROVAL_DECISIONS = new Set(["accept", "acceptForSession", "decline"]);
 
 const MIME_TYPES = {
   ".html": "text/html; charset=utf-8",
@@ -278,8 +279,12 @@ async function handleApi(request, response, state) {
     const approvalId = decodeURIComponent(url.pathname.slice("/api/approvals/".length));
     const body = await readJsonBody(request);
     const decision = body.decision ?? "decline";
+    if (!APPROVAL_DECISIONS.has(decision)) {
+      sendJson(response, 400, { error: "unsupported approval decision" });
+      return;
+    }
     const result = await state.connectors.desktop.resolveApproval(approvalId, decision);
-    state.eventLog?.info(`审批已${decision === "accept" ? "批准" : "拒绝"}`, { approvalId });
+    state.eventLog?.info(`审批已${decision === "decline" ? "拒绝" : "批准"}`, { approvalId, decision });
     sendJson(response, 200, result);
     return;
   }

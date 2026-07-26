@@ -115,20 +115,18 @@ export function statusCard({ phase, threadId = null, steps = 0, text = "", done 
   };
 }
 
-export function approvalCard({ shortCode, detail }) {
-  return {
-    config: { wide_screen_mode: true },
-    header: {
-      title: { tag: "plain_text", content: t("card.approval.title", { code: shortCode }) },
-      template: "orange",
-    },
-    elements: [
-      { tag: "markdown", content: String(detail ?? t("card.approval.detailFallback")) },
+export function approvalCard({ shortCode, detail, autoApproved = false }) {
+  const elements = [
+    { tag: "markdown", content: String(detail ?? t("card.approval.detailFallback")) },
+  ];
+  if (autoApproved) {
+    elements.push({ tag: "markdown", content: t("state.approval.autoApproved") });
+  } else {
+    elements.push(
       // Text-command fallback: card-action button callbacks are not guaranteed to
       // reach Comote (Feishu long-connection delivery of `card.action.trigger` is
       // app-config dependent), but `/approve|/deny <code>` always works over the
-      // message-event path. Surfacing it here means a user is never stuck with
-      // dead buttons and forced back to the Comote desktop to approve.
+      // message-event path.
       { tag: "markdown", content: t("state.approval.instructions", { code: shortCode }) },
       {
         tag: "action",
@@ -141,18 +139,31 @@ export function approvalCard({ shortCode, detail }) {
           },
           {
             tag: "button",
+            text: { tag: "plain_text", content: t("card.approval.acceptForSession") },
+            value: { kind: "approval", code: shortCode, decision: "acceptForSession" },
+          },
+          {
+            tag: "button",
             text: { tag: "plain_text", content: t("card.approval.reject") },
             type: "danger",
             value: { kind: "approval", code: shortCode, decision: "decline" },
           },
         ],
       },
-    ],
+    );
+  }
+  return {
+    config: { wide_screen_mode: true },
+    header: {
+      title: { tag: "plain_text", content: t("card.approval.title", { code: shortCode }) },
+      template: "orange",
+    },
+    elements,
   };
 }
 
 export function approvalResolvedCard({ code, decision }) {
-  const accepted = decision === "accept";
+  const accepted = decision === "accept" || decision === "acceptForSession";
   return {
     config: { wide_screen_mode: true },
     header: {

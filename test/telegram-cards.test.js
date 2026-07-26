@@ -22,7 +22,7 @@ test("BOT_COMMANDS lists the main commands in Telegram's required shape (B-8)", 
     assert.ok(c.description.length >= 3 && c.description.length <= 256);
   }
   const names = BOT_COMMANDS.map((c) => c.command);
-  for (const want of ["status", "projects", "sessions", "use", "new", "tail", "approve", "deny", "cancel", "file", "help"]) {
+  for (const want of ["status", "projects", "sessions", "use", "new", "tail", "approve", "deny", "automode", "cancel", "file", "help"]) {
     assert.ok(names.includes(want), `includes /${want}`);
   }
 });
@@ -49,6 +49,7 @@ test("approve/reject callback round-trips and stays within 64 bytes", () => {
   assert.equal(data, "ap:A1B2");
   assert.ok(Buffer.byteLength(data) <= 64);
   assert.deepEqual(decodeCallback("ap:A1B2"), { action: "approve", code: "A1B2" });
+  assert.deepEqual(decodeCallback("as:A1B2"), { action: "approve_session", code: "A1B2" });
   assert.deepEqual(decodeCallback("rj:A1B2"), { action: "reject", code: "A1B2" });
 });
 
@@ -73,11 +74,12 @@ test("decodeCallback returns null for unknown/garbage", () => {
   assert.equal(decodeCallback(""), null);
 });
 
-test("approvalKeyboard has approve + reject buttons with encoded callback_data", () => {
+test("approvalKeyboard has approve + session + reject buttons with encoded callback_data", () => {
   const kb = approvalKeyboard("A1B2");
-  assert.equal(kb.inline_keyboard.length, 1);
+  assert.equal(kb.inline_keyboard.length, 2);
   assert.equal(kb.inline_keyboard[0][0].callback_data, "ap:A1B2");
-  assert.equal(kb.inline_keyboard[0][1].callback_data, "rj:A1B2");
+  assert.equal(kb.inline_keyboard[0][1].callback_data, "as:A1B2");
+  assert.equal(kb.inline_keyboard[1][0].callback_data, "rj:A1B2");
 });
 
 test("pickerKeyboard renders one button per item with pick callbacks", () => {

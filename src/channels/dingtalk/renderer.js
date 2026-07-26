@@ -79,11 +79,11 @@ export function createDingTalkRenderer({ templates = {} } = {}) {
     },
 
     async _renderApproval(reply, driver) {
-      if (!this.templates.approval) {
+      if (reply.autoApproved || !this.templates.approval) {
         await driver.sendMarkdown({
           receiveId: reply.conversationId,
           title: t("card.approval.title", { code: reply.code }),
-          text: describeApprovalForChat(reply.approval),
+          text: describeApprovalForChat(reply.approval, { autoApproved: reply.autoApproved }),
         });
         return;
       }
@@ -96,8 +96,10 @@ export function createDingTalkRenderer({ templates = {} } = {}) {
           title: data.title,
           detail: data.detail,
           approveLabel: data.approveLabel,
+          sessionLabel: data.sessionLabel,
           rejectLabel: data.rejectLabel,
           approveParams: data.approveParams,
+          sessionParams: data.sessionParams,
           rejectParams: data.rejectParams,
         }),
       });

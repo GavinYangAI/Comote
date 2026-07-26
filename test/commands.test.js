@@ -449,6 +449,52 @@ test("/approve and /deny resolve pending Codex Desktop approvals", async () => {
   ]);
 });
 
+test("/automode is scoped to the caller's active Codex thread", async () => {
+  const { authorization, projects, sessions, router } = makeRouter();
+  const alice = { channel: "wechat", stableId: "alice", displayName: "Alice" };
+  const bob = { channel: "wechat", stableId: "bob", displayName: "Bob" };
+  authorization.confirmIdentity(alice);
+  authorization.confirmIdentity(bob);
+  projects.replaceProjects([{ name: "comote", path: "/repo", source: "manual", status: "available" }]);
+  router.handleMessage({ identity: alice, text: "/open 1" });
+  router.handleMessage({ identity: bob, text: "/open 1" });
+  sessions.upsertExternalSession({
+    projectPath: "/repo",
+    id: "thread_alice",
+    title: "Alice thread",
+    identityKey: "wechat:alice",
+  });
+  sessions.upsertExternalSession({
+    projectPath: "/repo",
+    id: "thread_bob",
+    title: "Bob thread",
+    identityKey: "wechat:bob",
+  });
+
+  const enabled = await router.handleMessageAsync({ identity: alice, text: "/automode true" });
+  assert.match(enabled.text, /已为当前对话开启自动审批/);
+  assert.equal(router.isAutoModeEnabled("thread_alice"), true);
+  assert.equal(router.isAutoModeEnabled("thread_bob"), false);
+
+  const disabled = await router.handleMessageAsync({ identity: alice, text: "/automode false" });
+  assert.match(disabled.text, /已为当前对话关闭自动审批/);
+  assert.equal(router.isAutoModeEnabled("thread_alice"), false);
+});
+
+test("/automode rejects invalid values and requires an active conversation", async () => {
+  const { authorization, projects, router } = makeRouter();
+  const identity = { channel: "wechat", stableId: "owner", displayName: "Owner" };
+  authorization.confirmIdentity(identity);
+
+  const invalid = await router.handleMessageAsync({ identity, text: "/automode yes" });
+  assert.match(invalid.text, /\/automode <true\|false>/);
+
+  projects.replaceProjects([{ name: "comote", path: "/repo", source: "manual", status: "available" }]);
+  router.handleMessage({ identity, text: "/open 1" });
+  const missing = await router.handleMessageAsync({ identity, text: "/automode true" });
+  assert.match(missing.text, /\/use <编号>.*\/new <消息>/);
+});
+
 test("/new falls back to Codex CLI when Desktop is disconnected", async () => {
   const authorization = new AuthorizationStore();
   const projects = new ProjectStore();
@@ -594,7 +640,7 @@ test("/help is the grouped single-source command reference", async () => {
   // Every command still documented (single source of truth).
   for (const cmd of [
     "/projects", "/open", "/sessions", "/use", "/switch", "/new", "/current",
-    "/file", "/approve", "/deny", "/cancel", "/tail", "/status",
+    "/file", "/approve", "/deny", "/automode", "/cancel", "/tail", "/status",
   ]) {
     assert.ok(reply.text.includes(cmd), `expected /help to document ${cmd}`);
   }

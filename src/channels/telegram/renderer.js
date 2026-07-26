@@ -31,8 +31,8 @@ export function createTelegramRenderer() {
         case "approval":
           return driver.sendMessage({
             chatId: reply.conversationId,
-            text: describeApprovalForChat(reply.approval),
-            replyMarkup: approvalKeyboard(reply.code),
+            text: describeApprovalForChat(reply.approval, { autoApproved: reply.autoApproved }),
+            ...(reply.autoApproved ? {} : { replyMarkup: approvalKeyboard(reply.code) }),
           });
         case "picker":
           return this._renderPicker(reply, driver);

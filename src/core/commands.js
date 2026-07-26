@@ -56,6 +56,10 @@ export class CommandRouter {
     this.conversationByIdentity = new Map(persisted.conversationByIdentity ?? []);
     // Codex threadId -> conversation, so the return path can find the chat.
     this.threadBindings = new Map(persisted.threadBindings ?? []);
+    // Codex thread ids whose approvals are automatically accepted. This is
+    // intentionally transient: auto mode is scoped to the live Comote session
+    // and resets on restart instead of persisting a high-risk permission.
+    this.autoModeThreads = new Set();
     // Cost guard: identityKey -> array of turn-start epoch ms.
     this.maxTurnsPerHour = maxTurnsPerHour;
     this.turnTimestamps = new Map();
@@ -163,6 +167,8 @@ export class CommandRouter {
           return this.text(this.useSession(message.identity, rest));
         case "/tail":
           return this.text(this.tailText(message.identity, rest));
+        case "/automode":
+          return this.text(this.setAutoMode(message.identity, rest));
         case "/new":
           return this.text(this.newSession(message.identity, rest));
         default:
@@ -231,6 +237,9 @@ export class CommandRouter {
       }
       if (command === "/file") {
         return await this.handleFileCommand(message.identity, rest);
+      }
+      if (command === "/automode") {
+        return this.text(this.setAutoMode(message.identity, rest));
       }
       if (command === "/cancel") {
         // While a picker is open, /cancel is the escape hatch out of the
@@ -348,6 +357,29 @@ export class CommandRouter {
       t("cmd.status.project", { project: projectPath ?? t("cmd.status.none") }),
       t("cmd.status.session", { session: activeSession?.title ?? t("cmd.status.none") }),
     ].join("\n");
+  }
+
+  setAutoMode(identity, value) {
+    const normalized = String(value ?? "").trim().toLowerCase();
+    if (normalized !== "true" && normalized !== "false") {
+      throw new Error(t("cmd.automode.usage"));
+    }
+    const projectPath = this.requireCurrentProject(identity);
+    const activeSession = this.sessions.getActiveSession(projectPath, this.identityKey(identity));
+    if (!activeSession) {
+      throw new Error(t("cmd.session.needActive"));
+    }
+    const enabled = normalized === "true";
+    if (enabled) {
+      this.autoModeThreads.add(activeSession.id);
+    } else {
+      this.autoModeThreads.delete(activeSession.id);
+    }
+    return t(enabled ? "cmd.automode.enabled" : "cmd.automode.disabled", { id: activeSession.id });
+  }
+
+  isAutoModeEnabled(threadId) {
+    return Boolean(threadId) && this.autoModeThreads.has(threadId);
   }
 
   projectsText() {
@@ -846,6 +878,9 @@ export class CommandRouter {
       }
     }
     await this.codexDesktop.resolveApproval(selector, decision);
+    if (decision === "acceptForSession") {
+      return t("cmd.approve.acceptedForSession", { selector });
+    }
     return decision === "accept"
       ? t("cmd.approve.approved", { selector })
       : t("cmd.deny.rejected", { selector });

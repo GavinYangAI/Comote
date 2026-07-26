@@ -360,7 +360,7 @@ export class FeishuRuntimeService extends BaseChannelRuntime {
           })
           .catch(() => {});
       }
-      const accepted = action.value.decision === "accept";
+      const accepted = action.value.decision === "accept" || action.value.decision === "acceptForSession";
       return {
         toast: {
           type: accepted ? "success" : "info",

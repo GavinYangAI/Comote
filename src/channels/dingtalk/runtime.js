@@ -144,8 +144,12 @@ export class DingTalkRuntimeService extends BaseChannelRuntime {
       return {};
     }
 
-    if (params.action === "approve" || params.action === "reject") {
-      const decision = params.action === "approve" ? "accept" : "decline";
+    if (["approve", "approve_session", "reject"].includes(params.action)) {
+      const decision = params.action === "approve"
+        ? "accept"
+        : params.action === "approve_session"
+          ? "acceptForSession"
+          : "decline";
       // Pass the clicker identity so the router's thread-owner check applies —
       // an authorized user still may not resolve another user's approval. Only
       // the typed ownership rejection is swallowed; anything else (RPC

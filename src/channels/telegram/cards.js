@@ -25,6 +25,7 @@ export const BOT_COMMANDS = [
   { command: "tail", description: "Show recent messages" },
   { command: "approve", description: "Approve a Codex request" },
   { command: "deny", description: "Deny a Codex request" },
+  { command: "automode", description: "Toggle automatic approvals" },
   { command: "cancel", description: "Cancel the current task" },
   { command: "file", description: "Send a project file here" },
   { command: "help", description: "Show all commands" },
@@ -46,6 +47,7 @@ const PHASE_TITLE = {
 export function encodeCallback({ action, code, pickKind, index, threadId, fileIndex }) {
   switch (action) {
     case "approve": return `ap:${code}`;
+    case "approve_session": return `as:${code}`;
     case "reject": return `rj:${code}`;
     case "pick": return `pk:${PICK_KIND_CODE[pickKind] ?? "s"}:${index}`;
     case "cancel": return `ck:${threadId}`;
@@ -62,6 +64,7 @@ export function decodeCallback(data) {
   const op = data.slice(0, firstColon);
   const rest = data.slice(firstColon + 1);
   if (op === "ap") return { action: "approve", code: rest };
+  if (op === "as") return { action: "approve_session", code: rest };
   if (op === "rj") return { action: "reject", code: rest };
   if (op === "ck") return { action: "cancel", threadId: rest };
   if (op === "pf") {
@@ -79,10 +82,13 @@ export function decodeCallback(data) {
 
 export function approvalKeyboard(code) {
   return {
-    inline_keyboard: [[
-      { text: t("card.approval.approve"), callback_data: encodeCallback({ action: "approve", code }) },
-      { text: t("card.approval.reject"), callback_data: encodeCallback({ action: "reject", code }) },
-    ]],
+    inline_keyboard: [
+      [
+        { text: t("card.approval.approve"), callback_data: encodeCallback({ action: "approve", code }) },
+        { text: t("card.approval.acceptForSession"), callback_data: encodeCallback({ action: "approve_session", code }) },
+      ],
+      [{ text: t("card.approval.reject"), callback_data: encodeCallback({ action: "reject", code }) }],
+    ],
   };
 }
 

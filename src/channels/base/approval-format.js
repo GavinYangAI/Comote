@@ -3,7 +3,7 @@
 // semantic reply to text (wechat) or a card body (feishu) without duplicating.
 import { t } from "../../core/i18n/index.js";
 
-export function describeApprovalForChat(approval) {
+export function describeApprovalForChat(approval, { autoApproved = false } = {}) {
   const params = approval.params ?? {};
   const lines = [t("state.approval.title", { code: approval.shortCode })];
   if (Array.isArray(approval.changes) && approval.changes.length > 0) {
@@ -13,7 +13,11 @@ export function describeApprovalForChat(approval) {
     const cwd = params.cwd ? "\n" + t("state.approval.cwd", { cwd: params.cwd }) : "";
     lines.push(`${detail}${cwd}`);
   }
-  lines.push(t("state.approval.instructions", { code: approval.shortCode }));
+  lines.push(
+    autoApproved
+      ? t("state.approval.autoApproved")
+      : t("state.approval.instructions", { code: approval.shortCode }),
+  );
   return lines.join("\n\n");
 }
 

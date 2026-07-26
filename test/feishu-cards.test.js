@@ -57,12 +57,20 @@ test("statusCard renders the error phase with a red header and the message", () 
   assert.ok(card.elements.some((el) => el.tag === "markdown" && el.content === "boom"));
 });
 
-test("approvalCard carries approve/decline button values", () => {
+test("approvalCard carries approve/session/decline button values", () => {
   const card = approvalCard({ shortCode: "a1", detail: "rm -rf build" });
   assert.match(card.header.title.content, /a1/);
   const action = card.elements.find((el) => el.tag === "action");
-  assert.deepEqual(action.actions.map((b) => b.value.decision), ["accept", "decline"]);
+  assert.deepEqual(action.actions.map((b) => b.value.decision), ["accept", "acceptForSession", "decline"]);
   assert.ok(action.actions.every((b) => b.value.kind === "approval" && b.value.code === "a1"));
+});
+
+test("auto-approved approvalCard has a notice and no actions", () => {
+  const card = approvalCard({ shortCode: "a1", detail: "npm test", autoApproved: true });
+  assert.ok(!card.elements.some((element) => element.tag === "action"));
+  const body = card.elements.map((element) => element.content ?? "").join("\n");
+  assert.match(body, /自动模式/);
+  assert.doesNotMatch(body, /\/approve|\/deny/);
 });
 
 test("approvalCard includes the /approve text-command fallback (works when buttons can't)", () => {
@@ -81,6 +89,7 @@ test("approvalCard includes the /approve text-command fallback (works when butto
 
 test("approvalResolvedCard reflects the decision", () => {
   assert.match(approvalResolvedCard({ code: "a1", decision: "accept" }).header.title.content, /已批准/);
+  assert.match(approvalResolvedCard({ code: "a1", decision: "acceptForSession" }).header.title.content, /已批准/);
   assert.match(approvalResolvedCard({ code: "a1", decision: "decline" }).header.title.content, /已拒绝/);
 });
 

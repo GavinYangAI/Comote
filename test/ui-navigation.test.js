@@ -33,3 +33,12 @@ test("identity rows and channel summaries constrain long dynamic text", async ()
   assert.match(css, /\.identity-meta \.identity-id\s*\{[^}]*text-overflow:\s*ellipsis/s);
   assert.match(css, /\.channel-row-head \.ch-summary[\s\S]*text-overflow:\s*ellipsis/);
 });
+
+test("desktop approvals expose the allow-for-session decision", async () => {
+  const [js, i18n] = await Promise.all([
+    readFile("public/app.js", "utf8"),
+    readFile("public/i18n.js", "utf8"),
+  ]);
+  assert.match(js, /\|acceptForSession/);
+  assert.match(i18n, /web\.approvals\.acceptForSession/);
+});

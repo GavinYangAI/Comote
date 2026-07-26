@@ -4,7 +4,8 @@
 
 **手机上的 Codex 遥控器 · 本地运行 · 无 Comote 自有服务器**
 
-把你电脑上的 [Codex](https://openai.com/codex)（ChatGPT 桌面应用，原 Codex Desktop；或 Codex CLI）接到飞书 / 微信 / 钉钉 / Telegram，让你在地铁里、客户那边、半夜的床上，都能继续指挥你的 Codex agent —— 不需要把电脑暴露到公网，不需要租服务器，不需要装一堆中间件。
+把你电脑上的 [Codex](https://openai.com/codex)（ChatGPT 桌面应用，原 Codex Desktop；或 Codex CLI）接到飞书 / 微信 / 钉钉 /
+Telegram，让你在地铁里、客户那边、半夜的床上，都能继续指挥你的 Codex agent —— 不需要把电脑暴露到公网，不需要租服务器，不需要装一堆中间件。
 
 [English](./README.en.md) · [快速开始](#快速开始) · [常见问题](#faq) · [仓库](https://github.com/GavinYangAI/comote)
 
@@ -14,7 +15,8 @@
 
 ## 什么是 Comote
 
-不管你用 Codex 写代码，还是拿它处理数据、整理文档、做调研和起草 —— Comote 都是同一个手机遥控器。它面向**所有在本机跑 Codex 的人**（不管装的是 ChatGPT 桌面应用还是 Codex CLI），不只是程序员。
+不管你用 Codex 写代码，还是拿它处理数据、整理文档、做调研和起草 —— Comote 都是同一个手机遥控器。它面向 **所有在本机跑 Codex
+的人**（不管装的是 ChatGPT 桌面应用还是 Codex CLI），不只是程序员。
 
 **中午外出就餐时**，你想起上午那个 bug 的修法，掏出手机在飞书里发：
 
@@ -30,12 +32,12 @@
 
 ### 为什么用 Comote
 
-| 场景 | 一般做法 | Comote |
-|---|---|---|
-| 远程使唤本机 Codex | SSH + tmux + 手敲命令 | 飞书发一句话 |
-| 在 IM 里审批 Codex 的高危操作 | 没法做 | 卡片点按钮 |
-| 不想把电脑暴露公网 | 装 frp / ngrok | 不用，daemon 只听本机 |
-| 想用别的 IM | 自己写 bot | 实现一个 channel adapter（约 200-400 行） |
+| 场景                          | 一般做法              | Comote                                    |
+|-------------------------------|-----------------------|-------------------------------------------|
+| 远程使唤本机 Codex            | SSH + tmux + 手敲命令 | 飞书发一句话                              |
+| 在 IM 里审批 Codex 的高危操作 | 没法做                | 卡片点按钮                                |
+| 不想把电脑暴露公网            | 装 frp / ngrok        | 不用，daemon 只听本机                     |
+| 想用别的 IM                   | 自己写 bot            | 实现一个 channel adapter（约 200-400 行） |
 
 ### 特性
 
@@ -46,20 +48,25 @@
 - **多频道并行** —— 飞书、微信、钉钉、Telegram 可以同时绑，互不干扰
 - **可扩展** —— 加新 IM 就实现一个 channel adapter；加新 agent 后端就实现一个 connector
 
-> **关于官方 Codex 手机端**：OpenAI 自己出了 ChatGPT/Codex 的手机客户端，但它只服务 ChatGPT 订阅用户 —— 用 API key 在本机跑 Codex（CLI 或桌面应用）的人没法用，因为它看不到你本机的 thread。Comote 就是给这类用户的：你的 Codex 在你电脑上跑、用你自己的 key，手机端只是个遥控器。等哪天官方支持了 API 用户远程控制本机 Codex，我们就退役。
+> **关于官方 Codex 手机端**：OpenAI 自己出了 ChatGPT/Codex 的手机客户端，但它只服务 ChatGPT 订阅用户 —— 用 API key 在本机跑
+> Codex（CLI 或桌面应用）的人没法用，因为它看不到你本机的 thread。Comote 就是给这类用户的：你的 Codex 在你电脑上跑、用你自己的
+> key，手机端只是个遥控器。等哪天官方支持了 API 用户远程控制本机 Codex，我们就退役。
 
 ## 支持的渠道
 
-| 渠道 | 绑定方式 | 状态 |
-|---|---|---|
-| **飞书 / Lark** | 扫码自建应用（feishu / lark 域可选） | ✅ 稳定 |
-| **微信** | iLink 扫码登录 | ✅ 稳定 |
-| **钉钉 / DingTalk** | AppKey / AppSecret + 卡片模板 | 🧪 实验性 |
-| **Telegram** | Bot Token + 配对码 | 🧪 实验性 |
+| 渠道                | 绑定方式                             | 状态      |
+|---------------------|--------------------------------------|-----------|
+| **飞书 / Lark**     | 扫码自建应用（feishu / lark 域可选） | ✅ 稳定   |
+| **微信**            | iLink 扫码登录                       | ✅ 稳定   |
+| **钉钉 / DingTalk** | AppKey / AppSecret + 卡片模板        | 🧪 实验性 |
+| **Telegram**        | Bot Token + 配对码                   | 🧪 实验性 |
 
 > 🧪 **实验性**：功能已实现并有测试覆盖，但真机长期联调还在进行中，可能有边角坑。欢迎试用并反馈。
 
-> **多语言**：界面支持中文（默认）、English、日本語、한국어、Français、Español 六种语言。在 Web 设置页的「语言」下拉切换，**即时生效并持久化**（写入 state.json 的 `settings.locale`）；覆盖所有用户可见文案 —— 各 IM 的聊天回复与卡片、Web 设置页（服务端运行日志 eventLog 保持原文，不随语言切换）。也可经 API 读写：`GET /api/settings` 返回 `{ locale, supported }`，`PUT /api/settings { locale }` 切换。
+> **多语言**：界面支持中文（默认）、English、日本語、한국어、Français、Español 六种语言。在 Web 设置页的「语言」下拉切换，
+> **即时生效并持久化**（写入 state.json 的 `settings.locale`）；覆盖所有用户可见文案 —— 各 IM 的聊天回复与卡片、Web
+> 设置页（服务端运行日志 eventLog 保持原文，不随语言切换）。也可经 API 读写：`GET /api/settings` 返回 `{ locale, supported }`，
+> `PUT /api/settings { locale }` 切换。
 
 ## 快速开始
 
@@ -100,8 +107,10 @@ Linux / 无界面服务器请看[下面](#linux--无界面服务器headless-vps)
 
 **凭证 / Token 类（钉钉 / Telegram，实验性）—— 填配置后绑定到具体聊天**
 
-- **Telegram**：在 [@BotFather](https://t.me/BotFather) 建一个 bot，拿到 Bot Token 填进设置页 → daemon 自动起来接收消息 → 设置页会显示一个**配对码**，把它发给你的 bot，绑定即完成（绑定到这个聊天）。
-- **钉钉**：在钉钉开放平台建企业内部应用，填 AppKey / AppSecret；如需卡片（审批 / 状态 / 选择器），在后台建好三个卡片模板并把模板 id 填进设置页（不填则降级为纯文本）→ 给应用发消息完成绑定。
+- **Telegram**：在 [@BotFather](https://t.me/BotFather) 建一个 bot，拿到 Bot Token 填进设置页 → daemon 自动起来接收消息 →
+  设置页会显示一个 **配对码**，把它发给你的 bot，绑定即完成（绑定到这个聊天）。
+- **钉钉**：在钉钉开放平台建企业内部应用，填 AppKey / AppSecret；如需卡片（审批 / 状态 / 选择器），在后台建好三个卡片模板并把模板
+  id 填进设置页（不填则降级为纯文本）→ 给应用发消息完成绑定。
 
 ### 3. 确认身份
 
@@ -146,7 +155,11 @@ Linux / 无界面服务器请看[下面](#linux--无界面服务器headless-vps)
 
 桌面端用 [Tauri](https://tauri.app/) 包了一层壳，Node daemon 作为 sidecar 启动，只监听本机回环地址。
 
-**本地优先，诚实版**：Comote 没有自己的服务器，你的消息不经过任何 Comote 自有服务器中转；Codex 调用全部发生在本机（daemon 在本机直接跟 `codex app-server` 子进程说话），daemon 也只绑 `127.0.0.1`，授权、token、会话历史都存在本机（见下面[数据存储位置](#数据存储位置)）。但要说清楚一点：你和 Comote 之间的消息**经由你所选 IM 平台自己的服务器**传输（飞书是 WebSocket 长连接，钉钉是 Stream 长连接，微信是 iLink getupdates 轮询，Telegram 是 getUpdates 长轮询），这段链路受该 IM 平台的隐私政策约束。
+**本地优先，诚实版**：Comote 没有自己的服务器，你的消息不经过任何 Comote 自有服务器中转；Codex 调用全部发生在本机（daemon
+在本机直接跟 `codex app-server` 子进程说话），daemon 也只绑 `127.0.0.1`
+，授权、token、会话历史都存在本机（见下面[数据存储位置](#数据存储位置)）。但要说清楚一点：你和 Comote 之间的消息 **经由你所选
+IM 平台自己的服务器**传输（飞书是 WebSocket 长连接，钉钉是 Stream 长连接，微信是 iLink getupdates 轮询，Telegram 是
+getUpdates 长轮询），这段链路受该 IM 平台的隐私政策约束。
 
 ## 配置与参考
 
@@ -154,51 +167,55 @@ Linux / 无界面服务器请看[下面](#linux--无界面服务器headless-vps)
 
 Comote 的配置分三层，各管各的：
 
-| 层 | 管什么 | 谁来写 | 典型场景 |
-|---|---|---|---|
-| **环境变量** | 运行时行为：监听地址 / 端口、state 文件位置、codex 路径、API token（见下表） | 你（shell / systemd `Environment=`） | VPS / headless 部署 |
-| **state.json** | 渠道配置（appKey、botToken…）、授权身份、设置（如界面语言） | Web UI 与 `comote config` 写入，**不要手改** | 桌面 / 日常使用 |
-| **CLI flag** | 单次调用的覆盖（如 `--state-path`、`--json`） | 你（命令行） | 排障、脚本 |
+| 层             | 管什么                                                                       | 谁来写                                       | 典型场景            |
+|----------------|------------------------------------------------------------------------------|----------------------------------------------|---------------------|
+| **环境变量**   | 运行时行为：监听地址 / 端口、state 文件位置、codex 路径、API token（见下表） | 你（shell / systemd `Environment=`）         | VPS / headless 部署 |
+| **state.json** | 渠道配置（appKey、botToken…）、授权身份、设置（如界面语言）                  | Web UI 与 `comote config` 写入，**不要手改** | 桌面 / 日常使用     |
+| **CLI flag**   | 单次调用的覆盖（如 `--state-path`、`--json`）                                | 你（命令行）                                 | 排障、脚本          |
 
-优先级：CLI flag > 环境变量 > 默认值；渠道配置以 state.json 为准（UI 与 `comote config` 是同一份数据的两个入口）。典型分工：**VPS 用环境变量 + `comote config`，桌面用 UI**。
+优先级：CLI flag > 环境变量 > 默认值；渠道配置以 state.json 为准（UI 与 `comote config` 是同一份数据的两个入口）。典型分工：
+**VPS 用环境变量 + `comote config`，桌面用 UI**。
 
 ### 数据存储位置
 
-- **CLI / daemon（npm 安装）**：默认 `~/.comote/state.json`（绝对路径）。若新默认路径不存在、而旧版的**当前目录相对** `.comote/state.json` 存在，daemon 会自动沿用旧文件并打一行日志（向后兼容，不搬迁文件）。
-- **桌面 App**：state 存在系统应用数据目录 —— macOS `~/Library/Application Support/dev.comote.desktop/state.json`，Windows `%APPDATA%\dev.comote.desktop\state.json`（App 启动 daemon 时通过 `COMOTE_STATE_PATH` 指定）。
+- **CLI / daemon（npm 安装）**：默认 `~/.comote/state.json`（绝对路径）。若新默认路径不存在、而旧版的 **当前目录相对**
+  `.comote/state.json` 存在，daemon 会自动沿用旧文件并打一行日志（向后兼容，不搬迁文件）。
+- **桌面 App**：state 存在系统应用数据目录 —— macOS `~/Library/Application Support/dev.comote.desktop/state.json`，Windows
+  `%APPDATA%\dev.comote.desktop\state.json`（App 启动 daemon 时通过 `COMOTE_STATE_PATH` 指定）。
 - 显式指定永远优先：`COMOTE_STATE_PATH` 环境变量或 `--state-path` flag。
-- `comote doctor` 会打印当前解析到的 state 路径**及其来源**（flag / env / legacy / default），拿不准看哪份文件时先跑它。
+- `comote doctor` 会打印当前解析到的 state 路径 **及其来源**（flag / env / legacy / default），拿不准看哪份文件时先跑它。
 
 不同 IM 的细节：
 
 - **飞书 / Lark** — 详见 [`src/channels/feishu/README.md`](src/channels/feishu/README.md)
 - **微信** — 详见 [`src/channels/wechat/README.md`](src/channels/wechat/README.md)
-- **钉钉 / DingTalk** — 配置项：`appKey` / `appSecret` + 可选的 `approvalTemplateId` / `statusTemplateId` / `pickerTemplateId`（卡片模板，缺省降级纯文本）
+- **钉钉 / DingTalk** — 配置项：`appKey` / `appSecret` + 可选的 `approvalTemplateId` / `statusTemplateId` /
+  `pickerTemplateId`（卡片模板，缺省降级纯文本）
 - **Telegram** — 配置项：`botToken`；首次连上后设置页显示 `pairingCode`，发给 bot 完成绑定
 
 常用环境变量：
 
-| 变量 | 说明 |
-|---|---|
-| `HOST` | daemon 监听地址（默认 `127.0.0.1`；改成非 loopback 必须同时设 `COMOTE_LOCAL_API_TOKEN`，否则拒绝启动） |
-| `PORT` | daemon 监听端口（不设走内置默认值；正常使用不用动） |
-| `COMOTE_STATE_PATH` | 持久化状态文件路径（默认 `~/.comote/state.json`；桌面 App 会把它指到应用数据目录，见上面[数据存储位置](#数据存储位置)） |
-| `COMOTE_CODEX_PATH` | 显式指定 codex 可执行文件的完整路径，优先级最高（用于自定义安装位置） |
-| `COMOTE_LOCAL_API_TOKEN` | 设了之后所有 `/api/*` 调用必须带这个 token |
-| `COMOTE_WECHAT_ACCOUNT_ID` | 同机绑多个微信号时区分用（默认 `default`） |
+| 变量                       | 说明                                                                                                                    |
+|----------------------------|-------------------------------------------------------------------------------------------------------------------------|
+| `HOST`                     | daemon 监听地址（默认 `127.0.0.1`；改成非 loopback 必须同时设 `COMOTE_LOCAL_API_TOKEN`，否则拒绝启动）                  |
+| `PORT`                     | daemon 监听端口（不设走内置默认值；正常使用不用动）                                                                     |
+| `COMOTE_STATE_PATH`        | 持久化状态文件路径（默认 `~/.comote/state.json`；桌面 App 会把它指到应用数据目录，见上面[数据存储位置](#数据存储位置)） |
+| `COMOTE_CODEX_PATH`        | 显式指定 codex 可执行文件的完整路径，优先级最高（用于自定义安装位置）                                                   |
+| `COMOTE_LOCAL_API_TOKEN`   | 设了之后所有 `/api/*` 调用必须带这个 token                                                                              |
+| `COMOTE_WECHAT_ACCOUNT_ID` | 同机绑多个微信号时区分用（默认 `default`）                                                                              |
 
 命令速查：
 
-| 命令 | 作用 |
-|---|---|
-| `/projects` | 列出 Codex 已知的所有项目 |
-| `/open <序号 \| 绝对路径>` | 进入某个项目 |
-| `/sessions` | 列出该项目下最近的 thread |
-| `/new <标题>` | 新建一个 thread |
-| `/status` | 当前绑定身份 / 项目 / 会话 |
-| `/approve <code>` | 批准一个待审批的操作 |
-| `/deny <code>` | 拒绝一个待审批的操作 |
-| 普通文本 | 转给当前 thread 给 Codex |
+| 命令                       | 作用                       |
+|----------------------------|----------------------------|
+| `/projects`                | 列出 Codex 已知的所有项目  |
+| `/open <序号 \| 绝对路径>` | 进入某个项目               |
+| `/sessions`                | 列出该项目下最近的 thread  |
+| `/new <标题>`              | 新建一个 thread            |
+| `/status`                  | 当前绑定身份 / 项目 / 会话 |
+| `/approve <code>`          | 批准一个待审批的操作       |
+| `/deny <code>`             | 拒绝一个待审批的操作       |
+| 普通文本                   | 转给当前 thread 给 Codex   |
 
 ## 排障与日志位置
 
@@ -211,25 +228,29 @@ comote logs          # daemon 内存事件日志（daemon 活着才有；--limit
 
 日志分两处：
 
-- **daemon 事件日志**：内存 ring buffer，`comote logs` 读取（也在 Web 设置页的"运行日志"面板）。daemon 挂了就没了 —— 这时看下面的文件日志。
+- **daemon 事件日志**：内存 ring buffer，`comote logs` 读取（也在 Web 设置页的"运行日志"面板）。daemon 挂了就没了 ——
+  这时看下面的文件日志。
 - **桌面 App 启动日志（文件，只在桌面 App 模式下产生）**：
-  - macOS：`~/Library/Application Support/dev.comote.desktop/comote-launch.log`
-  - Windows：`%APPDATA%\dev.comote.desktop\` 下的 `comote-launch.log`、`comote-node.stdout.log`、`comote-node.stderr.log`
-  - 用 `comote logs --file` 直接看文件尾部（默认 200 行，`--lines N` 可调），不需要 daemon 在线。npm/CLI 方式运行时这些文件不存在，属正常。
+    - macOS：`~/Library/Application Support/dev.comote.desktop/comote-launch.log`
+    - Windows：`%APPDATA%\dev.comote.desktop\` 下的 `comote-launch.log`、`comote-node.stdout.log`、`comote-node.stderr.log`
+    - 用 `comote logs --file` 直接看文件尾部（默认 200 行，`--lines N` 可调），不需要 daemon 在线。npm/CLI 方式运行时这些文件不存在，属正常。
 
-想升级：`comote update` 只做检查并打印升级方式（npm 安装 → `npm install -g comote@latest`，任何平台；桌面 App → 下载链接），不会自动执行升级。
+想升级：`comote update` 只做检查并打印升级方式（npm 安装 → `npm install -g comote@latest`，任何平台；桌面 App →
+下载链接），不会自动执行升级。
 
 ## Linux / 无界面服务器（headless VPS）
 
 <details>
 <summary>想把 Comote 跑在一台没有显示器、没有桌面环境的 Linux VPS 上？可以 —— 有一个纯命令行的 headless daemon，不依赖任何 GUI / webkit。</summary>
 
-**它是什么** —— 完整的 app-server connector（threads、流式回复、exec / applyPatch 审批）照常工作，因为 Comote 是跟 `codex app-server`（codex 的一个子命令）说话，**不是**跟任何图形界面（如 ChatGPT 桌面应用）说话。所以没有桌面环境也完全没问题。
+**它是什么** —— 完整的 app-server connector（threads、流式回复、exec / applyPatch 审批）照常工作，因为 Comote 是跟
+`codex app-server`（codex 的一个子命令）说话， **不是**跟任何图形界面（如 ChatGPT 桌面应用）说话。所以没有桌面环境也完全没问题。
 
 **前置条件**
 
 - 装好 **Codex CLI**，并确保 `codex` 在 PATH 上。
-- ⚠️ **先跑 `codex login`** —— 这是第一次部署最容易踩的坑。没有显示器、没浏览器的 VPS 上，用 **device-auth（设备码登录）或 API key** 完成登录。**没登录过，app-server 起不来，Comote 也就连不上 Codex。**
+- ⚠️ **先跑 `codex login`** —— 这是第一次部署最容易踩的坑。没有显示器、没浏览器的 VPS 上，用 **device-auth（设备码登录）或
+  API key** 完成登录。 **没登录过，app-server 起不来，Comote 也就连不上 Codex。**
 
 **安装**
 
@@ -239,7 +260,8 @@ npm i -g comote   # 需要 Node 22+
 
 **运行**
 
-推荐用 **systemd**——这样它会**开机自启、崩溃自动重启、系统重启后照常在后台跑**。（`comote &` 或 `nohup comote &` 能扛住 SSH 断开，但**扛不住系统重启**，重启后进程就没了——所以别用它做长期部署。）
+推荐用 **systemd**——这样它会 **开机自启、崩溃自动重启、系统重启后照常在后台跑**。（`comote &` 或 `nohup comote &` 能扛住 SSH
+断开，但 **扛不住系统重启**，重启后进程就没了——所以别用它做长期部署。）
 
 ```bash
 # 参考 deploy/comote.service 模板，按注释改好 User / 路径
@@ -250,13 +272,15 @@ systemctl status comote                # 看是否 active (running)
 journalctl -u comote -f                # 跟日志
 ```
 
-> ⚠️ **daemon 必须用跑过 `codex login` 的那个用户来运行。** codex 的登录态在该用户的 `~/.codex` 下；如果 systemd 用一个专用 `comote` 用户跑，就得先用那个用户登录（`sudo -u comote codex login`），否则 app-server 读不到认证、连不上 Codex。
+> ⚠️ **daemon 必须用跑过 `codex login` 的那个用户来运行。** codex 的登录态在该用户的 `~/.codex` 下；如果 systemd 用一个专用
+> `comote` 用户跑，就得先用那个用户登录（`sudo -u comote codex login`），否则 app-server 读不到认证、连不上 Codex。
 
-Comote 会**自己把 `codex app-server` 作为子进程启动并自动连接**——Linux 上**没有**需要你单独"打开"或常驻的 Codex 应用。快速试用也可以直接前台跑 `comote`（但关掉终端 / 重启就停了）。
+Comote 会 **自己把 `codex app-server` 作为子进程启动并自动连接**——Linux 上 **没有**需要你单独"打开"或常驻的 Codex
+应用。快速试用也可以直接前台跑 `comote`（但关掉终端 / 重启就停了）。
 
 **访问 Web 控制台**
 
-daemon 默认绑 `127.0.0.1:16208`，**不对公网暴露**。通过 SSH 隧道访问：
+daemon 默认绑 `127.0.0.1:16208`， **不对公网暴露**。通过 SSH 隧道访问：
 
 ```bash
 ssh -L 16208:localhost:16208 your-vps
@@ -267,11 +291,14 @@ ssh -L 16208:localhost:16208 your-vps
 
 默认的 loopback 绑定（`127.0.0.1`）是安全的，建议就用 SSH 隧道。
 
-如果你确实要把 `HOST` 设成非 loopback 地址（比如 `0.0.0.0`），你**必须**同时设置 `COMOTE_LOCAL_API_TOKEN` —— 否则 daemon 会**拒绝启动**（任何能连到这个地址的人否则就能无认证地批准 Codex 执行命令）。设了之后，所有 `/api/*` 请求都要带 `x-comote-token` 头。即便如此，仍然优先用 SSH 隧道。
+如果你确实要把 `HOST` 设成非 loopback 地址（比如 `0.0.0.0`），你 **必须**同时设置 `COMOTE_LOCAL_API_TOKEN` —— 否则 daemon 会
+**拒绝启动**（任何能连到这个地址的人否则就能无认证地批准 Codex 执行命令）。设了之后，所有 `/api/*` 请求都要带
+`x-comote-token` 头。即便如此，仍然优先用 SSH 隧道。
 
 **审批**
 
-Codex 的权限审批会推送到你的 IM 聊天里，在那边用 `/approve <code>` · `/deny <code>` 处理（支持卡片的渠道也可以直接点按钮）。注意 codex 默认的 workspace-write 沙箱会**自动放行**工作区内的改动，只有要逃逸沙箱的操作才会弹审批。
+Codex 的权限审批会推送到你的 IM 聊天里，在那边用 `/approve <code>` · `/deny <code>` 处理（支持卡片的渠道也可以直接点按钮）。注意
+codex 默认的 workspace-write 沙箱会 **自动放行**工作区内的改动，只有要逃逸沙箱的操作才会弹审批。
 
 **更新**
 
@@ -281,7 +308,8 @@ npm i -g comote@latest   # 然后重启服务：systemctl restart comote
 
 Linux 上没有应用内自动下载更新，手动升级即可。
 
-**一点说明** —— Comote 是针对某个较新的 codex 版本验证（certified）过的。app-server 协议历史上变过，如果升级后出问题，先把 codex 钉（pin）回一个已知可用的版本再排查。
+**一点说明** —— Comote 是针对某个较新的 codex 版本验证（certified）过的。app-server 协议历史上变过，如果升级后出问题，先把
+codex 钉（pin）回一个已知可用的版本再排查。
 
 </details>
 
@@ -322,19 +350,24 @@ npm run dist:win
 
 **Q：数据会上传到任何服务器吗？**
 
-不会上传到 Comote 的服务器 —— Comote 根本没有自有服务器，Codex 调用也全部发生在本机。但你和 Comote 之间的**消息本身走的是你所选 IM 平台的通道**（飞书 / 微信 / 钉钉 / Telegram 各自的服务器），受该平台隐私政策约束。链路细节见上面[怎么工作的](#怎么工作的)。
+不会上传到 Comote 的服务器 —— Comote 根本没有自有服务器，Codex 调用也全部发生在本机。但你和 Comote 之间的 **消息本身走的是你所选
+IM 平台的通道**（飞书 / 微信 / 钉钉 / Telegram
+各自的服务器），受该平台隐私政策约束。链路细节见上面[怎么工作的](#怎么工作的)。
 
 **Q：可以多人共用一台 daemon 吗？**
 
-可以。每个聊天身份都需要单独绑定 / 确认，授权颗粒度是按身份的。但请注意：所有授权身份共享同一个本机 Codex，互相之间能看到彼此的 thread 列表。
+可以。每个聊天身份都需要单独绑定 / 确认，授权颗粒度是按身份的。但请注意：所有授权身份共享同一个本机 Codex，互相之间能看到彼此的
+thread 列表。
 
 **Q：微信集成合规吗？**
 
-我们用的是腾讯 iLink 公开的 bot 接口（`ilinkai.weixin.qq.com`），不是逆向、不是桌面 UI 自动化、不绕过任何账号验证。但腾讯的服务条款会变，你需要自己评估当前的合规风险，**作者不为此承担责任**。
+我们用的是腾讯 iLink 公开的 bot 接口（`ilinkai.weixin.qq.com`），不是逆向、不是桌面 UI
+自动化、不绕过任何账号验证。但腾讯的服务条款会变，你需要自己评估当前的合规风险， **作者不为此承担责任**。
 
 **Q：支持哪些 IM？还能加别的吗（Discord / Slack）？**
 
-目前内置四个：**飞书**和**微信**（稳定），**钉钉**和**Telegram**（实验性），见上面[支持的渠道](#支持的渠道)表。新增一个 IM 只需实现一个 `ChannelAdapter`（约 200-400 行），Discord 的适配已在规划中。欢迎 PR。
+目前内置四个： **飞书**和 **微信**（稳定）， **钉钉**和 **Telegram**（实验性），见上面[支持的渠道](#支持的渠道)表。新增一个 IM
+只需实现一个 `ChannelAdapter`（约 200-400 行），Discord 的适配已在规划中。欢迎 PR。
 
 <details>
 <summary>更多运维相关问答（跨设备同步、失联行为）</summary>
@@ -381,7 +414,7 @@ npm test
 
 [MIT License](./LICENSE) © 2026 Gavin Yang
 
-本项目按 MIT 协议提供，**不提供任何形式的担保**。请自行评估 IM 集成的合规风险。
+本项目按 MIT 协议提供， **不提供任何形式的担保**。请自行评估 IM 集成的合规风险。
 
 ## 关于
 
@@ -389,7 +422,7 @@ npm test
 - **作者**：[@GavinYangAI](https://github.com/GavinYangAI)
 - **报 Bug / 提需求**：<https://github.com/GavinYangAI/comote/issues>
 
-Comote 的目标是让"远程使唤本机 Codex"这件事**简单到不值得专门为它租服务器**。如果它帮到了你，欢迎 Star、提 Issue、发 PR。
+Comote 的目标是让"远程使唤本机 Codex"这件事 **简单到不值得专门为它租服务器**。如果它帮到了你，欢迎 Star、提 Issue、发 PR。
 
 ---
 

@@ -32,7 +32,11 @@ export function createFeishuRenderer() {
         case "status":
           return statusCard(reply);
         case "approval":
-          return approvalCard({ shortCode: reply.code, detail: approvalDetail(reply.approval) });
+          return approvalCard({
+            shortCode: reply.code,
+            detail: approvalDetail(reply.approval),
+            autoApproved: reply.autoApproved,
+          });
         case "approvalResolved":
           return approvalResolvedCard({ code: reply.code, decision: reply.decision });
         case "picker":

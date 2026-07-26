@@ -616,6 +616,9 @@ export class CodexDesktopConnector {
   }
 
   async resolveApproval(idOrShortCode, decision) {
+    if (!APPROVAL_DECISIONS.has(decision)) {
+      throw new Error(`invalid approval decision: ${decision}`);
+    }
     const key = this.shortCodeToKey.get(idOrShortCode) ?? String(idOrShortCode);
     const approval = this.pendingApprovals.get(key);
     if (!approval) {
@@ -629,6 +632,8 @@ export class CodexDesktopConnector {
     return { ok: true };
   }
 }
+
+const APPROVAL_DECISIONS = new Set(["accept", "acceptForSession", "decline"]);
 
 // Pure helper: normalizes the various file-change shapes the app-server emits
 // into a flat list of paths. Arrays of change objects (or strings), or an
@@ -872,7 +877,12 @@ function readCodexWorkspaceProjects(statePath) {
 
 function approvalResultFor(method, decision) {
   if (method === "execCommandApproval" || method === "applyPatchApproval") {
-    return { decision: decision === "accept" ? "approved" : "denied" };
+    const legacyDecision = decision === "accept"
+      ? "approved"
+      : decision === "acceptForSession"
+        ? "approved_for_session"
+        : "denied";
+    return { decision: legacyDecision };
   }
   return { decision };
 }

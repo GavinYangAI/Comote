@@ -1062,9 +1062,11 @@ export function createComoteState({
 
     if (event.type === "approval") {
       const binding = commandRouter.getThreadBinding(event.approval.threadId);
+      const autoApproved = commandRouter.isAutoModeEnabled(event.approval.threadId);
       eventLog.warn("Codex 请求审批", {
         shortCode: event.approval.shortCode,
         threadId: event.approval.threadId,
+        autoApproved,
       });
       if (!binding) {
         eventLog.warn("收到 Codex 输出但找不到对应会话，未转发", {
@@ -1081,10 +1083,20 @@ export function createComoteState({
         kind: "approval",
         code: event.approval.shortCode,
         approval: event.approval,
+        autoApproved,
         dedupeKey: `approval:${event.approval.id}`,
       });
       deliverIfPush(binding.channel);
       persistInBackground();
+      if (autoApproved) {
+        void desktop.resolveApproval(event.approval.id, "accept").catch((error) => {
+          eventLog.error("Codex 自动审批失败", {
+            shortCode: event.approval.shortCode,
+            threadId: event.approval.threadId,
+            error: error?.message ?? String(error),
+          });
+        });
+      }
       return;
     }
 

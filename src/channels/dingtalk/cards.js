@@ -38,14 +38,16 @@ export function approvalCardData({ shortCode, detail }) {
     title: t("card.approval.title", { code: shortCode }),
     detail: String(detail ?? t("card.approval.detailFallback")),
     approveLabel: t("card.approval.approve"),
+    sessionLabel: t("card.approval.acceptForSession"),
     rejectLabel: t("card.approval.reject"),
     approveParams: { action: "approve", code: shortCode },
+    sessionParams: { action: "approve_session", code: shortCode },
     rejectParams: { action: "reject", code: shortCode },
   };
 }
 
 export function approvalResolvedCardData({ code, decision }) {
-  const accepted = decision === "accept";
+  const accepted = decision === "accept" || decision === "acceptForSession";
   return {
     title: accepted ? t("card.approval.accepted", { code }) : t("card.approval.rejected", { code }),
     body: accepted ? t("card.approval.acceptedBody") : t("card.approval.rejectedBody"),

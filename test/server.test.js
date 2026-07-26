@@ -403,6 +403,38 @@ test("approval APIs expose and resolve pending Codex approvals", async () => {
   assert.deepEqual(resolved, { id: "approval_1", decision: "accept" });
 });
 
+test("approval API accepts session decisions and rejects unsupported values", async () => {
+  const decisions = [];
+  const state = createFakeState();
+  state.connectors.desktop = {
+    ...state.connectors.desktop,
+    async resolveApproval(id, decision) {
+      decisions.push([id, decision]);
+      return { id, decision };
+    },
+  };
+  const app = createServer(state);
+  const server = app.listen(0);
+  await new Promise((resolve) => server.once("listening", resolve));
+  const { port } = server.address();
+
+  const accepted = await fetch(`http://127.0.0.1:${port}/api/approvals/a1`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ decision: "acceptForSession" }),
+  });
+  const rejected = await fetch(`http://127.0.0.1:${port}/api/approvals/a2`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ decision: "anything" }),
+  });
+  server.close();
+
+  assert.equal(accepted.status, 200);
+  assert.equal(rejected.status, 400);
+  assert.deepEqual(decisions, [["a1", "acceptForSession"]]);
+});
+
 test("readJsonBody rejects oversized request bodies with a non-500 error response", async () => {
   const app = createServer();
   const server = app.listen(0);

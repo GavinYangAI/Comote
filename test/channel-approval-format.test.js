@@ -19,6 +19,15 @@ test("describeApprovalForChat includes code, command and the /approve instructio
   assert.match(text, /\/approve a1/);
 });
 
+test("auto-approved chat text notifies without manual approval instructions", () => {
+  const text = describeApprovalForChat(
+    { shortCode: "a1", method: "exec", params: { command: "npm test" } },
+    { autoApproved: true },
+  );
+  assert.match(text, /自动模式/);
+  assert.doesNotMatch(text, /\/approve|\/deny/);
+});
+
 test("summarizeChanges lists changed paths with stats", () => {
   const text = summarizeChanges([{ kind: { type: "add" }, path: "x.js", diff: "+a\n+b\n-c" }]);
   assert.match(text, /x\.js/);

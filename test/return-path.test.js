@@ -93,6 +93,38 @@ test("Codex approval requests are pushed to the phone with a short code", async 
   assert.equal(queued[0].code, "a1");
 });
 
+test("auto mode approves the request and still queues a buttonless notification", async () => {
+  const { transport, desktop, state } = buildState();
+  await desktop.client.connect();
+
+  state.commandRouter.conversationByIdentity.set("wechat:acct:peer", {
+    channel: "wechat",
+    conversationId: "dm_peer",
+    accountId: "acct",
+  });
+  state.commandRouter.bindThreadForIdentity({ channel: "wechat", stableId: "acct:peer" }, "thread_auto");
+  state.commandRouter.autoModeThreads.add("thread_auto");
+
+  transport.receive({
+    jsonrpc: "2.0",
+    method: "item/commandExecution/requestApproval",
+    id: "rpc_auto",
+    params: { threadId: "thread_auto", command: "npm test", cwd: "/repo" },
+  });
+  await tick();
+
+  const queued = state.outboundReplies.list({ channel: "wechat" });
+  assert.equal(queued.length, 1);
+  assert.equal(queued[0].kind, "approval");
+  assert.equal(queued[0].autoApproved, true);
+  assert.deepEqual(transport.sent.at(-1), {
+    jsonrpc: "2.0",
+    id: "rpc_auto",
+    result: { decision: "accept" },
+  });
+  assert.deepEqual(desktop.listPendingApprovals(), []);
+});
+
 test("agent output for an unbound thread is logged but not delivered", async () => {
   const { transport, desktop, state } = buildState();
   await desktop.client.connect();
@@ -301,7 +333,7 @@ test("a Codex approval for a Feishu thread is delivered as a card", async () => 
 
   assert.equal(calls.sent.length, 1);
   const action = calls.sent[0].card.elements.find((el) => el.tag === "action");
-  assert.deepEqual(action.actions.map((b) => b.value.decision), ["accept", "decline"]);
+  assert.deepEqual(action.actions.map((b) => b.value.decision), ["accept", "acceptForSession", "decline"]);
 });
 
 test("completed card fallback tail localizes to en", async () => {

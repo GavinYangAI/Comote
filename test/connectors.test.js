@@ -646,6 +646,26 @@ test("desktop connector resolves command approval requests", async () => {
   assert.deepEqual(connector.listPendingApprovals(), []);
 });
 
+test("desktop connector allows an approval for the current Codex session", async () => {
+  const transport = new MemoryTransport();
+  const connector = new CodexDesktopConnector({ transport });
+
+  connector.client.handleMessage({
+    jsonrpc: "2.0",
+    method: "item/fileChange/requestApproval",
+    id: "approval_session",
+    params: { threadId: "thread_1", turnId: "turn_1", itemId: "item_1" },
+  });
+
+  await connector.resolveApproval("approval_session", "acceptForSession");
+
+  assert.deepEqual(transport.sent[0], {
+    jsonrpc: "2.0",
+    id: "approval_session",
+    result: { decision: "acceptForSession" },
+  });
+});
+
 test("desktop connector resolves legacy exec approvals", async () => {
   const transport = new MemoryTransport();
   const connector = new CodexDesktopConnector({ transport });
@@ -663,6 +683,26 @@ test("desktop connector resolves legacy exec approvals", async () => {
     jsonrpc: "2.0",
     id: "approval_legacy",
     result: { decision: "denied" },
+  });
+});
+
+test("desktop connector maps session approval to the legacy decision", async () => {
+  const transport = new MemoryTransport();
+  const connector = new CodexDesktopConnector({ transport });
+
+  connector.client.handleMessage({
+    jsonrpc: "2.0",
+    method: "applyPatchApproval",
+    id: "approval_legacy_session",
+    params: { path: "src/app.js" },
+  });
+
+  await connector.resolveApproval("approval_legacy_session", "acceptForSession");
+
+  assert.deepEqual(transport.sent[0], {
+    jsonrpc: "2.0",
+    id: "approval_legacy_session",
+    result: { decision: "approved_for_session" },
   });
 });
 

@@ -33,6 +33,20 @@ test("approval reply degrades to chat text (code + command + /approve)", async (
   assert.match(driver.sent[0].text, /\/approve a1/);
 });
 
+test("auto-approved notification has no manual approval instructions", async () => {
+  const r = createWeChatRenderer();
+  const driver = stubDriver();
+  await r.render({
+    kind: "approval",
+    conversationId: "dm_x",
+    code: "a1",
+    autoApproved: true,
+    approval: { shortCode: "a1", method: "exec", params: { command: "npm test" } },
+  }, { driver });
+  assert.match(driver.sent[0].text, /自动模式/);
+  assert.doesNotMatch(driver.sent[0].text, /\/approve|\/deny/);
+});
+
 test("picker reply degrades to the picker text", async () => {
   const r = createWeChatRenderer();
   const driver = stubDriver();

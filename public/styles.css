@@ -1079,6 +1079,8 @@ code {
 .button-row {
   display: inline-flex;
   flex: 0 0 auto;
+  flex-wrap: wrap;
+  justify-content: flex-end;
   gap: 8px;
 }
 
