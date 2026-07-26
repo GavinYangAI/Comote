@@ -547,6 +547,7 @@ function formatVersionResponse(state) {
   const pid = process.pid;
   if (!state.versionChecker) {
     return {
+      service: "comote",
       version,
       pid,
       latest: null,
@@ -560,6 +561,7 @@ function formatVersionResponse(state) {
   }
   const result = state.versionChecker.getLastResult();
   return {
+    service: "comote",
     version,
     pid,
     latest: result.latest,

@@ -24,8 +24,8 @@ test("desktop dev preflight stops a daemon and waits for its port", async () => 
   const result = await stopExistingDevelopmentDaemon({
     fetchImpl: async () => {
       fetchCalls += 1;
-      if (fetchCalls === 1) return jsonResponse({ version: "0.7.1", pid: 4242 });
-      if (fetchCalls === 2) return jsonResponse({ version: "0.7.1", pid: 4242 });
+      if (fetchCalls === 1) return jsonResponse({ service: "comote", version: "0.7.1", pid: 4242 });
+      if (fetchCalls === 2) return jsonResponse({ service: "comote", version: "0.7.1", pid: 4242 });
       throw new Error("ECONNREFUSED");
     },
     killImpl: (...args) => kills.push(args),
@@ -39,8 +39,20 @@ test("desktop dev preflight stops a daemon and waits for its port", async () => 
 test("desktop dev preflight refuses to kill a service without a valid pid", async () => {
   await assert.rejects(
     () => stopExistingDevelopmentDaemon({
-      fetchImpl: async () => jsonResponse({ version: "0.7.1" }),
+      fetchImpl: async () => jsonResponse({ service: "comote", version: "0.7.1" }),
     }),
     /did not report a valid pid/,
   );
+});
+
+test("desktop dev preflight never kills an unrelated JSON service", async () => {
+  let killed = false;
+  await assert.rejects(
+    () => stopExistingDevelopmentDaemon({
+      fetchImpl: async () => jsonResponse({ version: "0.7.1", pid: 4242 }),
+      killImpl: () => { killed = true; },
+    }),
+    /not Comote/,
+  );
+  assert.equal(killed, false);
 });

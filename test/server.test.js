@@ -102,6 +102,7 @@ test("version API reports the running process id and version", async () => {
   server.close();
 
   assert.equal(response.status, 200);
+  assert.equal(body.service, "comote");
   // The Tauri shell parses pid from this response to adopt an already-running
   // daemon (B3b PID adoption), so it must be a positive integer.
   assert.equal(typeof body.pid, "number");

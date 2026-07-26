@@ -12,6 +12,11 @@ export async function stopExistingDevelopmentDaemon({
 } = {}) {
   const daemon = await readDaemon(versionUrl, fetchImpl);
   if (!daemon) return { stopped: false, pid: null };
+  if (daemon.service !== "comote") {
+    throw new Error(
+      `Port 16208 is occupied by a service that is not Comote. Refusing to stop its process; release the port before running desktop:dev.`,
+    );
+  }
 
   const pid = Number(daemon.pid);
   if (!Number.isSafeInteger(pid) || pid <= 0) {
