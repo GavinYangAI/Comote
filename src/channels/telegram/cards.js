@@ -114,13 +114,16 @@ export function cancelKeyboard(threadId) {
   return { inline_keyboard: [[{ text: t("card.cancelButton"), callback_data: encodeCallback({ action: "cancel", threadId }) }]] };
 }
 
-export function statusText({ phase, steps = 0, text = "" }) {
+export function statusText({ phase, steps = 0, text = "", activities = [] }) {
   const title = t(PHASE_TITLE[phase] ?? PHASE_TITLE.progress);
   const stepLine = steps > 0 ? t("card.steps.running", { steps }) : t("card.steps.starting");
   // Clamp the body so the assembled card stays under Telegram's 4096-char ceiling;
   // a too-long editMessageText would 400 and strand the card mid-progress.
   const body = clampStatusBody(String(text ?? ""));
-  return [title, stepLine, body].filter(Boolean).join("\n\n");
+  const tools = activities.length > 0
+    ? `${t("card.tools.title", { count: activities.length })}\n${activities.map((item) => `• ${item}`).join("\n")}`
+    : "";
+  return [title, stepLine, tools, body].filter(Boolean).join("\n\n");
 }
 
 // Trims the status body to STATUS_BODY_LIMIT, keeping the tail (the latest output

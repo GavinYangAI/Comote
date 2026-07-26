@@ -87,11 +87,14 @@ export function pickerCardData({ pickKind, title, text = "", items = [], convers
 
 // Raw status fields (renderer turns these into a cardParamMap). Part B uses this
 // for the live thread card; Part A ships it so the renderer's buildStatusCard exists.
-export function statusCardData({ phase, threadId = null, steps = 0, text = "", done = false }) {
+export function statusCardData({ phase, threadId = null, steps = 0, text = "", done = false, activities = [] }) {
   const titleKey = PHASE_TITLE[phase] ?? PHASE_TITLE.progress;
+  const tools = activities.length > 0
+    ? `**${t("card.tools.title", { count: activities.length })}**\n${activities.map((item) => `- ${item}`).join("\n")}`
+    : "";
   return {
     title: t(titleKey),
-    body: String(text ?? ""),
+    body: [tools, String(text ?? "")].filter(Boolean).join("\n\n"),
     steps: steps > 0 ? t("card.steps.running", { steps }) : t("card.steps.starting"),
     threadId: threadId ?? "",
     done,

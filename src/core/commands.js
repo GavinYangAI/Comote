@@ -224,11 +224,38 @@ export class CommandRouter {
       return this.deniedReply();
     }
     const reply = await this.dispatchAuthorizedMessage(message);
-    if (!this.greetedIdentities.has(key)) {
-      rememberIdentity(this.greetedIdentities, key);
-      return this.prependWelcome(reply);
+    const output = !this.greetedIdentities.has(key)
+      ? (() => {
+          rememberIdentity(this.greetedIdentities, key);
+          return this.prependWelcome(reply);
+        })()
+      : reply;
+    const startedThreadId = this.startedDesktopThreadForReply(message.identity, reply);
+    if (startedThreadId && output && typeof output === "object") {
+      // Runtime-only routing metadata: non-enumerable so the public command
+      // reply contract and persisted/outbound semantic shape stay unchanged.
+      Object.defineProperty(output, "startedThreadId", {
+        value: startedThreadId,
+        enumerable: false,
+        configurable: true,
+      });
     }
-    return reply;
+    return output;
+  }
+
+  startedDesktopThreadForReply(identity, reply) {
+    if (!reply || typeof reply.text !== "string") return null;
+    const key = this.identityKey(identity);
+    const projectPath = this.currentProjectByIdentity.get(key);
+    if (!projectPath) return null;
+    const active = this.sessions.getActiveSession(projectPath, key);
+    if (!active) return null;
+    const connector = active.connector
+      ?? (String(active.id).startsWith("cli_") ? "cli" : "desktop");
+    if (connector !== "desktop") return null;
+    const submitted = reply.text === t("cmd.send.processing", { id: active.id })
+      || reply.text === t("cmd.new.sentDesktop", { id: active.id });
+    return submitted ? active.id : null;
   }
 
   async dispatchAuthorizedMessage(message) {
@@ -282,10 +309,10 @@ export class CommandRouter {
         return this.text(await this.cancelActiveTurn(message.identity));
       }
       if (command === "/approve") {
-        return this.text(await this.resolveApproval(rest, "accept", message.identity));
+        return this.approvalResolution(await this.resolveApproval(rest, "accept", message.identity));
       }
       if (command === "/deny") {
-        return this.text(await this.resolveApproval(rest, "decline", message.identity));
+        return this.approvalResolution(await this.resolveApproval(rest, "decline", message.identity));
       }
       if (!command.startsWith("/")) {
         return await this.handlePlainText(message.identity, message.text, message.attachments);
@@ -348,6 +375,16 @@ export class CommandRouter {
 
   text(text) {
     return { kind: "text", text };
+  }
+
+  approvalResolution(text) {
+    const reply = this.text(text);
+    Object.defineProperty(reply, "approvalResolution", {
+      value: true,
+      enumerable: false,
+      configurable: true,
+    });
+    return reply;
   }
 
   // A text reply that also describes a clickable picker. Channels that render

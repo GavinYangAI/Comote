@@ -63,6 +63,15 @@ export class TelegramDriver {
     });
   }
 
+  async setMessageReaction({ chatId, messageId, emoji = null }) {
+    return this._call("setMessageReaction", {
+      chat_id: chatId,
+      message_id: messageId,
+      reaction: emoji ? [{ type: "emoji", emoji }] : [],
+      is_big: false,
+    });
+  }
+
   async answerCallbackQuery({ callbackQueryId, text = null }) {
     return this._call("answerCallbackQuery", { callback_query_id: callbackQueryId, ...(text ? { text } : {}) });
   }

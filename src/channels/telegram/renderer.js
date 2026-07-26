@@ -24,6 +24,13 @@ export function createTelegramRenderer() {
       return { text: statusText(status), replyMarkup };
     },
 
+    buildApprovalCard({ code, approval, autoApproved = false }) {
+      return {
+        text: describeApprovalForChat(approval, { autoApproved }),
+        replyMarkup: autoApproved ? null : approvalKeyboard(code),
+      };
+    },
+
     async render(reply, { driver, runtime = null }) {
       switch (reply.kind) {
         case "media":

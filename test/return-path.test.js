@@ -177,6 +177,16 @@ test("Codex streaming for a Feishu thread drives a live card", async () => {
 
   transport.receive({
     jsonrpc: "2.0",
+    method: "item/started",
+    params: {
+      threadId: "thread_f",
+      item: { type: "commandExecution", id: "cmd1", command: "npm test" },
+    },
+  });
+  await tick();
+
+  transport.receive({
+    jsonrpc: "2.0",
     method: "item/updated",
     params: { threadId: "thread_f", item: { type: "agentMessage", id: "i1", text: "half" } },
   });
@@ -193,6 +203,10 @@ test("Codex streaming for a Feishu thread drives a live card", async () => {
   assert.ok(
     JSON.stringify(lastUpdate.card).includes("final answer"),
     "final card carries the completed answer",
+  );
+  assert.ok(
+    JSON.stringify(lastUpdate.card).includes("npm"),
+    "final card keeps the tool summary in the same message",
   );
   // Feishu streaming must not also enqueue chunked text.
   assert.equal(state.outboundReplies.list({ channel: "feishu" }).length, 0);
@@ -351,6 +365,52 @@ test("a Codex approval for a Feishu thread is delivered as a card", async () => 
   assert.equal(approvalLogs.length, 1);
   assert.match(approvalLogs[0].message, /本次会话/);
   assert.doesNotMatch(approvalLogs[0].message, /拒绝/);
+});
+
+test("a live Feishu turn shows approval and resumes work in the same card", async () => {
+  const { transport, desktop, state } = buildState();
+  await desktop.client.connect();
+  state.commandRouter.conversationByIdentity.set("feishu:ou_owner", {
+    channel: "feishu",
+    conversationId: "oc_chat",
+  });
+  state.commandRouter.bindThreadForIdentity(
+    { channel: "feishu", stableId: "ou_owner" },
+    "thread_live_approval",
+  );
+
+  const calls = { sent: [], updated: [] };
+  state.runtime.feishu.__setTestDriver({
+    getStatus: () => ({ state: "configured" }),
+    verifyEvent: () => true,
+    async sendCard(message) {
+      calls.sent.push(message);
+      return { messageId: "om_one_message" };
+    },
+    async updateCard(message) {
+      calls.updated.push(message);
+      return { code: 0 };
+    },
+  });
+
+  transport.receive({ jsonrpc: "2.0", method: "turn/started", params: { threadId: "thread_live_approval" } });
+  await tick();
+  transport.receive({
+    jsonrpc: "2.0",
+    method: "item/commandExecution/requestApproval",
+    id: "rpc_live",
+    params: { threadId: "thread_live_approval", command: "npm test", cwd: "/repo" },
+  });
+  await tick();
+
+  assert.equal(calls.sent.length, 1, "the turn owns one card message");
+  assert.equal(calls.updated.at(-1).messageId, "om_one_message");
+  assert.match(JSON.stringify(calls.updated.at(-1).card), /npm test/);
+
+  await desktop.resolveApproval("a1", "accept");
+  await tick();
+  assert.equal(calls.sent.length, 1, "approval resolution sends no new card");
+  assert.equal(calls.updated.at(-1).messageId, "om_one_message");
 });
 
 test("completed card fallback tail localizes to en", async () => {

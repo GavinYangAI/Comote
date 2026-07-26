@@ -10,6 +10,7 @@ test("meta declares a credentials channel with the right shape", () => {
   assert.equal(m.binding, "credentials");
   assert.equal(m.capabilities.cards, 1);
   assert.equal(m.capabilities.liveUpdates, 1);
+  assert.equal(m.capabilities.reactions, 0);
   const names = m.configFields.map((f) => f.name);
   assert.deepEqual(names, ["appKey", "appSecret", "approvalTemplateId", "statusTemplateId", "pickerTemplateId"]);
   const secret = m.configFields.find((f) => f.name === "appSecret");

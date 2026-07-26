@@ -55,6 +55,12 @@ test("statusCardData maps phase to a localized title + body text", () => {
   assert.equal(data.done, true); // raw boolean — renderer.buildStatusCard stringifies via toParamMap
 });
 
+test("statusCardData includes tool activity in the card body", () => {
+  const data = statusCardData({ phase: "progress", text: "answer", activities: ["running npm"] });
+  assert.match(data.body, /running npm/);
+  assert.match(data.body, /answer/);
+});
+
 test("approvalResolvedCardData reflects the decision", () => {
   const accepted = approvalResolvedCardData({ code: "a1", decision: "accept" });
   assert.match(accepted.title, /a1/);

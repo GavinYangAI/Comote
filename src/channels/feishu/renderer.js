@@ -17,6 +17,13 @@ export function createFeishuRenderer() {
     buildStatusCard(status) {
       return statusCard(status);
     },
+    buildApprovalCard({ code, approval, autoApproved = false }) {
+      return approvalCard({
+        shortCode: code,
+        detail: approvalDetail(approval),
+        autoApproved,
+      });
+    },
     pickerTitle(pickKind) {
       return t(pickKind === "project" ? "card.picker.project" : "card.picker.conversation");
     },

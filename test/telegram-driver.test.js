@@ -67,6 +67,16 @@ test("editMessageText + answerCallbackQuery hit the right methods", async () => 
   assert.equal(fetchImpl.calls[1].body.callback_query_id, "cq1");
 });
 
+test("setMessageReaction adds and clears the processing reaction", async () => {
+  const fetchImpl = fakeFetch(() => okJson(true));
+  const d = new TelegramDriver({ botToken: "T", fetchImpl });
+  await d.setMessageReaction({ chatId: "9", messageId: 7, emoji: "👀" });
+  await d.setMessageReaction({ chatId: "9", messageId: 7, emoji: null });
+  assert.match(fetchImpl.calls[0].url, /setMessageReaction$/);
+  assert.deepEqual(fetchImpl.calls[0].body.reaction, [{ type: "emoji", emoji: "👀" }]);
+  assert.deepEqual(fetchImpl.calls[1].body.reaction, []);
+});
+
 test("getUpdates loop dispatches messages to onEvent + callback_query to onAction, advancing offset", async () => {
   const update = { update_id: 100, message: { message_id: 1, chat: { id: 9, type: "private" }, from: { id: 9 }, text: "hi" } };
   const cbUpdate = { update_id: 101, callback_query: { id: "cq", data: "ap:X", message: { chat: { id: 9 } }, from: { id: 9 } } };

@@ -100,6 +100,12 @@ test("statusText renders phase title + body + steps", () => {
   assert.equal(typeof text, "string");
 });
 
+test("statusText includes tool activity in the same message", () => {
+  const text = statusText({ phase: "progress", activities: ["running npm", "edited app.js"] });
+  assert.match(text, /running npm/);
+  assert.match(text, /edited app\.js/);
+});
+
 test("generatePairingCode is 8 chars from the safe alphabet, deterministic under injected rng", () => {
   const code = generatePairingCode(() => 0); // always picks alphabet[0]
   assert.equal(code.length, 8);

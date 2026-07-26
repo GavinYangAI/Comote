@@ -138,6 +138,47 @@ export class FeishuDriver {
     return body;
   }
 
+  async addMessageReaction({ messageId, emojiType = "EYES" }) {
+    if (!messageId) throw new Error("messageId is required");
+    const token = await this.getTenantAccessToken();
+    const response = await this.fetch(
+      `${this.baseUrl}/im/v1/messages/${encodeURIComponent(messageId)}/reactions`,
+      {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ reaction_type: { emoji_type: emojiType } }),
+      },
+    );
+    if (!response.ok) {
+      throw new Error(`Feishu reaction add failed: ${response.status} ${await response.text()}`);
+    }
+    const body = await response.json();
+    this._assertApiSuccess(body);
+    return { reactionId: body.data?.reaction_id ?? null, raw: body };
+  }
+
+  async removeMessageReaction({ messageId, reactionId }) {
+    if (!messageId) throw new Error("messageId is required");
+    if (!reactionId) return false;
+    const token = await this.getTenantAccessToken();
+    const response = await this.fetch(
+      `${this.baseUrl}/im/v1/messages/${encodeURIComponent(messageId)}/reactions/${encodeURIComponent(reactionId)}`,
+      {
+        method: "DELETE",
+        headers: { authorization: `Bearer ${token}` },
+      },
+    );
+    if (!response.ok) {
+      throw new Error(`Feishu reaction remove failed: ${response.status} ${await response.text()}`);
+    }
+    const body = await response.json();
+    this._assertApiSuccess(body);
+    return true;
+  }
+
   async uploadImage(localPath) {
     const { readFile } = await import("node:fs/promises");
     const { basename } = await import("node:path");

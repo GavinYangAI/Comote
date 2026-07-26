@@ -45,6 +45,35 @@ export function createDingTalkRenderer({ templates = {} } = {}) {
         done: raw.done,
         cancelLabel: raw.cancelLabel,
         cancelParams: raw.cancelParams,
+        approvalVisible: false,
+        detail: "",
+        approveLabel: "",
+        sessionLabel: "",
+        rejectLabel: "",
+        approveParams: null,
+        sessionParams: null,
+        rejectParams: null,
+      });
+    },
+
+    buildApprovalCard({ code, approval, autoApproved = false }) {
+      const data = approvalCardData({ shortCode: code, detail: approvalDetail(approval) });
+      const approvalText = describeApprovalForChat(approval, { autoApproved });
+      return toParamMap({
+        title: data.title,
+        body: approvalText,
+        steps: autoApproved ? t("state.approval.autoApproved") : "",
+        done: false,
+        cancelLabel: "",
+        cancelParams: null,
+        approvalVisible: !autoApproved,
+        detail: approvalText,
+        approveLabel: autoApproved ? "" : data.approveLabel,
+        sessionLabel: autoApproved ? "" : data.sessionLabel,
+        rejectLabel: autoApproved ? "" : data.rejectLabel,
+        approveParams: autoApproved ? null : data.approveParams,
+        sessionParams: autoApproved ? null : data.sessionParams,
+        rejectParams: autoApproved ? null : data.rejectParams,
       });
     },
 

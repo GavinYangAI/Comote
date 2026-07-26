@@ -73,6 +73,21 @@ By the time you're done and back at your desk, that tidy minutes table is alread
 | **DingTalk**      | AppKey / AppSecret + card templates                            | 🧪 Experimental |
 | **Telegram**      | Bot Token + pairing code                                       | 🧪 Experimental |
 
+Channel message capabilities:
+
+| Channel           | Streaming in one message | Interactive cards/messages | Processing reaction |
+|-------------------|--------------------------|----------------------------|---------------------|
+| **Feishu / Lark** | Yes                      | Yes                        | Yes (`EYES`)        |
+| **WeChat**        | No; text milestones      | No                         | No                  |
+| **DingTalk**      | Yes, with status template | Yes, with card templates  | No                  |
+| **Telegram**      | Yes                      | Yes, via inline keyboards  | Yes (`👀`)          |
+
+On streaming channels, the live message now contains tool activity, approvals, streamed output, and the final result.
+The acknowledgement reaction is removed when the turn finishes. DingTalk's combined live approval uses the status
+template fields `approvalVisible`, `detail`, `approveLabel`, `sessionLabel`, `rejectLabel`, `approveParams`,
+`sessionParams`, and `rejectParams`; without those fields the same card still shows the `/approve` and `/deny` text
+fallback in its body.
+
 > 🧪 **Experimental**: implemented and covered by tests, but long-running real-device shakedown is still in progress —
 > expect occasional rough edges. Try it and send feedback.
 

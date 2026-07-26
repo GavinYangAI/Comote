@@ -7,6 +7,7 @@ export default {
   "card.phase.cancelled": "⛔ 任务已取消",
   "card.empty": "_（无内容）_",
   "card.cancelButton": "取消任务",
+  "card.tools.title": "工具摘要（{count}）",
   "card.changedFiles.intro": "**Codex 改动的文件**（点按钮发到这里）：",
   "card.changedFiles.more": "…还有 {count} 个，用 `/file <路径>` 单独获取。",
   "card.approval.title": "⚠️ Codex 请求审批 [{code}]",

@@ -7,7 +7,7 @@ import { t } from "../../core/i18n/index.js";
 // Outbound cards are no longer built here — the feishu renderer turns the
 // semantic reply into a card at delivery time.
 export class FeishuChannelAdapter extends BaseChannelAdapter {
-  constructor({ commandRouter, sendReply, onDetectedIdentity = null, allowGroups = false, resolveDisplayName = null, downloadAttachment = null, supportsMedia = null }) {
+  constructor({ commandRouter, sendReply, onDetectedIdentity = null, allowGroups = false, resolveDisplayName = null, downloadAttachment = null, supportsMedia = null, beginInboundFeedback = null, finishInboundFeedback = null, singleMessageTurns = false }) {
     super({
       channelId: "feishu",
       commandRouter,
@@ -16,6 +16,9 @@ export class FeishuChannelAdapter extends BaseChannelAdapter {
       downloadAttachment,
       supportsMedia,
       allowGroups,
+      beginInboundFeedback,
+      finishInboundFeedback,
+      singleMessageTurns,
       noProjectMessage: () => t("feishu.attachment.noProject"),
       // Feishu message events carry only the open_id; if displayName fell back
       // to the stableId, try the injected resolver. Best effort: keep the

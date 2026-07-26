@@ -38,6 +38,84 @@ export class BaseChannelRuntime {
     this._delivering = false;
     this._deliverPending = false;
     this._dedup = new DedupTracker(dedupMax);
+    // A reaction belongs to the user's inbound message, while completion events
+    // are keyed by Codex thread id. Keep the short-lived association here so the
+    // host can remove the reaction on every terminal path.
+    this.inboundFeedbackByThread = new Map();
+    this.completedFeedbackThreads = new Set();
+    this.completedFeedbackOrder = [];
+    this.feedbackHistoryMax = 200;
+  }
+
+  async beginInboundFeedback(message) {
+    if (!message?.messageId || typeof this.addInboundReaction !== "function") return null;
+    return this.addInboundReaction(message);
+  }
+
+  async finishInboundFeedback({ feedback, threadId = null } = {}) {
+    if (!feedback) return false;
+    if (!threadId) {
+      await this._removeInboundReactionSafely(feedback);
+      return true;
+    }
+    if (this._forgetCompletedFeedbackThread(threadId)) {
+      await this._removeInboundReactionSafely(feedback);
+      return true;
+    }
+    const previous = this.inboundFeedbackByThread.get(threadId);
+    if (previous) await this._removeInboundReactionSafely(previous);
+    this.inboundFeedbackByThread.set(threadId, feedback);
+    return true;
+  }
+
+  async _removeInboundReactionSafely(feedback) {
+    if (typeof this.removeInboundReaction !== "function") return false;
+    try {
+      await this.removeInboundReaction(feedback);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  resetInboundFeedback(threadId) {
+    this._forgetCompletedFeedbackThread(threadId);
+  }
+
+  _forgetCompletedFeedbackThread(threadId) {
+    const deleted = this.completedFeedbackThreads.delete(threadId);
+    const index = this.completedFeedbackOrder.indexOf(threadId);
+    if (index >= 0) this.completedFeedbackOrder.splice(index, 1);
+    return deleted;
+  }
+
+  async completeInboundFeedback(threadId) {
+    if (!threadId) return false;
+    const feedback = this.inboundFeedbackByThread.get(threadId);
+    if (feedback) {
+      this.inboundFeedbackByThread.delete(threadId);
+      await this._removeInboundReactionSafely(feedback);
+      return true;
+    }
+    // A very fast turn can complete before startTurn returns to the adapter and
+    // binds the reaction. Remember that completion briefly so the late bind
+    // removes it immediately instead of leaking it forever.
+    if (!this.completedFeedbackThreads.has(threadId)) {
+      this.completedFeedbackThreads.add(threadId);
+      this.completedFeedbackOrder.push(threadId);
+      while (this.completedFeedbackOrder.length > this.feedbackHistoryMax) {
+        this.completedFeedbackThreads.delete(this.completedFeedbackOrder.shift());
+      }
+    }
+    return false;
+  }
+
+  async completeAllInboundFeedback() {
+    const feedback = [...this.inboundFeedbackByThread.values()];
+    this.inboundFeedbackByThread.clear();
+    this.completedFeedbackThreads.clear();
+    this.completedFeedbackOrder.length = 0;
+    await Promise.all(feedback.map((item) => this._removeInboundReactionSafely(item)));
   }
 
   getStatus() {

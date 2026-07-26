@@ -7,6 +7,7 @@ export default {
   "card.phase.cancelled": "⛔ 작업 취소됨",
   "card.empty": "_(내용 없음)_",
   "card.cancelButton": "작업 취소",
+  "card.tools.title": "도구 요약 ({count})",
   "card.changedFiles.intro": "**Codex가 변경한 파일**(버튼을 눌러 여기로 전송):",
   "card.changedFiles.more": "…외 {count}개, `/file <경로>`로 개별 가져오기.",
   "card.approval.title": "⚠️ Codex 승인 요청 [{code}]",

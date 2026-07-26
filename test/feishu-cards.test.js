@@ -57,6 +57,17 @@ test("statusCard renders the error phase with a red header and the message", () 
   assert.ok(card.elements.some((el) => el.tag === "markdown" && el.content === "boom"));
 });
 
+test("statusCard renders tool activity inside the card", () => {
+  const card = statusCard({
+    phase: "progress",
+    threadId: "t1",
+    activities: ["running npm", "edited app.js"],
+  });
+  const body = card.elements.map((element) => element.content ?? "").join("\n");
+  assert.match(body, /running npm/);
+  assert.match(body, /edited app\.js/);
+});
+
 test("approvalCard carries approve/session/decline button values", () => {
   const card = approvalCard({ shortCode: "a1", detail: "rm -rf build" });
   assert.match(card.header.title.content, /a1/);

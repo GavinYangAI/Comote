@@ -7,6 +7,7 @@ export default {
   "card.phase.cancelled": "⛔ Task cancelled",
   "card.empty": "_(empty)_",
   "card.cancelButton": "Cancel task",
+  "card.tools.title": "Tool summary ({count})",
   "card.changedFiles.intro": "**Files Codex changed** (tap to send here):",
   "card.changedFiles.more": "…and {count} more — use `/file <path>` to fetch individually.",
   "card.approval.title": "⚠️ Codex needs approval [{code}]",

@@ -1,7 +1,7 @@
 import { BaseChannelRuntime } from "../base/runtime.js";
 import { routerReplyToSemantic } from "../base/messages.js";
 import { EditableApprovalMessages } from "../base/editable-approval-messages.js";
-import { approvalResolvedCard } from "./cards.js";
+import { approvalCard, approvalResolvedCard } from "./cards.js";
 import { createFeishuRenderer } from "./renderer.js";
 import { classifyMedia, resolveWithinProject } from "../../core/paths.js";
 import { t } from "../../core/i18n/index.js";
@@ -45,6 +45,9 @@ export class FeishuRuntimeService extends BaseChannelRuntime {
     this.cardUpdateIntervalMs = cardUpdateIntervalMs;
     this.approvalMessages = new EditableApprovalMessages({
       update: async (message, resolution) => {
+        if (message.threadId) {
+          return this._resumeLiveApproval(message, resolution);
+        }
         await this.driver.updateCard({
           messageId: message.messageId,
           card: approvalResolvedCard({
@@ -71,6 +74,21 @@ export class FeishuRuntimeService extends BaseChannelRuntime {
   // one card shape.
   buildStatusCard(status) {
     return this.renderer.buildStatusCard(status);
+  }
+
+  async addInboundReaction(message) {
+    const result = await this.driver?.addMessageReaction?.({
+      messageId: message.messageId,
+      emojiType: "EYES",
+    });
+    return result?.reactionId
+      ? { messageId: message.messageId, reactionId: result.reactionId }
+      : null;
+  }
+
+  async removeInboundReaction(feedback) {
+    if (!feedback?.messageId || !feedback?.reactionId) return false;
+    return this.driver?.removeMessageReaction?.(feedback);
   }
 
   rememberApprovalMessage(code, message) {
@@ -196,8 +214,11 @@ export class FeishuRuntimeService extends BaseChannelRuntime {
         messageId: result.messageId,
         conversationId,
         lastSentAt: Date.now(),
+        lastCard: card,
         pendingCard: null,
         timer: null,
+        paused: false,
+        resumeCard: null,
       });
     }
     return result;
@@ -215,6 +236,9 @@ export class FeishuRuntimeService extends BaseChannelRuntime {
       return false;
     }
     session.pendingCard = card;
+    if (session.paused) {
+      return true;
+    }
     if (session.timer) {
       return true;
     }
@@ -229,7 +253,7 @@ export class FeishuRuntimeService extends BaseChannelRuntime {
 
   async flushThreadCard(threadId) {
     const session = this.cardSessions.get(threadId);
-    if (!session || !session.pendingCard) {
+    if (!session || session.paused || !session.pendingCard) {
       return false;
     }
     const card = session.pendingCard;
@@ -237,6 +261,7 @@ export class FeishuRuntimeService extends BaseChannelRuntime {
     session.lastSentAt = Date.now();
     try {
       await this.driver.updateCard({ messageId: session.messageId, card });
+      session.lastCard = card;
       return true;
     } catch (error) {
       this.lastError = error.message;
@@ -276,6 +301,72 @@ export class FeishuRuntimeService extends BaseChannelRuntime {
       return false;
     }
     return this.sendDetachedThreadCard(session, card);
+  }
+
+  async showThreadApproval({ threadId, code, approval, autoApproved = false }) {
+    const session = this.cardSessions.get(threadId);
+    if (!session) return false;
+    const previousState = {
+      paused: session.paused,
+      pendingCard: session.pendingCard,
+      resumeCard: session.resumeCard,
+    };
+    if (session.timer) {
+      clearTimeout(session.timer);
+      session.timer = null;
+    }
+    session.resumeCard = session.pendingCard ?? session.lastCard;
+    session.pendingCard = null;
+    session.paused = true;
+    const card = approvalCard({
+      shortCode: code,
+      detail: approvalDetail(approval),
+      autoApproved,
+    });
+    try {
+      await this.driver.updateCard({ messageId: session.messageId, card });
+    } catch (error) {
+      session.paused = previousState.paused;
+      session.pendingCard = previousState.pendingCard;
+      session.resumeCard = previousState.resumeCard;
+      if (!session.paused && session.pendingCard) {
+        this.updateThreadCard(threadId, session.pendingCard);
+      }
+      throw error;
+    }
+    this.rememberApprovalMessage(code, {
+      messageId: session.messageId,
+      conversationId: session.conversationId,
+      approval,
+      threadId,
+    });
+    return true;
+  }
+
+  async _resumeLiveApproval(message, resolution) {
+    const session = this.cardSessions.get(message.threadId);
+    if (!session || session.messageId !== message.messageId) {
+      await this.driver.updateCard({
+        messageId: message.messageId,
+        card: approvalResolvedCard({
+          code: resolution.code,
+          decision: resolution.decision,
+          detail: resolution.approval ? approvalDetail(resolution.approval) : "",
+        }),
+      });
+      return;
+    }
+    const card = session.pendingCard ?? session.resumeCard
+      ?? this.buildStatusCard({ phase: "progress", threadId: message.threadId });
+    await this.driver.updateCard({ messageId: session.messageId, card });
+    if (session.pendingCard === card) session.pendingCard = null;
+    session.resumeCard = null;
+    session.lastCard = card;
+    session.lastSentAt = Date.now();
+    session.paused = false;
+    if (session.pendingCard) {
+      this.updateThreadCard(message.threadId, session.pendingCard);
+    }
   }
 
   // Resolves the clicking user's Comote identity from a card action. Feishu

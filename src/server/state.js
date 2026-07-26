@@ -285,6 +285,9 @@ export function createComoteState({
         supportsMedia: Boolean(stack.plugin.meta.capabilities?.media),
         onDetectedIdentity: (identity) => authorization.detectIdentity(identity),
         resolveDisplayName: (openId) => stack.runtime?.driver?.resolveUserName?.(openId) ?? null,
+        beginInboundFeedback: (message) => stack.runtime?.beginInboundFeedback(message),
+        finishInboundFeedback: (feedback) => stack.runtime?.finishInboundFeedback(feedback),
+        singleMessageTurns: true,
         downloadAttachment: makeDownloadAttachment(stack, ({ driver, attachment, destPath }) =>
           driver.downloadMessageResource({
             messageId: attachment.messageId,
@@ -356,6 +359,7 @@ export function createComoteState({
         commandRouter,
         supportsMedia: Boolean(stack.plugin.meta.capabilities?.media),
         onDetectedIdentity: (identity) => authorization.detectIdentity(identity),
+        singleMessageTurns: () => stack.runtime?.liveCardsOperational?.() ?? false,
         downloadAttachment: makeDownloadAttachment(stack, ({ driver, attachment, destPath }) =>
           driver.downloadMessageResource({
             downloadCode: attachment.downloadCode,
@@ -382,6 +386,9 @@ export function createComoteState({
         supportsMedia: Boolean(stack.plugin.meta.capabilities?.media),
         onDetectedIdentity: (identity) => authorization.detectIdentity(identity),
         isAuthorized: (identity) => authorization.isAuthorized(identity),
+        beginInboundFeedback: (message) => stack.runtime?.beginInboundFeedback(message),
+        finishInboundFeedback: (feedback) => stack.runtime?.finishInboundFeedback(feedback),
+        singleMessageTurns: true,
         getPairingState: () => ({ pairingCode: stack.config.pairingCode, linkedChatId: stack.config.linkedChatId }),
         onPaired: async ({ chatId, identity, displayName }) => {
           authorization.confirmIdentity(identity);
@@ -519,8 +526,14 @@ export function createComoteState({
       }),
     );
     streamTextByThread.clear();
+    activityByThread.clear();
     progressByThread.clear();
     changedFilesDeliveredThreads.clear();
+    for (const stack of channelStacks.values()) {
+      if (stack.plugin.meta.capabilities?.reactions) {
+        void stack.runtime.completeAllInboundFeedback?.();
+      }
+    }
     teardownAllMilestoneState();
   }
 
@@ -772,6 +785,9 @@ export function createComoteState({
   const progressByThread = new Map();
   // threadId -> latest accumulated streaming text, for Feishu live cards.
   const streamTextByThread = new Map();
+  // threadId -> latest tool/file milestones rendered inside the live card.
+  // Keep a short tail so platform message limits remain predictable.
+  const activityByThread = new Map();
   // Threads whose changed-file delivery already ran this turn. A turn can emit
   // more than one agentMessage; only the FIRST claims the live card and delivers
   // the turn's changed files. Subsequent agentMessages must enqueue their own
@@ -850,6 +866,7 @@ export function createComoteState({
   function routeDesktopEvent(event) {
     if (event.type === "turnStarted") {
       changedFilesDeliveredThreads.delete(event.threadId);
+      activityByThread.delete(event.threadId);
       // Advance the per-thread turn nonce for EVERY channel — both the milestone
       // key and the agent: fallback key fold it in, and push channels (milestones
       // off) still rely on the latter. Must precede initMilestoneState, which
@@ -862,6 +879,9 @@ export function createComoteState({
       // wechat and telegram declare it and expose runtime.sendTyping (never
       // throws); other channels no-op. Behavior for wechat is unchanged.
       const startedStack = startedBinding ? channelStacks.get(startedBinding.channel) : null;
+      if (startedStack?.plugin.meta.capabilities?.reactions) {
+        startedStack.runtime.resetInboundFeedback?.(event.threadId);
+      }
       if (startedStack?.plugin.meta.capabilities?.typing && typeof startedStack.runtime.sendTyping === "function") {
         startedStack.runtime
           .sendTyping({ conversationId: startedBinding.conversationId })
@@ -900,6 +920,10 @@ export function createComoteState({
       progressByThread.delete(event.threadId);
       teardownMilestoneState(event.threadId);
       const completedBinding = commandRouter.getThreadBinding(event.threadId);
+      const completedStack = completedBinding ? channelStacks.get(completedBinding.channel) : null;
+      if (completedStack?.plugin.meta.capabilities?.reactions) {
+        void completedStack.runtime.completeInboundFeedback?.(event.threadId);
+      }
       const completedLive = liveCardRuntime(completedBinding?.channel);
       if (completedLive && completedLive.hasThreadCard(event.threadId)) {
         // Reached only for the rare turn with NO agentMessage (codex normally
@@ -915,6 +939,7 @@ export function createComoteState({
               phase: "completed",
               threadId: event.threadId,
               text: tail,
+              activities: activityByThread.get(event.threadId) ?? [],
               done: true,
               files: buildChangedFiles(event.threadId, event.changedPaths),
             }),
@@ -922,6 +947,7 @@ export function createComoteState({
           .catch(() => {});
       }
       streamTextByThread.delete(event.threadId);
+      activityByThread.delete(event.threadId);
       changedFilesDeliveredThreads.delete(event.threadId);
       sleepGuard.release(event.threadId);
       eventLog.info("Codex turn 完成", { threadId: event.threadId });
@@ -989,6 +1015,7 @@ export function createComoteState({
             threadId: event.threadId,
             steps: entry.count,
             text: streamTextByThread.get(event.threadId) ?? "",
+            activities: activityByThread.get(event.threadId) ?? [],
           }),
         );
         return;
@@ -1015,6 +1042,30 @@ export function createComoteState({
     }
 
     if (event.type === "milestone") {
+      const binding = commandRouter.getThreadBinding(event.threadId);
+      const milestoneLive = liveCardRuntime(binding?.channel);
+      if (milestoneLive) {
+        const item = { kind: event.kind, label: event.label ?? null, status: event.status ?? null };
+        const line = milestoneText(item);
+        const activities = activityByThread.get(event.threadId) ?? [];
+        if (activities.at(-1) !== line) {
+          activities.push(line);
+          if (activities.length > 8) activities.shift();
+          activityByThread.set(event.threadId, activities);
+        }
+        const progress = progressByThread.get(event.threadId);
+        milestoneLive.updateThreadCard(
+          event.threadId,
+          milestoneLive.buildStatusCard({
+            phase: "progress",
+            threadId: event.threadId,
+            steps: progress?.count ?? activities.length,
+            text: streamTextByThread.get(event.threadId) ?? "",
+            activities,
+          }),
+        );
+        return;
+      }
       handleMilestone(event);
       return;
     }
@@ -1032,6 +1083,7 @@ export function createComoteState({
           phase: "streaming",
           threadId: event.threadId,
           text: event.text ?? "",
+          activities: activityByThread.get(event.threadId) ?? [],
         }),
       );
       return;
@@ -1109,28 +1161,48 @@ export function createComoteState({
         });
         return;
       }
-      // Both channels enqueue a channel-neutral SEMANTIC approval reply; the
-      // renderer turns it into a card (feishu) or text (wechat) at delivery.
-      outboundReplies.enqueue({
-        channel: binding.channel,
-        conversationId: binding.conversationId,
-        ...(binding.accountId ? { accountId: binding.accountId } : {}),
-        kind: "approval",
-        code: event.approval.shortCode,
-        approval: event.approval,
-        autoApproved,
-        dedupeKey: `approval:${event.approval.id}`,
-      });
-      deliverIfPush(binding.channel);
+      const enqueueApproval = () => {
+        outboundReplies.enqueue({
+          channel: binding.channel,
+          conversationId: binding.conversationId,
+          ...(binding.accountId ? { accountId: binding.accountId } : {}),
+          kind: "approval",
+          code: event.approval.shortCode,
+          approval: event.approval,
+          autoApproved,
+          dedupeKey: `approval:${event.approval.id}`,
+        });
+        deliverIfPush(binding.channel);
+      };
+      const approvalLive = liveCardRuntime(binding.channel);
+      let delivery;
+      if (approvalLive?.hasThreadCard(event.approval.threadId)
+        && typeof approvalLive.showThreadApproval === "function") {
+        delivery = Promise.resolve(approvalLive.showThreadApproval({
+            threadId: event.approval.threadId,
+            code: event.approval.shortCode,
+            approval: event.approval,
+            autoApproved,
+          })).then((shown) => {
+            if (!shown) enqueueApproval();
+          }).catch((error) => {
+            approvalLive.lastError = error.message;
+            enqueueApproval();
+          });
+      } else {
+        enqueueApproval();
+        delivery = Promise.resolve();
+      }
       persistInBackground();
       if (autoApproved) {
-        void desktop.resolveApproval(event.approval.id, "accept").catch((error) => {
-          eventLog.error("Codex 自动审批失败", {
-            shortCode: event.approval.shortCode,
-            threadId: event.approval.threadId,
-            error: error?.message ?? String(error),
+        void delivery.then(() => desktop.resolveApproval(event.approval.id, "accept"))
+          .catch((error) => {
+            eventLog.error("Codex 自动审批失败", {
+              shortCode: event.approval.shortCode,
+              threadId: event.approval.threadId,
+              error: error?.message ?? String(error),
+            });
           });
-        });
       }
       return;
     }
@@ -1144,6 +1216,10 @@ export function createComoteState({
       changedFilesDeliveredThreads.delete(event.threadId);
       teardownMilestoneState(event.threadId);
       const binding = commandRouter.getThreadBinding(event.threadId);
+      const errorStack = binding ? channelStacks.get(binding.channel) : null;
+      if (errorStack?.plugin.meta.capabilities?.reactions) {
+        void errorStack.runtime.completeInboundFeedback?.(event.threadId);
+      }
       const errLive = liveCardRuntime(binding?.channel);
       if (errLive && errLive.hasThreadCard(event.threadId)) {
         errLive
@@ -1152,15 +1228,20 @@ export function createComoteState({
             errLive.buildStatusCard({
               phase: "error",
               text: t("state.error.card", { message: event.message }),
+              activities: activityByThread.get(event.threadId) ?? [],
               done: true,
             }),
           )
           .catch(() => {});
         streamTextByThread.delete(event.threadId);
+        activityByThread.delete(event.threadId);
         progressByThread.delete(event.threadId);
         eventLog.error("Codex 错误", { threadId: event.threadId, message: event.message });
         return;
       }
+      streamTextByThread.delete(event.threadId);
+      activityByThread.delete(event.threadId);
+      progressByThread.delete(event.threadId);
       eventLog.error("Codex 错误", { threadId: event.threadId, message: event.message });
       if (!binding) {
         eventLog.warn("收到 Codex 输出但找不到对应会话，未转发", {
@@ -1413,6 +1494,7 @@ export function createComoteState({
       phase: "completed",
       threadId: event.threadId,
       text: event.text ?? "",
+      activities: activityByThread.get(event.threadId) ?? [],
       done: true,
       files: plan.buttonFiles,
     });

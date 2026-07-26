@@ -7,6 +7,7 @@ export default {
   "card.phase.cancelled": "⛔ Tâche annulée",
   "card.empty": "_(vide)_",
   "card.cancelButton": "Annuler la tâche",
+  "card.tools.title": "Résumé des outils ({count})",
   "card.changedFiles.intro": "**Fichiers modifiés par Codex** (appuyez pour envoyer ici) :",
   "card.changedFiles.more": "…et {count} de plus — utilisez `/file <chemin>` pour les récupérer un par un.",
   "card.approval.title": "⚠️ Codex demande une approbation [{code}]",

@@ -31,6 +31,9 @@ export class TelegramRuntimeService extends BaseChannelRuntime {
     this.cardUpdateIntervalMs = cardUpdateIntervalMs;
     this.approvalMessages = new EditableApprovalMessages({
       update: async (message, resolution) => {
+        if (message.threadId) {
+          return this._resumeLiveApproval(message, resolution);
+        }
         await this.driver.editMessageText({
           chatId: message.conversationId,
           messageId: message.messageId,
@@ -83,6 +86,26 @@ export class TelegramRuntimeService extends BaseChannelRuntime {
     }
   }
 
+  async addInboundReaction(message) {
+    if (!this.driver?.setMessageReaction || !message.conversationId || message.messageId == null) return null;
+    await this.driver.setMessageReaction({
+      chatId: message.conversationId,
+      messageId: message.messageId,
+      emoji: "👀",
+    });
+    return { conversationId: message.conversationId, messageId: message.messageId };
+  }
+
+  async removeInboundReaction(feedback) {
+    if (!this.driver?.setMessageReaction || !feedback?.conversationId || feedback.messageId == null) return false;
+    await this.driver.setMessageReaction({
+      chatId: feedback.conversationId,
+      messageId: feedback.messageId,
+      emoji: null,
+    });
+    return true;
+  }
+
   buildStatusCard(status) {
     if (status.done && status.threadId && status.files?.length) {
       this.threadFiles.set(status.threadId, status.files);
@@ -105,7 +128,17 @@ export class TelegramRuntimeService extends BaseChannelRuntime {
     // drive someone else's card via a forwarded/leaked button. Telegram's
     // accountId on the binding is the sender's id (== identity.stableId).
     const ownerStableId = this.adapter?.commandRouter?.getThreadBinding?.(threadId)?.accountId ?? null;
-    this.cardSessions.set(threadId, { messageId: msg.message_id, conversationId, ownerStableId, lastSentAt: Date.now(), pendingCard: null, timer: null });
+    this.cardSessions.set(threadId, {
+      messageId: msg.message_id,
+      conversationId,
+      ownerStableId,
+      lastSentAt: Date.now(),
+      lastCard: card,
+      pendingCard: null,
+      timer: null,
+      paused: false,
+      resumeCard: null,
+    });
     return true;
   }
 
@@ -113,6 +146,7 @@ export class TelegramRuntimeService extends BaseChannelRuntime {
     const session = this.cardSessions.get(threadId);
     if (!session) return false;
     session.pendingCard = card;
+    if (session.paused) return true;
     if (session.timer) return true;
     const wait = Math.max(0, this.cardUpdateIntervalMs - (Date.now() - session.lastSentAt));
     session.timer = setTimeout(() => { session.timer = null; this.flushThreadCard(threadId); }, wait);
@@ -122,11 +156,12 @@ export class TelegramRuntimeService extends BaseChannelRuntime {
 
   async flushThreadCard(threadId) {
     const session = this.cardSessions.get(threadId);
-    if (!session || !session.pendingCard) return false;
+    if (!session || session.paused || !session.pendingCard) return false;
     const card = session.pendingCard;
     session.pendingCard = null;
     session.lastSentAt = Date.now();
     await this._edit(session, card);
+    session.lastCard = card;
     return true;
   }
 
@@ -149,6 +184,68 @@ export class TelegramRuntimeService extends BaseChannelRuntime {
     const session = this.detachThreadCard(threadId);
     if (!session) return false;
     return this.sendDetachedThreadCard(session, card);
+  }
+
+  async showThreadApproval({ threadId, code, approval, autoApproved = false }) {
+    const session = this.cardSessions.get(threadId);
+    if (!session) return false;
+    const previousState = {
+      paused: session.paused,
+      pendingCard: session.pendingCard,
+      resumeCard: session.resumeCard,
+    };
+    if (session.timer) {
+      clearTimeout(session.timer);
+      session.timer = null;
+    }
+    session.resumeCard = session.pendingCard ?? session.lastCard;
+    session.pendingCard = null;
+    session.paused = true;
+    const card = this.renderer.buildApprovalCard({ code, approval, autoApproved });
+    const updated = await this._edit(session, card);
+    if (!updated) {
+      session.paused = previousState.paused;
+      session.pendingCard = previousState.pendingCard;
+      session.resumeCard = previousState.resumeCard;
+      if (!session.paused && session.pendingCard) {
+        this.updateThreadCard(threadId, session.pendingCard);
+      }
+      return false;
+    }
+    this.rememberApprovalMessage(code, {
+      messageId: session.messageId,
+      conversationId: session.conversationId,
+      approval,
+      threadId,
+    });
+    return true;
+  }
+
+  async _resumeLiveApproval(message, resolution) {
+    const session = this.cardSessions.get(message.threadId);
+    if (!session || session.messageId !== message.messageId) {
+      await this.driver.editMessageText({
+        chatId: message.conversationId,
+        messageId: message.messageId,
+        text: describeResolvedApprovalForChat(resolution.approval, resolution),
+        replyMarkup: null,
+      });
+      return;
+    }
+    const card = session.pendingCard ?? session.resumeCard
+      ?? this.buildStatusCard({ phase: "progress", threadId: message.threadId });
+    const updated = await this._edit(session, card);
+    if (!updated) {
+      throw new Error(this.lastError || "Failed to resume Telegram live approval message");
+    }
+    if (session.pendingCard === card) session.pendingCard = null;
+    session.resumeCard = null;
+    session.lastCard = card;
+    session.lastSentAt = Date.now();
+    session.paused = false;
+    if (session.pendingCard) {
+      this.updateThreadCard(message.threadId, session.pendingCard);
+    }
   }
 
   async _edit(session, card) {

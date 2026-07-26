@@ -66,11 +66,17 @@ export function textCard(text) {
   };
 }
 
-export function statusCard({ phase, threadId = null, steps = 0, text = "", done = false, files = [] }) {
+export function statusCard({ phase, threadId = null, steps = 0, text = "", done = false, files = [], activities = [] }) {
   const meta = PHASES[phase] ?? PHASES.progress;
   const elements = [];
   if (phase === "started" || phase === "progress") {
     elements.push({ tag: "markdown", content: stepsLine(steps) });
+  }
+  if (activities.length > 0) {
+    elements.push({
+      tag: "markdown",
+      content: `**${t("card.tools.title", { count: activities.length })}**\n${activities.map((item) => `- ${item}`).join("\n")}`,
+    });
   }
   if (text) {
     elements.push(...renderMarkdown(text));

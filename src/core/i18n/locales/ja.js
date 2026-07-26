@@ -7,6 +7,7 @@ export default {
   "card.phase.cancelled": "⛔ タスク取消",
   "card.empty": "_（内容なし）_",
   "card.cancelButton": "タスクを取消",
+  "card.tools.title": "ツール概要（{count}）",
   "card.changedFiles.intro": "**Codex が変更したファイル**（ボタンで送信）：",
   "card.changedFiles.more": "…他 {count} 件、`/file <パス>` で個別に取得。",
   "card.approval.title": "⚠️ Codex が承認を要求 [{code}]",

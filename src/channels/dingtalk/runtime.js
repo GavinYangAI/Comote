@@ -28,6 +28,9 @@ export class DingTalkRuntimeService extends BaseChannelRuntime {
     this.cardUpdateIntervalMs = cardUpdateIntervalMs;
     this.approvalMessages = new EditableApprovalMessages({
       update: async (message, resolution) => {
+        if (message.threadId) {
+          return this._resumeLiveApproval(message, resolution);
+        }
         await this.driver.updateCard({
           outTrackId: message.outTrackId,
           cardParamMap: approvalResolvedParamMap(resolution),
@@ -36,6 +39,7 @@ export class DingTalkRuntimeService extends BaseChannelRuntime {
     });
     // threadId -> { outTrackId, conversationId, lastSentAt, pendingCard, timer }
     this.cardSessions = new Map();
+    this.liveApprovalThreads = new Map();
     // Card-action callbacks arrive through the driver onAction hook; the base
     // start() wires this into driver.startEventStream.
     this.onAction = (action) => this.handleCardAction(action);
@@ -77,7 +81,16 @@ export class DingTalkRuntimeService extends BaseChannelRuntime {
       receiveId: conversationId,
       cardParamMap: card,
     });
-    this.cardSessions.set(threadId, { outTrackId, conversationId, lastSentAt: Date.now(), pendingCard: null, timer: null });
+    this.cardSessions.set(threadId, {
+      outTrackId,
+      conversationId,
+      lastSentAt: Date.now(),
+      lastCard: card,
+      pendingCard: null,
+      timer: null,
+      paused: false,
+      resumeCard: null,
+    });
     return true;
   }
 
@@ -85,6 +98,7 @@ export class DingTalkRuntimeService extends BaseChannelRuntime {
     const session = this.cardSessions.get(threadId);
     if (!session) return false;
     session.pendingCard = card;
+    if (session.paused) return true;
     if (session.timer) return true;
     const wait = Math.max(0, this.cardUpdateIntervalMs - (Date.now() - session.lastSentAt));
     session.timer = setTimeout(() => {
@@ -97,12 +111,13 @@ export class DingTalkRuntimeService extends BaseChannelRuntime {
 
   async flushThreadCard(threadId) {
     const session = this.cardSessions.get(threadId);
-    if (!session || !session.pendingCard) return false;
+    if (!session || session.paused || !session.pendingCard) return false;
     const card = session.pendingCard;
     session.pendingCard = null;
     session.lastSentAt = Date.now();
     try {
       await this.driver.updateCard({ outTrackId: session.outTrackId, cardParamMap: card });
+      session.lastCard = card;
       return true;
     } catch (error) {
       this.lastError = error.message;
@@ -139,6 +154,67 @@ export class DingTalkRuntimeService extends BaseChannelRuntime {
     const session = this.detachThreadCard(threadId);
     if (!session) return false;
     return this.sendDetachedThreadCard(session, card);
+  }
+
+  async showThreadApproval({ threadId, code, approval, autoApproved = false }) {
+    const session = this.cardSessions.get(threadId);
+    if (!session) return false;
+    const previousState = {
+      paused: session.paused,
+      pendingCard: session.pendingCard,
+      resumeCard: session.resumeCard,
+    };
+    if (session.timer) {
+      clearTimeout(session.timer);
+      session.timer = null;
+    }
+    session.resumeCard = session.pendingCard ?? session.lastCard;
+    session.pendingCard = null;
+    session.paused = true;
+    const card = this.renderer.buildApprovalCard({ code, approval, autoApproved });
+    try {
+      await this.driver.updateCard({ outTrackId: session.outTrackId, cardParamMap: card });
+    } catch (error) {
+      session.paused = previousState.paused;
+      session.pendingCard = previousState.pendingCard;
+      session.resumeCard = previousState.resumeCard;
+      if (!session.paused && session.pendingCard) {
+        this.updateThreadCard(threadId, session.pendingCard);
+      }
+      throw error;
+    }
+    this.liveApprovalThreads.set(code, threadId);
+    this.rememberApprovalMessage(code, {
+      outTrackId: session.outTrackId,
+      conversationId: session.conversationId,
+      approval,
+      threadId,
+    });
+    return true;
+  }
+
+  async _resumeLiveApproval(message, resolution) {
+    const session = this.cardSessions.get(message.threadId);
+    if (!session || session.outTrackId !== message.outTrackId) {
+      await this.driver.updateCard({
+        outTrackId: message.outTrackId,
+        cardParamMap: approvalResolvedParamMap(resolution),
+      });
+      this.liveApprovalThreads.delete(resolution.code);
+      return;
+    }
+    const card = session.pendingCard ?? session.resumeCard
+      ?? this.buildStatusCard({ phase: "progress", threadId: message.threadId });
+    await this.driver.updateCard({ outTrackId: session.outTrackId, cardParamMap: card });
+    if (session.pendingCard === card) session.pendingCard = null;
+    session.resumeCard = null;
+    session.lastCard = card;
+    session.lastSentAt = Date.now();
+    session.paused = false;
+    this.liveApprovalThreads.delete(resolution.code);
+    if (session.pendingCard) {
+      this.updateThreadCard(message.threadId, session.pendingCard);
+    }
   }
 
   // Handles a DingTalk TOPIC_CARD callback payload. Returns an in-frame card-update
@@ -181,6 +257,10 @@ export class DingTalkRuntimeService extends BaseChannelRuntime {
           code: params.code,
           operator: operatorStaffId ?? null,
         });
+        return {};
+      }
+      if (this.liveApprovalThreads.has(params.code)) {
+        await this.resolveApprovalMessage({ code: params.code, decision }).catch(() => {});
         return {};
       }
       const resolved = approvalResolvedParamMap({ code: params.code, decision });

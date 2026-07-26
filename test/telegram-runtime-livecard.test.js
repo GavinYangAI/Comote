@@ -65,3 +65,46 @@ test("a 'message is not modified' edit error is swallowed", async () => {
   assert.equal(ok, true);
   assert.equal(rt.lastError, null);
 });
+
+test("live approval pauses edits and resumes the same Telegram message", async () => {
+  const { rt, calls } = makeRuntime();
+  await rt.openThreadCard({
+    threadId: "t1",
+    conversationId: "9",
+    card: rt.buildStatusCard({ phase: "started", threadId: "t1" }),
+  });
+  await rt.showThreadApproval({
+    threadId: "t1",
+    code: "A1",
+    approval: { shortCode: "A1", params: { command: "npm test" } },
+  });
+  assert.equal(calls.send.length, 1, "approval reuses the live message");
+  assert.equal(calls.edit.at(-1).messageId, 42);
+  assert.ok(calls.edit.at(-1).replyMarkup?.inline_keyboard?.length > 0);
+
+  const updateCount = calls.edit.length;
+  rt.updateThreadCard("t1", { text: "latest progress", replyMarkup: null });
+  await rt.flushThreadCard("t1");
+  assert.equal(calls.edit.length, updateCount, "progress cannot replace approval buttons");
+
+  const editMessageText = rt.driver.editMessageText.bind(rt.driver);
+  let failResume = true;
+  rt.driver.editMessageText = async (message) => {
+    if (failResume) {
+      failResume = false;
+      throw new Error("temporary edit failure");
+    }
+    return editMessageText(message);
+  };
+  await assert.rejects(
+    () => rt.resolveApprovalMessage({ code: "A1", decision: "accept" }),
+    /temporary edit failure/,
+  );
+  const pausedSession = rt.cardSessions.get("t1");
+  assert.equal(pausedSession.paused, true);
+  assert.equal(pausedSession.pendingCard.text, "latest progress");
+
+  await rt.resolveApprovalMessage({ code: "A1", decision: "accept" });
+  assert.equal(calls.edit.at(-1).messageId, 42);
+  assert.equal(calls.edit.at(-1).text, "latest progress");
+});
