@@ -219,6 +219,7 @@ export class FeishuRuntimeService extends BaseChannelRuntime {
         timer: null,
         paused: false,
         resumeCard: null,
+        updateChain: Promise.resolve(),
       });
     }
     return result;
@@ -260,7 +261,7 @@ export class FeishuRuntimeService extends BaseChannelRuntime {
     session.pendingCard = null;
     session.lastSentAt = Date.now();
     try {
-      await this.driver.updateCard({ messageId: session.messageId, card });
+      await this._updateSessionCard(session, card);
       session.lastCard = card;
       return true;
     } catch (error) {
@@ -286,7 +287,7 @@ export class FeishuRuntimeService extends BaseChannelRuntime {
   // Sends a final card to an ALREADY-detached session (from detachThreadCard).
   async sendDetachedThreadCard(session, card) {
     try {
-      await this.driver.updateCard({ messageId: session.messageId, card });
+      await this._updateSessionCard(session, card);
       return true;
     } catch (error) {
       this.lastError = error.message;
@@ -324,7 +325,7 @@ export class FeishuRuntimeService extends BaseChannelRuntime {
       autoApproved,
     });
     try {
-      await this.driver.updateCard({ messageId: session.messageId, card });
+      await this._updateSessionCard(session, card);
     } catch (error) {
       session.paused = previousState.paused;
       session.pendingCard = previousState.pendingCard;
@@ -358,7 +359,7 @@ export class FeishuRuntimeService extends BaseChannelRuntime {
     }
     const card = session.pendingCard ?? session.resumeCard
       ?? this.buildStatusCard({ phase: "progress", threadId: message.threadId });
-    await this.driver.updateCard({ messageId: session.messageId, card });
+    await this._updateSessionCard(session, card);
     if (session.pendingCard === card) session.pendingCard = null;
     session.resumeCard = null;
     session.lastCard = card;
@@ -367,6 +368,14 @@ export class FeishuRuntimeService extends BaseChannelRuntime {
     if (session.pendingCard) {
       this.updateThreadCard(message.threadId, session.pendingCard);
     }
+  }
+
+  _updateSessionCard(session, card) {
+    const update = Promise.resolve(session.updateChain)
+      .catch(() => {})
+      .then(() => this.driver.updateCard({ messageId: session.messageId, card }));
+    session.updateChain = update;
+    return update;
   }
 
   // Resolves the clicking user's Comote identity from a card action. Feishu

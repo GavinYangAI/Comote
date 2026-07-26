@@ -220,6 +220,16 @@ function tick() {
   return new Promise((resolve) => setTimeout(resolve, 5));
 }
 
+async function waitFor(predicate, { timeout = 5000, interval = 5 } = {}) {
+  const startedAt = Date.now();
+  while (!predicate()) {
+    if (Date.now() - startedAt >= timeout) {
+      throw new Error("waitFor: condition not met within timeout");
+    }
+    await new Promise((resolve) => setTimeout(resolve, interval));
+  }
+}
+
 test("completed card includes push buttons for changed files", async () => {
   const { transport, desktop, state } = buildState();
   await desktop.client.connect();
@@ -446,6 +456,51 @@ test("a live Feishu turn shows approval and resumes work in the same card", asyn
   await tick();
   assert.equal(calls.sent.length, 1, "the complete turn used one Feishu message");
   assert.match(JSON.stringify(calls.updated.at(-1).card), /review is complete/);
+});
+
+test("a failed live approval update falls back to a fresh Feishu approval card", async () => {
+  const { transport, desktop, state } = buildState();
+  await desktop.client.connect();
+  state.commandRouter.conversationByIdentity.set("feishu:ou_owner", {
+    channel: "feishu",
+    conversationId: "oc_chat",
+  });
+  state.commandRouter.bindThreadForIdentity(
+    { channel: "feishu", stableId: "ou_owner" },
+    "thread_approval_fallback",
+  );
+
+  const calls = { sent: [], updated: [] };
+  state.runtime.feishu.__setTestDriver({
+    getStatus: () => ({ state: "configured" }),
+    verifyEvent: () => true,
+    async sendCard(message) {
+      calls.sent.push(message);
+      return { messageId: `om_${calls.sent.length}` };
+    },
+    async updateCard(message) {
+      calls.updated.push(message);
+      throw new Error("temporary Feishu card update failure");
+    },
+  });
+
+  transport.receive({
+    jsonrpc: "2.0",
+    method: "turn/started",
+    params: { threadId: "thread_approval_fallback" },
+  });
+  await waitFor(() => calls.sent.length === 1);
+  transport.receive({
+    jsonrpc: "2.0",
+    method: "item/commandExecution/requestApproval",
+    id: "rpc_fallback",
+    params: { threadId: "thread_approval_fallback", command: "npm test", cwd: "/repo" },
+  });
+
+  await waitFor(() => calls.sent.length === 2);
+  assert.equal(calls.updated.length, 1, "the runtime first attempts the in-place approval update");
+  assert.match(JSON.stringify(calls.sent[1].card), /npm test/);
+  assert.match(JSON.stringify(calls.sent[1].card), /批准/);
 });
 
 test("completed card fallback tail localizes to en", async () => {

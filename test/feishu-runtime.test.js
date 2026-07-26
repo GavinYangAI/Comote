@@ -423,6 +423,48 @@ test("failed live approval display restores queued progress", async () => {
   assert.equal(session.resumeCard, null);
 });
 
+test("live approval is ordered after an in-flight progress update", async () => {
+  const driver = cardDriver();
+  let releaseProgress;
+  const progressBlocked = new Promise((resolve) => { releaseProgress = resolve; });
+  let updateCount = 0;
+  driver.updateCard = async (message) => {
+    driver.calls.updated.push(message);
+    updateCount += 1;
+    if (updateCount === 1) await progressBlocked;
+    return { code: 0 };
+  };
+  const runtime = makeRuntime({
+    adapter: { handleInbound: async () => ({ kind: "text" }) },
+    outboundQueue: new OutboundQueue(),
+    driver,
+    cardUpdateIntervalMs: 60_000,
+  });
+  await runtime.openThreadCard({
+    threadId: "t-ordered-approval",
+    conversationId: "oc_chat",
+    card: { elements: ["started"] },
+  });
+  const progress = { elements: ["progress"] };
+  runtime.updateThreadCard("t-ordered-approval", progress);
+  const flush = runtime.flushThreadCard("t-ordered-approval");
+  await waitFor(() => driver.calls.updated.length === 1);
+
+  const approval = runtime.showThreadApproval({
+    threadId: "t-ordered-approval",
+    code: "a-ordered",
+    approval: { shortCode: "a-ordered", params: { command: "npm test" } },
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(driver.calls.updated.length, 1, "approval waits for the in-flight progress write");
+
+  releaseProgress();
+  await Promise.all([flush, approval]);
+  assert.deepEqual(driver.calls.updated[0].card, progress);
+  assert.match(JSON.stringify(driver.calls.updated[1].card), /npm test/);
+  assert.equal(runtime.cardSessions.get("t-ordered-approval").paused, true);
+});
+
 test("updateThreadCard and finishThreadCard no-op when no card session exists", async () => {
   const runtime = makeRuntime({
     adapter: { handleInbound: async () => ({ kind: "text" }) },
