@@ -90,3 +90,17 @@ test("narrow-window layout has one responsive system and a stable sidebar", asyn
   assert.match(css, /\.nav-item > span:not\(\.nav-count\)[\s\S]*white-space:\s*nowrap/);
   assert.match(css, /@media \(max-width: 1100px\)[\s\S]*\.command-grid\s*\{[^}]*repeat\(2/);
 });
+
+test("color theme follows the operating system without JavaScript state", async () => {
+  const [css, js] = await Promise.all([
+    readFile("public/styles.css", "utf8"),
+    readFile("public/app.js", "utf8"),
+  ]);
+
+  assert.match(css, /:root\s*\{[^}]*color-scheme:\s*light dark/s);
+  assert.match(css, /@media \(prefers-color-scheme: dark\)\s*\{\s*:root\s*\{[^}]*--canvas:\s*#[0-9a-f]{6}/s);
+  for (const variable of ["surface", "ink", "line", "teal", "success", "warning", "error"]) {
+    assert.match(css, new RegExp(`@media \\(prefers-color-scheme: dark\\)[\\s\\S]*--${variable}:`));
+  }
+  assert.doesNotMatch(js, /prefers-color-scheme|matchMedia\([^)]*color-scheme/i);
+});

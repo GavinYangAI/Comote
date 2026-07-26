@@ -4,7 +4,7 @@
    ============================================================ */
 
 :root {
-  color-scheme: light;
+  color-scheme: light dark;
   /* Global visual scale. Adjust this single number to shrink/grow the whole UI. */
 
   /* Canvas & surfaces */
@@ -13,6 +13,16 @@
   --surface-low:   #f1f3f5;
   --surface-mid:   #e9edf0;
   --surface-high:  #dde3e7;
+  --surface-soft:  #faf9f8;
+  --surface-muted: #f7f6f4;
+  --surface-row:   #fbfcfd;
+  --side-nav-bg:   #f2f4f5;
+  --hover-bg:      rgba(24, 34, 48, 0.05);
+  --switch-track:  #d7dade;
+  --switch-knob:   #ffffff;
+  --tooltip-bg:    #182230;
+  --tooltip-text:  #ffffff;
+  --tooltip-line:  rgba(255, 255, 255, 0.12);
 
   /* Ink */
   --ink:           #182230;
@@ -30,6 +40,7 @@
   --teal-bg:       rgba(22, 135, 125, 0.11);
   --teal-text:     #116f67;
   --teal-shadow:   rgba(22, 135, 125, 0.22);
+  --on-accent:     #ffffff;
 
   /* Semantic colours */
   --success:       #2f9e8f;
@@ -40,6 +51,8 @@
   --error:         #ba1a1a;
   --error-soft:    #ffdad6;
   --error-text:    #410002;
+  --error-detail:  #6c1f1d;
+  --on-error:      #ffffff;
 
   /* Card shadows — layered, soft */
   --shadow-sm:  0 1px 2px rgba(15, 23, 42, 0.06);
@@ -56,6 +69,58 @@
   --font-sans: -apple-system, "SF Pro SC", "PingFang SC", "Helvetica Neue", Arial,
                ui-sans-serif, system-ui, sans-serif;
   --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: dark;
+
+    --canvas:        #111416;
+    --surface:       #191d20;
+    --surface-low:   #15191c;
+    --surface-mid:   #242a2e;
+    --surface-high:  #30383d;
+    --surface-soft:  #171b1e;
+    --surface-muted: #15191c;
+    --surface-row:   #1c2124;
+    --side-nav-bg:   #15191c;
+    --hover-bg:      rgba(238, 242, 243, 0.07);
+    --switch-track:  #4a545a;
+    --switch-knob:   #eef2f3;
+    --tooltip-bg:    #30383d;
+    --tooltip-text:  #eef2f3;
+    --tooltip-line:  #414b51;
+
+    --ink:           #eef2f3;
+    --muted:         #b5c0c5;
+    --subtle:        #93a1a8;
+    --placeholder:   #75838a;
+
+    --line:          #2d353a;
+    --line-strong:   #414b51;
+
+    --teal:          #37b5a8;
+    --teal-light:    #58c9bd;
+    --teal-bg:       rgba(55, 181, 168, 0.16);
+    --teal-text:     #78d9cf;
+    --teal-shadow:   rgba(55, 181, 168, 0.20);
+    --on-accent:     #092f2b;
+
+    --success:       #5ac7b9;
+    --success-bg:    rgba(90, 199, 185, 0.14);
+    --success-text:  #8bddcf;
+    --warning:       #e9b45e;
+    --warning-bg:    rgba(233, 180, 94, 0.14);
+    --error:         #ff8a84;
+    --error-soft:    rgba(255, 106, 98, 0.14);
+    --error-text:    #ffd0cc;
+    --error-detail:  #ffc2bd;
+    --on-error:      #3a0b08;
+
+    --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.30);
+    --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.24);
+    --shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.28);
+  }
 }
 
 /* ── Reset ── */
@@ -205,7 +270,7 @@ button,
 }
 
 .nav-item:hover {
-  background: rgba(0, 0, 0, 0.035);
+  background: var(--hover-bg);
 }
 
 .nav-item.active {
@@ -231,7 +296,7 @@ button,
   margin-left: auto;
   border-radius: 999px;
   background: var(--error);
-  color: #ffffff;
+  color: var(--on-error);
   font-size: 10px;
   font-weight: 800;
 }
@@ -513,7 +578,7 @@ button,
 }
 
 .error-notice p {
-  color: #6c1f1d;
+  color: var(--error-detail);
 }
 
 /* ============================================================
@@ -563,7 +628,7 @@ button,
 .ready-item.done .ready-mark {
   background: linear-gradient(140deg, var(--teal-light), var(--teal));
   box-shadow: 0 4px 10px rgba(47, 158, 143, 0.30);
-  color: #ffffff;
+  color: var(--on-accent);
   border: none;
 }
 
@@ -711,7 +776,7 @@ button,
   display: flex;
   align-items: center;
   margin: 0;
-  background: #faf9f8;
+  background: var(--surface-soft);
 }
 
 .kv dt {
@@ -748,7 +813,7 @@ button,
 .qr-result,
 .empty-box {
   border-radius: var(--radius-md);
-  background: #f7f6f4;
+  background: var(--surface-muted);
   border: 1.5px dashed var(--line-strong);
   min-height: 80px;
 }
@@ -905,7 +970,7 @@ button {
   justify-content: center;
   border: none;
   background: linear-gradient(140deg, var(--teal-light), var(--teal));
-  color: #ffffff;
+  color: var(--on-accent);
   font-size: 14px;
   font-weight: 600;
   padding: 10px 18px;
@@ -1065,11 +1130,11 @@ textarea {
   width: max-content;
   max-width: min(320px, calc(100vw - 40px));
   padding: 9px 11px;
-  border: 1px solid rgba(255, 255, 255, 0.12);
+  border: 1px solid var(--tooltip-line);
   border-radius: var(--radius-sm);
-  background: var(--ink);
+  background: var(--tooltip-bg);
   box-shadow: var(--shadow-lg);
-  color: #ffffff;
+  color: var(--tooltip-text);
   font-family: var(--font-sans);
   font-size: 12px;
   font-weight: 400;
@@ -1347,7 +1412,7 @@ code {
   position: absolute;
   inset: 0;
   border-radius: 999px;
-  background: #d7dade;
+  background: var(--switch-track);
   transition: background 0.16s ease;
 }
 
@@ -1359,7 +1424,7 @@ code {
   width: 20px;
   height: 20px;
   border-radius: 50%;
-  background: #fff;
+  background: var(--switch-knob);
   box-shadow: 0 1px 3px rgb(20 24 30 / 18%);
   transition: transform 0.16s ease;
 }
@@ -1676,7 +1741,7 @@ code {
   height: 100vh;
   gap: 18px;
   padding: 20px 14px 16px;
-  background: #f2f4f5;
+  background: var(--side-nav-bg);
   border-right: 1px solid var(--line);
 }
 
@@ -1729,7 +1794,7 @@ code {
 }
 
 .nav-item:hover {
-  background: rgba(24, 34, 48, 0.05);
+  background: var(--hover-bg);
 }
 
 .nav-item.active {
@@ -2004,7 +2069,7 @@ summary:focus-visible {
 
 .channel-row-body {
   padding: 14px 16px 16px;
-  background: #fbfcfd;
+  background: var(--surface-row);
 }
 
 .channel-icon,
