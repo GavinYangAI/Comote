@@ -1,5 +1,7 @@
 <div align="center">
 
+<img src=".idea/icon.png" width="256" height="256" alt="Icon" />
+
 # Comote
 
 **手机上的 Codex 遥控器 · 本地运行 · 无 Comote 自有服务器**

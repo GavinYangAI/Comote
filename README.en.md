@@ -1,5 +1,7 @@
 <div align="center">
 
+<img src=".idea/icon.png" width="256" height="256" alt="Icon" />
+
 # Comote
 
 **A remote control for Codex, in your pocket · Runs locally · No Comote servers in the loop**
