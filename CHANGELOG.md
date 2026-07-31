@@ -7,6 +7,16 @@ GitHub Release notes, so keep each version's heading as `## vX.Y.Z`.
 本文件记录 Comote 的更新内容。发版流程会按推送的 `vX.Y.Z` tag 自动抽取对应
 段落作为 GitHub Release 说明，请保持每个版本标题为 `## vX.Y.Z`。
 
+## v0.7.2
+
+### What's New
+
+- **Updated application branding.** The Web interface and startup screen now use the project's new icon.
+
+### 新功能
+
+- **更新应用图标。** Web 界面和启动页现在使用项目中的新 Icon。
+
 ## v0.7.1
 
 ### 🐛 Fixes

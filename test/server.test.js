@@ -162,6 +162,21 @@ test("serves svg assets with an image content type", async () => {
   assert.match(body, /<svg/);
 });
 
+test("serves the web icon with a PNG content type", async () => {
+  const app = createServer();
+  const server = app.listen(0);
+  await new Promise((resolve) => server.once("listening", resolve));
+
+  const { port } = server.address();
+  const response = await fetch(`http://127.0.0.1:${port}/icon.png`);
+  const body = await response.arrayBuffer();
+  server.close();
+
+  assert.equal(response.status, 200);
+  assert.equal(response.headers.get("content-type"), "image/png");
+  assert.ok(body.byteLength > 0);
+});
+
 test("identity API confirms local authorization", async () => {
   const app = createServer();
   const server = app.listen(0);

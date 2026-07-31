@@ -3,8 +3,9 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 test("desktop navigation switches between exclusive application views", async () => {
-  const [html, js, css] = await Promise.all([
+  const [html, boot, js, css] = await Promise.all([
     readFile("public/index.html", "utf8"),
+    readFile("public/boot.html", "utf8"),
     readFile("public/app.js", "utf8"),
     readFile("public/styles.css", "utf8"),
   ]);
@@ -16,6 +17,8 @@ test("desktop navigation switches between exclusive application views", async ()
   }
 
   assert.equal((html.match(/class="[^"]*app-page active[^"]*"/g) ?? []).length, 1);
+  assert.match(html, /<img class="brand-logo" src="\/icon\.png"/);
+  assert.match(boot, /<img class="logo" src="\.\/icon\.png"/);
   assert.match(js, /window\.addEventListener\("hashchange"/);
   assert.doesNotMatch(js, /IntersectionObserver/);
   assert.match(css, /\.app-page\.active\s*\{\s*display:\s*block/);
