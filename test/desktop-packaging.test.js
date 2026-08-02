@@ -22,6 +22,12 @@ test("desktop packaging targets the requested Tauri installer artifacts", async 
   assert.deepEqual(tauriConfig.bundle.targets, ["app", "dmg", "nsis"]);
   assert.equal(tauriConfig.bundle.fileAssociations, undefined);
   assert.equal(tauriConfig.bundle.externalBin[0], "binaries/comote-node");
+  assert.equal(tauriConfig.bundle.windows.nsis.installerHooks, "installer-hooks.nsh");
+  const installerHooks = await readFile("src-tauri/installer-hooks.nsh", "utf8");
+  assert.match(installerHooks, /!macro NSIS_HOOK_PREINSTALL/);
+  assert.match(installerHooks, /!macro NSIS_HOOK_PREUNINSTALL/);
+  assert.match(installerHooks, /taskkill\.exe.*comote-node\.exe/);
+  assert.match(installerHooks, /taskkill\.exe.*comote-node-x86_64-pc-windows-msvc\.exe/);
   assert.equal(
     tauriConfig.bundle.resources["../build-assets/runtime-deps/node_modules"],
     "comote-server/node_modules",
