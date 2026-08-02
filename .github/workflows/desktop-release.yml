@@ -3,8 +3,14 @@ name: Desktop release
 on:
   workflow_dispatch:
   push:
+    branches:
+      - main
     tags:
-      - "v*"
+      - "v[0-9]+.[0-9]+.[0-9]+"
+
+concurrency:
+  group: desktop-release-${{ github.ref }}
+  cancel-in-progress: false
 
 permissions:
   contents: write
@@ -13,10 +19,9 @@ jobs:
   mac-arm64:
     name: Comote macOS arm64 DMG
     runs-on: macos-14
-    # Gates the signing secrets behind an approval / tag-restriction rule.
-    # Configure protection in: Settings → Environments → release-signing
-    # (required reviewers + "Deployment branches and tags" limited to v*).
-    environment: release-signing
+    # Stable tags use the protected signing environment. Main-branch builds use
+    # a separate environment with no signing secrets and produce unsigned DMGs.
+    environment: ${{ github.ref_type == 'tag' && 'release-signing' || 'prerelease' }}
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
@@ -31,7 +36,7 @@ jobs:
       - name: Detect signing availability
         id: cfg
         env:
-          HAS_CERT: ${{ secrets.APPLE_CERTIFICATE != '' }}
+          HAS_CERT: ${{ github.ref_type == 'tag' && secrets.APPLE_CERTIFICATE != '' }}
         run: echo "signing=$HAS_CERT" >> "$GITHUB_OUTPUT"
 
       - name: Prepare signing keychain + notary key
@@ -65,13 +70,13 @@ jobs:
       - name: Build DMG
         env:
           # Empty when unsigned → sign-macos-app.mjs no-ops.
-          COMOTE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          COMOTE_SIGNING_IDENTITY: ${{ github.ref_type == 'tag' && secrets.APPLE_SIGNING_IDENTITY || '' }}
         run: npm run dist:mac
 
       - name: Notarize + staple DMG
         env:
-          COMOTE_NOTARY_KEY_ID: ${{ secrets.APPLE_NOTARY_KEY_ID }}
-          COMOTE_NOTARY_ISSUER_ID: ${{ secrets.APPLE_NOTARY_ISSUER_ID }}
+          COMOTE_NOTARY_KEY_ID: ${{ github.ref_type == 'tag' && secrets.APPLE_NOTARY_KEY_ID || '' }}
+          COMOTE_NOTARY_ISSUER_ID: ${{ github.ref_type == 'tag' && secrets.APPLE_NOTARY_ISSUER_ID || '' }}
         run: node scripts/notarize-macos-dmg.mjs release/Comote-*-arm64.dmg
 
       - name: Clean up keychain
@@ -106,7 +111,7 @@ jobs:
     name: Publish to npm
     # Only the canonical repo can publish — forks lack the trusted-publisher
     # config on npmjs.com, so skip there instead of failing.
-    if: startsWith(github.ref, 'refs/tags/v') && github.repository == 'GavinYangAI/Comote'
+    if: github.ref_type == 'tag' && github.repository == 'GavinYangAI/Comote'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -141,10 +146,13 @@ jobs:
   publish-release:
     name: Publish GitHub Release
     needs: [mac-arm64, windows-x64]
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          fetch-depth: 0
+          fetch-tags: true
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: Comote-arm64-dmg
@@ -153,28 +161,67 @@ jobs:
         with:
           name: Comote-win-x64-setup
           path: release-artifacts
-      - name: Build release notes from CHANGELOG
+      - name: Resolve release metadata and collect commit notes
+        id: release
+        env:
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
         run: |
           set -euo pipefail
-          TAG="${{ github.ref_name }}"
-          # Extract the lines under "## <TAG>" up to (but not including) the next
-          # "## v" heading. Empty when the version isn't in CHANGELOG.md.
-          NOTES="$(awk -v ver="## ${TAG}" '$0==ver{f=1;next} /^## v/{if(f)exit} f' CHANGELOG.md || true)"
+          VERSION="$(node -p "require('./package.json').version")"
+          if [ "$REF_TYPE" = "tag" ]; then
+            if [[ ! "$REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              echo "Unsupported release tag: $REF_NAME" >&2
+              exit 1
+            fi
+            RELEASE_TAG="$REF_NAME"
+            PRERELEASE=false
+            SEARCH_REVISION="${GITHUB_SHA}^"
+          else
+            RELEASE_TAG="v${VERSION}+build.${GITHUB_RUN_NUMBER}"
+            PRERELEASE=true
+            SEARCH_REVISION="$GITHUB_SHA"
+          fi
+
+          PREVIOUS_TAG="$(git describe --tags --abbrev=0 \
+            --match 'v[0-9]*.[0-9]*.[0-9]*' \
+            --exclude '*+*' --exclude '*-*' \
+            "$SEARCH_REVISION" 2>/dev/null || true)"
+          if [ -n "$PREVIOUS_TAG" ] && [[ ! "$PREVIOUS_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Resolved non-stable previous tag: $PREVIOUS_TAG" >&2
+            exit 1
+          fi
+
+          if [ -n "$PREVIOUS_TAG" ]; then
+            CHANGE_RANGE="${PREVIOUS_TAG}..${GITHUB_SHA}"
+            NOTES_HEADING="Changes since ${PREVIOUS_TAG}"
+          else
+            CHANGE_RANGE="$GITHUB_SHA"
+            NOTES_HEADING="Changes"
+          fi
+          NOTES="$(git log --format='- %s (`%h`)' "$CHANGE_RANGE")"
+
           {
-            if [ -n "$NOTES" ]; then printf '%s\n' "$NOTES"; else printf 'Comote %s\n' "$TAG"; fi
+            printf '### %s\n\n' "$NOTES_HEADING"
+            if [ -n "$NOTES" ]; then printf '%s\n' "$NOTES"; else printf '%s\n' '- No commits in this range.'; fi
             printf '\n### Downloads / 下载\n\n'
             printf -- '- **macOS (Apple Silicon)** — `Comote-*-arm64.dmg`\n'
             printf -- '- **Windows x64** — `Comote-Setup-*-x64.exe`\n\n'
             printf 'See the [README](https://github.com/GavinYangAI/comote#readme) for installation and setup. / 安装与配置见 [README](https://github.com/GavinYangAI/comote#readme)。\n'
           } > RELEASE_BODY.md
+          echo "tag=$RELEASE_TAG" >> "$GITHUB_OUTPUT"
+          echo "prerelease=$PRERELEASE" >> "$GITHUB_OUTPUT"
           echo "----- release body -----"
           cat RELEASE_BODY.md
       - name: Create or update GitHub Release
         uses: softprops/action-gh-release@b4309332981a82ec1c5618f44dd2e27cc8bfbfda # v3
         with:
           files: release-artifacts/*
-          name: Comote ${{ github.ref_name }}
+          tag_name: ${{ steps.release.outputs.tag }}
+          target_commitish: ${{ github.sha }}
+          name: Comote ${{ steps.release.outputs.tag }}
           body_path: RELEASE_BODY.md
           draft: false
-          prerelease: false
+          prerelease: ${{ steps.release.outputs.prerelease }}
+          make_latest: ${{ steps.release.outputs.prerelease == 'true' && 'false' || 'true' }}
           fail_on_unmatched_files: true

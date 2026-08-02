@@ -1,11 +1,11 @@
 # Changelog
 
 All notable changes to Comote are documented here. The desktop-release
-workflow extracts the section matching the pushed `vX.Y.Z` tag into the
-GitHub Release notes, so keep each version's heading as `## vX.Y.Z`.
+workflow builds GitHub Release notes from every commit after the previous
+stable `vX.Y.Z` tag. This file remains the curated, user-facing changelog.
 
-本文件记录 Comote 的更新内容。发版流程会按推送的 `vX.Y.Z` tag 自动抽取对应
-段落作为 GitHub Release 说明，请保持每个版本标题为 `## vX.Y.Z`。
+本文件记录 Comote 的更新内容。发版流程会收集上一个正式 `vX.Y.Z` 标签之后的
+全部提交作为 GitHub Release 说明；本文件继续保留人工整理的用户侧更新记录。
 
 ## v0.7.2
 
