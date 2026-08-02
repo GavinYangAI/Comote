@@ -476,10 +476,10 @@ export function createComoteState({
   }
 
   // Finishes every open live-card session across all live-card channels with a
-  // terminal card. Used when the Codex Desktop connection drops for good (or is
-  // lost): otherwise the in-progress card sessions leak in cardSessions and the
-  // user's chat shows a card stuck "in progress" forever, since no turnCompleted/
-  // error event will ever arrive to finish it.
+  // terminal card. Only use this when reconnecting has given up: connectionLost
+  // and app-server error notifications can be followed by more events for the
+  // same thread, so detaching there would split the rest of the turn into new
+  // IM messages.
   function finishAllLiveCards(buildCard) {
     for (const [channel] of channelStacks) {
       const live = liveCardRuntime(channel);
@@ -515,8 +515,8 @@ export function createComoteState({
   }
 
   // Closes every open live card with a disconnect notice and clears the per-turn
-  // bookkeeping. Shared by connectionLost and connectionGaveUp.
-  function finishLiveCardsForDisconnect() {
+  // bookkeeping after reconnecting has permanently given up.
+  function finishLiveCardsAfterConnectionGaveUp() {
     notifyDisconnectToCardlessThreads();
     finishAllLiveCards((live) =>
       live.buildStatusCard({
@@ -536,6 +536,26 @@ export function createComoteState({
       }
     }
     teardownAllMilestoneState();
+  }
+
+  // A temporary disconnect does not end a turn. Keep each session attached so
+  // reconnect-driven output can continue updating the same IM card.
+  function showDisconnectOnLiveCards() {
+    for (const [channel] of channelStacks) {
+      const live = liveCardRuntime(channel);
+      const sessions = live?.cardSessions;
+      if (!sessions || typeof sessions.keys !== "function") continue;
+      for (const threadId of [...sessions.keys()]) {
+        live.updateThreadCard(
+          threadId,
+          live.buildStatusCard({
+            phase: "progress",
+            threadId,
+            text: DISCONNECT_NOTICE,
+          }),
+        );
+      }
+    }
   }
 
   // Per-channel re-drain timer guard, so overlapping deliverIfPush calls don't
@@ -1073,13 +1093,8 @@ export function createComoteState({
       return;
     }
     if (event.type === "connectionLost") {
-      // Turns cannot complete once the connection is gone — release the
-      // sleep guard so the Mac is not held awake indefinitely.
-      sleepGuard.releaseAll();
-      // Finish any open live cards: no turnCompleted/error will arrive to close
-      // them while the connection is down, so otherwise they leak (cardSessions
-      // grows unbounded) and the chat shows a perpetual "in progress" card.
-      finishLiveCardsForDisconnect();
+      notifyDisconnectToCardlessThreads();
+      showDisconnectOnLiveCards();
       eventLog.warn(DISCONNECT_NOTICE);
       return;
     }
@@ -1089,9 +1104,7 @@ export function createComoteState({
     }
     if (event.type === "connectionGaveUp") {
       sleepGuard.releaseAll();
-      // Same leak as connectionLost, and now no reconnect is coming at all — close
-      // every open live card so none is left hanging.
-      finishLiveCardsForDisconnect();
+      finishLiveCardsAfterConnectionGaveUp();
       eventLog.error("多次重连 Codex Desktop 失败，已停止重试，请手动重试连接");
       return;
     }
@@ -1271,40 +1284,23 @@ export function createComoteState({
     }
 
     if (event.type === "error") {
-      // A turn can end via error with no following turnCompleted. Release the
-      // sleep guard here too, otherwise caffeinate is held awake until the next
-      // (successful) turn completes — or indefinitely. Clear per-turn state for
-      // the same reason.
-      sleepGuard.release(event.threadId);
-      teardownMilestoneState(event.threadId);
       const binding = commandRouter.getThreadBinding(event.threadId);
-      const errorStack = binding ? channelStacks.get(binding.channel) : null;
-      if (errorStack?.plugin.meta.capabilities?.reactions) {
-        void errorStack.runtime.completeInboundFeedback?.(event.threadId);
-      }
       const errLive = liveCardRuntime(binding?.channel);
       const errorMessage = normalizeCodexErrorText(event.message) || "Codex 报告了一个错误";
       if (errLive && errLive.hasThreadCard(event.threadId)) {
-        errLive
-          .finishThreadCard(
-            event.threadId,
-            errLive.buildStatusCard({
-              phase: "error",
-              text: t("state.error.card", { message: errorMessage }),
-              activities: activityByThread.get(event.threadId) ?? [],
-              content: [
-                ...threadContent(event.threadId),
-                { type: "text", text: t("state.error.card", { message: errorMessage }) },
-              ],
-              done: true,
-            }),
-          )
-          .catch(() => {});
-        streamTextByThread.delete(event.threadId);
-        streamItemsByThread.delete(event.threadId);
-        activityByThread.delete(event.threadId);
-        contentByThread.delete(event.threadId);
-        progressByThread.delete(event.threadId);
+        const errorText = t("state.error.card", { message: errorMessage });
+        const content = threadContent(event.threadId);
+        content.push({ type: "text", text: errorText });
+        errLive.updateThreadCard(
+          event.threadId,
+          errLive.buildStatusCard({
+            phase: "error",
+            threadId: event.threadId,
+            text: errorText,
+            activities: activityByThread.get(event.threadId) ?? [],
+            content,
+          }),
+        );
         eventLog.error("Codex 错误", { threadId: event.threadId, message: errorMessage });
         return;
       }

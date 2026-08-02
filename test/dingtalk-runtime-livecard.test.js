@@ -119,3 +119,34 @@ test("failed live approval display restores queued progress", async () => {
   assert.equal(session.resumeCard, null);
   assert.equal(runtime.liveApprovalThreads.has("a-fail"), false);
 });
+
+test("live approval registers before its DingTalk update can be resolved", async () => {
+  const { runtime, driver } = makeRuntime();
+  let releaseApproval;
+  const approvalBlocked = new Promise((resolve) => { releaseApproval = resolve; });
+  let updateCount = 0;
+  driver.updateCard = async (message) => {
+    driver.updated.push(message);
+    updateCount += 1;
+    if (updateCount === 1) await approvalBlocked;
+  };
+  await runtime.openThreadCard({
+    threadId: "t-race",
+    conversationId: "s",
+    card: runtime.buildStatusCard({ phase: "started", threadId: "t-race" }),
+  });
+
+  const showing = runtime.showThreadApproval({
+    threadId: "t-race",
+    code: "a-race",
+    approval: { shortCode: "a-race", params: { command: "npm test" } },
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  const resolving = runtime.resolveApprovalMessage({ code: "a-race", decision: "accept" });
+  releaseApproval();
+  await Promise.all([showing, resolving]);
+
+  assert.equal(driver.updated[0].cardParamMap.approvalVisible, "true");
+  assert.equal(driver.updated.at(-1).cardParamMap.approvalVisible, "false");
+  assert.equal(runtime.cardSessions.get("t-race").paused, false);
+});

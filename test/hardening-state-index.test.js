@@ -184,9 +184,9 @@ test("M4: a new turn delivers its own changed files", async () => {
   assert.equal(mediaReplies.length, 2, "each turn delivers its png once → two total across two turns");
 });
 
-// --- LOW-cardleak: connectionLost / connectionGaveUp finish open cards ------
+// --- LOW-cardleak: connectionGaveUp finishes open cards ---------------------
 
-test("LOW-cardleak: connectionLost finishes any open live card", async () => {
+test("LOW-cardleak: connectionLost keeps a live card attached for a reconnect", async () => {
   const { transport, desktop, state } = buildState();
   await desktop.client.connect();
   const { root } = await makeProject();
@@ -199,12 +199,14 @@ test("LOW-cardleak: connectionLost finishes any open live card", async () => {
   // Sanity: the live card session is open after turn/started.
   assert.ok(dingRuntime.getStatus, "dingtalk runtime exposed");
 
-  // Drive the connectionLost path directly through routeDesktopEvent.
+  // A temporary drop must preserve the same card session. Codex can reconnect
+  // and continue this thread, so detaching here would make later output fan out.
   desktop.onEvent({ type: "connectionLost" });
   await waitFor(() => calls.updated.length >= 1);
 
-  // The open card was finished (an update was sent) and no session leaks behind.
-  assert.ok(calls.updated.length >= 1, "the open live card was finished on connectionLost");
+  fireAgentMessage(transport, "thread_d", "after-reconnect", "continued after reconnect");
+  await waitFor(() => calls.updated.some((call) => call.cardParamMap.body.includes("continued after reconnect")));
+  assert.equal(calls.created.length, 1, "the continued output updates the original card");
 });
 
 test("LOW-cardleak: connectionGaveUp also finishes open live cards", async () => {

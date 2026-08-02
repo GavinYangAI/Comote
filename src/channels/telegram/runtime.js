@@ -154,6 +154,7 @@ export class TelegramRuntimeService extends BaseChannelRuntime {
       timer: null,
       paused: false,
       resumeCard: null,
+      updateChain: Promise.resolve(),
     });
     return true;
   }
@@ -176,7 +177,7 @@ export class TelegramRuntimeService extends BaseChannelRuntime {
     const card = session.pendingCard;
     session.pendingCard = null;
     session.lastSentAt = Date.now();
-    await this._edit(session, card);
+    await this._updateSessionCard(session, card);
     session.lastCard = card;
     return true;
   }
@@ -193,7 +194,7 @@ export class TelegramRuntimeService extends BaseChannelRuntime {
   }
 
   async sendDetachedThreadCard(session, card) {
-    return this._edit(session, card);
+    return this._updateSessionCard(session, card);
   }
 
   async finishThreadCard(threadId, card) {
@@ -217,23 +218,24 @@ export class TelegramRuntimeService extends BaseChannelRuntime {
     session.resumeCard = session.pendingCard ?? session.lastCard;
     session.pendingCard = null;
     session.paused = true;
-    const card = this.renderer.buildApprovalCard({ code, approval, autoApproved });
-    const updated = await this._edit(session, card);
-    if (!updated) {
-      session.paused = previousState.paused;
-      session.pendingCard = previousState.pendingCard;
-      session.resumeCard = previousState.resumeCard;
-      if (!session.paused && session.pendingCard) {
-        this.updateThreadCard(threadId, session.pendingCard);
-      }
-      return false;
-    }
     this.rememberApprovalMessage(code, {
       messageId: session.messageId,
       conversationId: session.conversationId,
       approval,
       threadId,
     });
+    const card = this.renderer.buildApprovalCard({ code, approval, autoApproved });
+    const updated = await this._updateSessionCard(session, card);
+    if (!updated) {
+      session.paused = previousState.paused;
+      session.pendingCard = previousState.pendingCard;
+      session.resumeCard = previousState.resumeCard;
+      this.approvalMessages.messages.delete(String(code));
+      if (!session.paused && session.pendingCard) {
+        this.updateThreadCard(threadId, session.pendingCard);
+      }
+      return false;
+    }
     return true;
   }
 
@@ -250,7 +252,7 @@ export class TelegramRuntimeService extends BaseChannelRuntime {
     }
     const card = session.pendingCard ?? session.resumeCard
       ?? this.buildStatusCard({ phase: "progress", threadId: message.threadId });
-    const updated = await this._edit(session, card);
+    const updated = await this._updateSessionCard(session, card);
     if (!updated) {
       throw new Error(this.lastError || "Failed to resume Telegram live approval message");
     }
@@ -305,6 +307,14 @@ export class TelegramRuntimeService extends BaseChannelRuntime {
       this.lastError = message;
       return false;
     }
+  }
+
+  _updateSessionCard(session, card) {
+    const update = Promise.resolve(session.updateChain)
+      .catch(() => {})
+      .then(() => this._edit(session, card));
+    session.updateChain = update;
+    return update;
   }
 
   // Sends a body as one or more fresh messages, each <=4096 chars. Used as the

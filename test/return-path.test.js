@@ -209,6 +209,72 @@ test("Codex streaming for a Feishu thread drives a live card", async () => {
   assert.equal(state.outboundReplies.list({ channel: "feishu" }).length, 0);
 });
 
+for (const interruption of [
+  {
+    name: "a recoverable Codex error",
+    event: {
+      type: "error",
+      threadId: "thread_interrupted",
+      message: { message: "Reconnecting... 3/5", additionalDetails: "temporary upstream failure" },
+    },
+  },
+  {
+    name: "a temporary connection loss",
+    event: { type: "connectionLost" },
+  },
+]) {
+  test(`a Feishu live card stays attached after ${interruption.name}`, async () => {
+    const { transport, desktop, state } = buildState();
+    await desktop.client.connect();
+    state.commandRouter.conversationByIdentity.set("feishu:ou_owner", {
+      channel: "feishu",
+      conversationId: "oc_chat",
+    });
+    state.commandRouter.bindThreadForIdentity(
+      { channel: "feishu", stableId: "ou_owner" },
+      "thread_interrupted",
+    );
+
+    const calls = { sent: [], updated: [] };
+    state.runtime.feishu.__setTestDriver({
+      getStatus: () => ({ state: "configured" }),
+      verifyEvent: () => true,
+      async sendCard(message) {
+        calls.sent.push(message);
+        return { messageId: "om_interrupted" };
+      },
+      async updateCard(message) {
+        calls.updated.push(message);
+        return { code: 0 };
+      },
+    });
+
+    transport.receive({ jsonrpc: "2.0", method: "turn/started", params: { threadId: "thread_interrupted" } });
+    await tick();
+    desktop.onEvent(interruption.event);
+    await tick();
+    transport.receive({
+      jsonrpc: "2.0",
+      method: "item/completed",
+      params: {
+        threadId: "thread_interrupted",
+        item: { type: "agentMessage", id: "after_interruption", text: "continued on the original card" },
+      },
+    });
+    transport.receive({
+      jsonrpc: "2.0",
+      method: "turn/completed",
+      params: { threadId: "thread_interrupted" },
+    });
+    await waitFor(() => calls.updated.length > 0);
+
+    assert.equal(calls.sent.length, 1, "the continuation does not create a second Feishu message");
+    assert.equal(calls.updated.at(-1).messageId, "om_interrupted");
+    assert.match(JSON.stringify(calls.updated.at(-1).card), /continued on the original card/);
+    assert.equal(state.outboundReplies.list({ channel: "feishu" }).length, 0);
+  });
+}
+
 test("a live card preserves every agent message produced during one turn", async () => {
   const { transport, desktop, state } = buildState();
   await desktop.client.connect();

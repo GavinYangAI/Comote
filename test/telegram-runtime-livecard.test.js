@@ -162,3 +162,34 @@ test("live approval pauses edits and resumes the same Telegram message", async (
   assert.equal(calls.edit.at(-1).messageId, 42);
   assert.equal(calls.edit.at(-1).text, "latest progress");
 });
+
+test("live approval registers before its Telegram edit can be resolved", async () => {
+  const { rt, calls } = makeRuntime();
+  let releaseApproval;
+  const approvalBlocked = new Promise((resolve) => { releaseApproval = resolve; });
+  let editCount = 0;
+  rt.driver.editMessageText = async (message) => {
+    calls.edit.push(message);
+    editCount += 1;
+    if (editCount === 1) await approvalBlocked;
+  };
+  await rt.openThreadCard({
+    threadId: "t-race",
+    conversationId: "9",
+    card: rt.buildStatusCard({ phase: "started", threadId: "t-race" }),
+  });
+
+  const showing = rt.showThreadApproval({
+    threadId: "t-race",
+    code: "A-race",
+    approval: { shortCode: "A-race", params: { command: "npm test" } },
+  });
+  await waitFor(() => calls.edit.length === 1);
+  const resolving = rt.resolveApprovalMessage({ code: "A-race", decision: "accept" });
+  releaseApproval();
+  await Promise.all([showing, resolving]);
+
+  assert.ok(calls.edit[0].replyMarkup?.inline_keyboard?.length > 0);
+  assert.equal(calls.edit.at(-1).replyMarkup?.inline_keyboard?.[0]?.[0]?.text, "取消任务");
+  assert.equal(rt.cardSessions.get("t-race").paused, false);
+});

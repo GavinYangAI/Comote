@@ -319,6 +319,12 @@ export class FeishuRuntimeService extends BaseChannelRuntime {
     session.resumeCard = session.pendingCard ?? session.lastCard;
     session.pendingCard = null;
     session.paused = true;
+    this.rememberApprovalMessage(code, {
+      messageId: session.messageId,
+      conversationId: session.conversationId,
+      approval,
+      threadId,
+    });
     const card = approvalCard({
       shortCode: code,
       detail: approvalDetail(approval),
@@ -330,17 +336,12 @@ export class FeishuRuntimeService extends BaseChannelRuntime {
       session.paused = previousState.paused;
       session.pendingCard = previousState.pendingCard;
       session.resumeCard = previousState.resumeCard;
+      this.approvalMessages.messages.delete(String(code));
       if (!session.paused && session.pendingCard) {
         this.updateThreadCard(threadId, session.pendingCard);
       }
       throw error;
     }
-    this.rememberApprovalMessage(code, {
-      messageId: session.messageId,
-      conversationId: session.conversationId,
-      approval,
-      threadId,
-    });
     return true;
   }
 

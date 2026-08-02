@@ -465,6 +465,42 @@ test("live approval is ordered after an in-flight progress update", async () => 
   assert.equal(runtime.cardSessions.get("t-ordered-approval").paused, true);
 });
 
+test("live approval registers before its card update can be resolved", async () => {
+  const driver = cardDriver();
+  let releaseApproval;
+  const approvalBlocked = new Promise((resolve) => { releaseApproval = resolve; });
+  driver.updateCard = async (message) => {
+    driver.calls.updated.push(message);
+    if (driver.calls.updated.length === 1) await approvalBlocked;
+    return { code: 0 };
+  };
+  const runtime = makeRuntime({
+    adapter: { handleInbound: async () => ({ kind: "text" }) },
+    outboundQueue: new OutboundQueue(),
+    driver,
+    cardUpdateIntervalMs: 60_000,
+  });
+  await runtime.openThreadCard({
+    threadId: "t-approval-race",
+    conversationId: "oc_chat",
+    card: { elements: ["started"] },
+  });
+
+  const showing = runtime.showThreadApproval({
+    threadId: "t-approval-race",
+    code: "a-race",
+    approval: { shortCode: "a-race", params: { command: "npm test" } },
+  });
+  await waitFor(() => driver.calls.updated.length === 1);
+  const resolving = runtime.resolveApprovalMessage({ code: "a-race", decision: "accept" });
+  releaseApproval();
+  await Promise.all([showing, resolving]);
+
+  assert.match(JSON.stringify(driver.calls.updated[0].card), /npm test/);
+  assert.doesNotMatch(JSON.stringify(driver.calls.updated.at(-1).card), /npm test/);
+  assert.equal(runtime.cardSessions.get("t-approval-race").paused, false);
+});
+
 test("updateThreadCard and finishThreadCard no-op when no card session exists", async () => {
   const runtime = makeRuntime({
     adapter: { handleInbound: async () => ({ kind: "text" }) },
