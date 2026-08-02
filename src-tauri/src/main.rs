@@ -55,7 +55,12 @@ impl ComoteChild {
                 let _ = child.kill();
             }
             ComoteChild::System(mut child) => {
-                let _ = child.kill();
+                if child.kill().is_ok() {
+                    // TerminateProcess is asynchronous on Windows. Wait until
+                    // the executable is fully released before an updater
+                    // replaces it.
+                    let _ = child.wait();
+                }
             }
             ComoteChild::Pid(pid) => {
                 #[cfg(unix)]
@@ -335,18 +340,26 @@ fn main() {
         })
         .on_window_event(|window, event| {
             if let WindowEvent::CloseRequested { api, .. } = event {
-                // Hide instead of close: the daemon must keep running so the
-                // phone can still reach Codex while the window is dismissed.
-                let _ = window.hide();
-                api.prevent_close();
+                let app_handle = window.app_handle();
+                if should_keep_daemon_alive(app_handle) {
+                    // Keep the phone bridge available only when the user has
+                    // explicitly enabled background operation.
+                    let _ = window.hide();
+                    api.prevent_close();
+                } else {
+                    // A tray icon keeps the event loop alive after the last
+                    // window closes, so explicitly exit and stop the sidecar.
+                    api.prevent_close();
+                    app_handle.exit(0);
+                }
             }
         })
         .build(tauri::generate_context!())
         .expect("error while building Comote");
 
     app.run(|app_handle, event| {
-        // Window close only hides (see on_window_event), so the daemon is dealt
-        // with on actual termination. ExitRequested does not fire on every quit
+        // Window close either hides or requests app termination depending on
+        // the keep-alive preference. ExitRequested does not fire on every quit
         // path (e.g. an Apple-Event quit), so handle the final RunEvent::Exit
         // too; the stop/release helpers are idempotent (they take the handle).
         match event {
@@ -360,16 +373,19 @@ fn main() {
 // our handle so its Drop won't kill it) when keep-alive is ON, otherwise stop it
 // gracefully (SIGTERM → poll → SIGKILL).
 fn handle_app_exit(app_handle: &AppHandle) {
-    let keep_alive = app_handle
-        .path()
-        .app_data_dir()
-        .map(|dir| load_keep_daemon_alive_from_dir(&dir))
-        .unwrap_or(DEFAULT_KEEP_DAEMON_ALIVE);
-    if keep_alive {
+    if should_keep_daemon_alive(app_handle) {
         release_comote_sidecar(app_handle);
     } else {
         stop_comote_sidecar(app_handle);
     }
+}
+
+fn should_keep_daemon_alive(app_handle: &AppHandle) -> bool {
+    app_handle
+        .path()
+        .app_data_dir()
+        .map(|dir| load_keep_daemon_alive_from_dir(&dir))
+        .unwrap_or(DEFAULT_KEEP_DAEMON_ALIVE)
 }
 
 // Reads the persisted "keep daemon alive after quit" preference for the UI
