@@ -25,7 +25,7 @@ export const BOT_COMMANDS = [
   { command: "tail", description: "Show recent messages" },
   { command: "approve", description: "Approve a Codex request" },
   { command: "deny", description: "Deny a Codex request" },
-  { command: "automode", description: "Toggle automatic approvals" },
+  { command: "automode", description: "Toggle Approve for me" },
   { command: "cancel", description: "Cancel the current task" },
   { command: "file", description: "Send a project file here" },
   { command: "help", description: "Show all commands" },

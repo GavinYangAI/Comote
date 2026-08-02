@@ -93,7 +93,7 @@ test("Codex approval requests are pushed to the phone with a short code", async 
   assert.equal(queued[0].code, "a1");
 });
 
-test("auto mode approves the request and still queues a buttonless notification", async () => {
+test("approval requests remain pending for manual review instead of being accepted by Comote", async () => {
   const { transport, desktop, state } = buildState();
   await desktop.client.connect();
 
@@ -103,8 +103,6 @@ test("auto mode approves the request and still queues a buttonless notification"
     accountId: "acct",
   });
   state.commandRouter.bindThreadForIdentity({ channel: "wechat", stableId: "acct:peer" }, "thread_auto");
-  state.commandRouter.autoModeThreads.add("thread_auto");
-
   transport.receive({
     jsonrpc: "2.0",
     method: "item/commandExecution/requestApproval",
@@ -116,13 +114,9 @@ test("auto mode approves the request and still queues a buttonless notification"
   const queued = state.outboundReplies.list({ channel: "wechat" });
   assert.equal(queued.length, 1);
   assert.equal(queued[0].kind, "approval");
-  assert.equal(queued[0].autoApproved, true);
-  assert.deepEqual(transport.sent.at(-1), {
-    jsonrpc: "2.0",
-    id: "rpc_auto",
-    result: { decision: "accept" },
-  });
-  assert.deepEqual(desktop.listPendingApprovals(), []);
+  assert.equal(queued[0].autoApproved, undefined);
+  assert.equal(desktop.listPendingApprovals().length, 1);
+  assert.equal(transport.sent.some((message) => message.id === "rpc_auto"), false);
 });
 
 test("agent output for an unbound thread is logged but not delivered", async () => {

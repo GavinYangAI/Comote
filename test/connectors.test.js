@@ -309,7 +309,6 @@ test("desktop connector starts turns and records approval requests", async () =>
       threadId: "thread_1",
       input: [{ type: "text", text: "fix tests", text_elements: [] }],
       cwd: "/repo",
-      approvalsReviewer: "user",
     },
   });
 
@@ -341,6 +340,29 @@ test("desktop connector starts turns and records approval requests", async () =>
       },
     },
   ]);
+});
+
+test("desktop connector switches the approval reviewer for subsequent turns", async () => {
+  const transport = new MemoryTransport();
+  const connector = new CodexDesktopConnector({ transport });
+
+  const updatePromise = connector.updateThreadSettings({
+    threadId: "thread_1",
+    approvalsReviewer: "auto_review",
+  });
+  await flushAsyncWork();
+
+  assert.deepEqual(transport.sent[0], {
+    jsonrpc: "2.0",
+    id: 1,
+    method: "thread/settings/update",
+    params: {
+      threadId: "thread_1",
+      approvalsReviewer: "auto_review",
+    },
+  });
+  transport.receive({ jsonrpc: "2.0", id: 1, result: {} });
+  await updatePromise;
 });
 
 test("desktop connector forwards images as localImage input items", async () => {

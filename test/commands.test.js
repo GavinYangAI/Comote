@@ -10,11 +10,11 @@ import { ProjectStore } from "../src/core/projects.js";
 import { SessionStore } from "../src/core/sessions.js";
 import { CommandRouter } from "../src/core/commands.js";
 
-function makeRouter() {
+function makeRouter(overrides = {}) {
   const authorization = new AuthorizationStore();
   const projects = new ProjectStore();
   const sessions = new SessionStore();
-  const router = new CommandRouter({ authorization, projects, sessions });
+  const router = new CommandRouter({ authorization, projects, sessions, ...overrides });
   return { authorization, projects, sessions, router };
 }
 
@@ -449,8 +449,19 @@ test("/approve and /deny resolve pending Codex Desktop approvals", async () => {
   ]);
 });
 
-test("/automode is scoped to the caller's active Codex thread", async () => {
-  const { authorization, projects, sessions, router } = makeRouter();
+test("/automode switches the approval reviewer on the caller's active Codex thread", async () => {
+  const calls = [];
+  const settingsUpdates = [];
+  const codexDesktop = {
+    async resumeThread(params) {
+      calls.push(["resume", params]);
+    },
+    async updateThreadSettings(settings) {
+      calls.push(["settings", settings]);
+      settingsUpdates.push(settings);
+    },
+  };
+  const { authorization, projects, sessions, router } = makeRouter({ codexDesktop });
   const alice = { channel: "wechat", stableId: "alice", displayName: "Alice" };
   const bob = { channel: "wechat", stableId: "bob", displayName: "Bob" };
   authorization.confirmIdentity(alice);
@@ -472,17 +483,28 @@ test("/automode is scoped to the caller's active Codex thread", async () => {
   });
 
   const enabled = await router.handleMessageAsync({ identity: alice, text: "/automode true" });
-  assert.match(enabled.text, /已为当前对话开启自动审批/);
-  assert.equal(router.isAutoModeEnabled("thread_alice"), true);
-  assert.equal(router.isAutoModeEnabled("thread_bob"), false);
+  assert.match(enabled.text, /Approve for me/);
+  assert.deepEqual(settingsUpdates.at(-1), {
+    threadId: "thread_alice",
+    approvalsReviewer: "auto_review",
+  });
+  assert.deepEqual(calls.slice(0, 2), [
+    ["resume", { threadId: "thread_alice", cwd: "/repo" }],
+    ["settings", { threadId: "thread_alice", approvalsReviewer: "auto_review" }],
+  ]);
 
   const disabled = await router.handleMessageAsync({ identity: alice, text: "/automode false" });
-  assert.match(disabled.text, /已为当前对话关闭自动审批/);
-  assert.equal(router.isAutoModeEnabled("thread_alice"), false);
+  assert.match(disabled.text, /Ask for approval/);
+  assert.deepEqual(settingsUpdates.at(-1), {
+    threadId: "thread_alice",
+    approvalsReviewer: "user",
+  });
 });
 
 test("/automode rejects invalid values and requires an active conversation", async () => {
-  const { authorization, projects, router } = makeRouter();
+  const { authorization, projects, router } = makeRouter({
+    codexDesktop: { updateThreadSettings: async () => {} },
+  });
   const identity = { channel: "wechat", stableId: "owner", displayName: "Owner" };
   authorization.confirmIdentity(identity);
 

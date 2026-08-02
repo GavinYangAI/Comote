@@ -555,6 +555,13 @@ export class CodexDesktopConnector {
     return this.client.request("thread/resume", params);
   }
 
+  async updateThreadSettings({ threadId, approvalsReviewer }) {
+    return this.client.request("thread/settings/update", {
+      threadId,
+      approvalsReviewer,
+    });
+  }
+
   async startTurn({ threadId, text, cwd = null, images = [] }) {
     // The app-server input list accepts a `localImage` item for a local file
     // path; image attachments forwarded from the phone go through here so Codex
@@ -567,7 +574,6 @@ export class CodexDesktopConnector {
       threadId,
       input,
       cwd,
-      approvalsReviewer: "user",
     });
   }
 
