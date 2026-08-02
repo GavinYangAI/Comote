@@ -10,7 +10,7 @@ import { CommandRouter } from "../core/commands.js";
 import { ProjectStore } from "../core/projects.js";
 import { scanLocalProjects as defaultScanLocalProjects } from "../core/local-projects.js";
 import { SessionStore } from "../core/sessions.js";
-import { CodexDesktopConnector } from "../connectors/codex-desktop/index.js";
+import { CodexDesktopConnector, normalizeCodexErrorText } from "../connectors/codex-desktop/index.js";
 import { CodexCliConnector } from "../connectors/codex-cli/index.js";
 import feishuPlugin from "../channels/feishu/index.js";
 import wechatPlugin from "../channels/wechat/index.js";
@@ -1245,13 +1245,14 @@ export function createComoteState({
         void errorStack.runtime.completeInboundFeedback?.(event.threadId);
       }
       const errLive = liveCardRuntime(binding?.channel);
+      const errorMessage = normalizeCodexErrorText(event.message) || "Codex 报告了一个错误";
       if (errLive && errLive.hasThreadCard(event.threadId)) {
         errLive
           .finishThreadCard(
             event.threadId,
             errLive.buildStatusCard({
               phase: "error",
-              text: t("state.error.card", { message: event.message }),
+              text: t("state.error.card", { message: errorMessage }),
               activities: activityByThread.get(event.threadId) ?? [],
               done: true,
             }),
@@ -1261,14 +1262,14 @@ export function createComoteState({
         streamItemsByThread.delete(event.threadId);
         activityByThread.delete(event.threadId);
         progressByThread.delete(event.threadId);
-        eventLog.error("Codex 错误", { threadId: event.threadId, message: event.message });
+        eventLog.error("Codex 错误", { threadId: event.threadId, message: errorMessage });
         return;
       }
       streamTextByThread.delete(event.threadId);
       streamItemsByThread.delete(event.threadId);
       activityByThread.delete(event.threadId);
       progressByThread.delete(event.threadId);
-      eventLog.error("Codex 错误", { threadId: event.threadId, message: event.message });
+      eventLog.error("Codex 错误", { threadId: event.threadId, message: errorMessage });
       if (!binding) {
         eventLog.warn("收到 Codex 输出但找不到对应会话，未转发", {
           threadId: event.threadId ?? null,
@@ -1280,7 +1281,7 @@ export function createComoteState({
         conversationId: binding.conversationId,
         ...(binding.accountId ? { accountId: binding.accountId } : {}),
         kind: "text",
-        text: t("state.error.reply", { message: event.message }),
+        text: t("state.error.reply", { message: errorMessage }),
         dedupeKey: `error:${event.threadId ?? ""}:${Date.now()}`,
       });
       deliverIfPush(binding.channel);

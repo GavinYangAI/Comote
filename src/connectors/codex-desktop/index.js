@@ -341,10 +341,11 @@ export class CodexDesktopConnector {
       // connection down (handled by handleDisconnect) or is followed by
       // turn/completed; both reset accumulation. So we deliberately do not
       // touch changedPathsByThread here.
+      const message = normalizeCodexErrorText(params);
       this.#emit({
         type: "error",
         threadId: params.threadId ?? null,
-        message: params.message ?? params.error ?? "Codex 报告了一个错误",
+        message: message || "Codex 报告了一个错误",
       });
     }
   }
@@ -682,6 +683,50 @@ function compactToolDetail(value, max = 300) {
   const text = JSON.stringify(value, null, 2);
   if (text.length <= max) return text;
   return `${text.slice(0, max - 3)}...`;
+}
+
+export function normalizeCodexErrorText(value, seen = new WeakSet()) {
+  if (value == null) return "";
+  if (typeof value === "string") return value.trim();
+  if (typeof value === "number" || typeof value === "boolean" || typeof value === "bigint") {
+    return String(value);
+  }
+  if (value instanceof Error) {
+    const parts = [];
+    const message = typeof value.message === "string" ? value.message.trim() : "";
+    if (message) {
+      parts.push(message);
+    }
+    const cause = normalizeCodexErrorText(value.cause, seen);
+    if (cause && !parts.includes(cause)) {
+      parts.push(cause);
+    }
+    return parts.join("\n");
+  }
+  if (typeof value !== "object") {
+    return String(value);
+  }
+  if (seen.has(value)) {
+    return "";
+  }
+  seen.add(value);
+  const parts = [];
+  for (const key of ["message", "additionalDetails", "details", "detail", "error", "description", "reason"]) {
+    if (!(key in value)) continue;
+    const text = normalizeCodexErrorText(value[key], seen);
+    if (text && !parts.includes(text)) {
+      parts.push(text);
+    }
+  }
+  if (parts.length > 0) {
+    return parts.join("\n");
+  }
+  try {
+    const json = JSON.stringify(value, null, 2);
+    return json && json !== "{}" ? json : String(value);
+  } catch {
+    return String(value);
+  }
 }
 
 // Pure helper: basename of the first changed path in a patch update, used as a
