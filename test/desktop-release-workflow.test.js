@@ -28,6 +28,18 @@ test("desktop release notes cover every commit since the previous stable tag", a
   assert.doesNotMatch(workflow, /Build release notes from CHANGELOG/);
 });
 
+test("desktop release notes render direct asset links in the downloads table", async () => {
+  const workflow = await readFile(workflowPath, "utf8");
+
+  assert.match(workflow, /MAC_DMG="Comote-\$\{VERSION\}-arm64\.dmg"/);
+  assert.match(workflow, /WINDOWS_SETUP="Comote-Setup-\$\{VERSION\}-x64\.exe"/);
+  assert.match(workflow, /Expected release artifact missing: \$ARTIFACT/);
+  assert.match(workflow, /RELEASE_DOWNLOAD_BASE="https:\/\/github\.com\/\$\{GITHUB_REPOSITORY\}\/releases\/download\/\$\{RELEASE_TAG\}"/);
+  assert.match(workflow, /\| Platform \/ 平台 \| Architecture \/ 架构 \| Download \/ 下载 \|/);
+  assert.match(workflow, /printf '\| macOS \| Apple Silicon \(arm64\) \| \[%s\]\(%s\/%s\) \|\\n' "\$MAC_DMG" "\$RELEASE_DOWNLOAD_BASE" "\$MAC_DMG"/);
+  assert.match(workflow, /printf '\| Windows \| x64 \| \[%s\]\(%s\/%s\) \|\\n\\n' "\$WINDOWS_SETUP" "\$RELEASE_DOWNLOAD_BASE" "\$WINDOWS_SETUP"/);
+});
+
 test("main-branch prereleases do not publish the npm package", async () => {
   const workflow = await readFile(workflowPath, "utf8");
 

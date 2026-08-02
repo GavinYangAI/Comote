@@ -200,13 +200,24 @@ jobs:
             NOTES_HEADING="Changes"
           fi
           NOTES="$(git log --format='- %s (`%h`)' "$CHANGE_RANGE")"
+          MAC_DMG="Comote-${VERSION}-arm64.dmg"
+          WINDOWS_SETUP="Comote-Setup-${VERSION}-x64.exe"
+          for ARTIFACT in "$MAC_DMG" "$WINDOWS_SETUP"; do
+            if [ ! -f "release-artifacts/$ARTIFACT" ]; then
+              echo "Expected release artifact missing: $ARTIFACT" >&2
+              exit 1
+            fi
+          done
+          RELEASE_DOWNLOAD_BASE="https://github.com/${GITHUB_REPOSITORY}/releases/download/${RELEASE_TAG}"
 
           {
             printf '### %s\n\n' "$NOTES_HEADING"
             if [ -n "$NOTES" ]; then printf '%s\n' "$NOTES"; else printf '%s\n' '- No commits in this range.'; fi
             printf '\n### Downloads / 下载\n\n'
-            printf -- '- **macOS (Apple Silicon)** — `Comote-*-arm64.dmg`\n'
-            printf -- '- **Windows x64** — `Comote-Setup-*-x64.exe`\n\n'
+            printf '| Platform / 平台 | Architecture / 架构 | Download / 下载 |\n'
+            printf '| --- | --- | --- |\n'
+            printf '| macOS | Apple Silicon (arm64) | [%s](%s/%s) |\n' "$MAC_DMG" "$RELEASE_DOWNLOAD_BASE" "$MAC_DMG"
+            printf '| Windows | x64 | [%s](%s/%s) |\n\n' "$WINDOWS_SETUP" "$RELEASE_DOWNLOAD_BASE" "$WINDOWS_SETUP"
             printf 'See the [README](https://github.com/GavinYangAI/comote#readme) for installation and setup. / 安装与配置见 [README](https://github.com/GavinYangAI/comote#readme)。\n'
           } > RELEASE_BODY.md
           echo "tag=$RELEASE_TAG" >> "$GITHUB_OUTPUT"
