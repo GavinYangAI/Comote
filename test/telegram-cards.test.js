@@ -124,6 +124,34 @@ test("statusHtml puts tool activity in an expandable blockquote", () => {
   assert.match(html, /answer &lt;ready&gt;/);
 });
 
+test("statusHtml keeps expandable tool activity at its event position", () => {
+  const html = statusHtml({
+    phase: "streaming",
+    content: [
+      { type: "text", text: "before tools" },
+      { type: "activities", activities: ["running npm"] },
+      { type: "text", text: "after tools" },
+    ],
+  });
+  assert.ok(html.indexOf("before tools") < html.indexOf("<blockquote expandable>"));
+  assert.ok(html.indexOf("running npm") < html.indexOf("after tools"));
+});
+
+test("statusHtml clamps multiple text blocks as one body and keeps the latest block", () => {
+  const latest = "latest-tail";
+  const html = statusHtml({
+    phase: "streaming",
+    content: [
+      { type: "text", text: "a".repeat(3000) },
+      { type: "activities", activities: ["running npm"] },
+      { type: "text", text: `${"b".repeat(3000)}${latest}` },
+    ],
+  });
+  assert.ok(html.length <= 4096);
+  assert.match(html, /running npm/);
+  assert.match(html, new RegExp(latest));
+});
+
 test("generatePairingCode is 8 chars from the safe alphabet, deterministic under injected rng", () => {
   const code = generatePairingCode(() => 0); // always picks alphabet[0]
   assert.equal(code.length, 8);

@@ -87,20 +87,32 @@ export function pickerCardData({ pickKind, title, text = "", items = [], convers
 
 // Raw status fields (renderer turns these into a cardParamMap). Part B uses this
 // for the live thread card; Part A ships it so the renderer's buildStatusCard exists.
-export function statusCardData({ phase, threadId = null, steps = 0, text = "", done = false, activities = [] }) {
+export function statusCardData({ phase, threadId = null, steps = 0, text = "", done = false, activities = [], content = [] }) {
   const titleKey = PHASE_TITLE[phase] ?? PHASE_TITLE.progress;
-  const tools = activities.length > 0
-    ? `**${t("card.tools.title", { count: activities.length })}**\n${activities.map(formatActivityMarkdown).join("\n")}`
-    : "";
+  const body = content.length > 0
+    ? content.map(formatContentBlock).filter(Boolean).join("\n\n")
+    : [formatActivityBlock(activities), String(text ?? "")].filter(Boolean).join("\n\n");
   return {
     title: t(titleKey),
-    body: [tools, String(text ?? "")].filter(Boolean).join("\n\n"),
+    body,
     steps: steps > 0 ? t("card.steps.running", { steps }) : t("card.steps.starting"),
     threadId: threadId ?? "",
     done,
     cancelLabel: t("card.cancelButton"),
     cancelParams: threadId && !done ? { action: "cancel", threadId } : null,
   };
+}
+
+function formatContentBlock(block) {
+  if (block?.type === "text") return String(block.text ?? "");
+  if (block?.type === "activities") return formatActivityBlock(block.activities ?? []);
+  return "";
+}
+
+function formatActivityBlock(activities) {
+  return activities.length > 0
+    ? `**${t("card.tools.title", { count: activities.length })}**\n${activities.map(formatActivityMarkdown).join("\n")}`
+    : "";
 }
 
 function formatActivityMarkdown(activity) {

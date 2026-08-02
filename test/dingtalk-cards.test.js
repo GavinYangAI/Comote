@@ -67,6 +67,19 @@ test("statusCardData includes tool activity in the card body", () => {
   assert.match(data.body, /answer/);
 });
 
+test("statusCardData keeps tool activity between its surrounding text blocks", () => {
+  const data = statusCardData({
+    phase: "streaming",
+    content: [
+      { type: "text", text: "before tools" },
+      { type: "activities", activities: ["running npm"] },
+      { type: "text", text: "after tools" },
+    ],
+  });
+  assert.ok(data.body.indexOf("before tools") < data.body.indexOf("running npm"));
+  assert.ok(data.body.indexOf("running npm") < data.body.indexOf("after tools"));
+});
+
 test("approvalResolvedCardData reflects the decision", () => {
   const accepted = approvalResolvedCardData({ code: "a1", decision: "accept" });
   assert.match(accepted.title, /a1/);

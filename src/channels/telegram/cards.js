@@ -114,33 +114,92 @@ export function cancelKeyboard(threadId) {
   return { inline_keyboard: [[{ text: t("card.cancelButton"), callback_data: encodeCallback({ action: "cancel", threadId }) }]] };
 }
 
-export function statusText({ phase, steps = 0, text = "", activities = [] }) {
+export function statusText({ phase, steps = 0, text = "", activities = [], content = [] }) {
   const title = t(PHASE_TITLE[phase] ?? PHASE_TITLE.progress);
   const stepLine = steps > 0 ? t("card.steps.running", { steps }) : t("card.steps.starting");
-  const toolItems = activities.map(formatActivityText).join("\n");
-  const tools = activities.length > 0
-    ? `${t("card.tools.title", { count: activities.length })}\n${toolItems}`
-    : "";
+  const orderedContent = statusContent(content, text, activities);
+  const toolLength = orderedContent
+    .filter((block) => block.type === "activities")
+    .flatMap((block) => block.activities)
+    .map(formatActivityText)
+    .join("\n").length;
   // Clamp the body so the assembled card stays under Telegram's 4096-char ceiling;
   // a too-long editMessageText would 400 and strand the card mid-progress.
-  const body = clampStatusBody(String(text ?? ""), Math.max(500, STATUS_BODY_LIMIT - tools.length));
-  return [title, stepLine, tools, body].filter(Boolean).join("\n\n");
+  const blocks = clampContentText(orderedContent, Math.max(500, STATUS_BODY_LIMIT - toolLength))
+    .map(formatContentText)
+    .filter(Boolean);
+  return [title, stepLine, ...blocks].filter(Boolean).join("\n\n");
 }
 
 // Telegram supports expandable blockquotes in HTML messages. Keep the normal
 // answer visible and place tool activity in a collapsed block so live updates
 // stay readable without losing operational detail.
-export function statusHtml({ phase, steps = 0, text = "", activities = [] }) {
+export function statusHtml({ phase, steps = 0, text = "", activities = [], content = [] }) {
   const title = escapeHtml(t(PHASE_TITLE[phase] ?? PHASE_TITLE.progress));
   const stepLine = escapeHtml(steps > 0 ? t("card.steps.running", { steps }) : t("card.steps.starting"));
-  const toolPlainText = activities.map(formatActivityText).join("\n");
-  const body = markdownToTelegramHtml(
-    clampStatusBody(String(text ?? ""), Math.max(500, STATUS_BODY_LIMIT - toolPlainText.length)),
+  const orderedContent = statusContent(content, text, activities);
+  const toolLength = orderedContent
+    .filter((block) => block.type === "activities")
+    .flatMap((block) => block.activities)
+    .map(formatActivityText)
+    .join("\n").length;
+  const blocks = clampContentText(orderedContent, Math.max(500, STATUS_BODY_LIMIT - toolLength))
+    .map(formatContentHtml)
+    .filter(Boolean);
+  return [title, stepLine, ...blocks].filter(Boolean).join("\n\n");
+}
+
+function statusContent(content, text, activities) {
+  if (content.length > 0) return content;
+  return [
+    ...(activities.length > 0 ? [{ type: "activities", activities }] : []),
+    ...(text ? [{ type: "text", text: String(text) }] : []),
+  ];
+}
+
+function formatContentText(block) {
+  if (block.type === "text") return block.text;
+  const items = block.activities.map(formatActivityText).join("\n");
+  return items ? `${t("card.tools.title", { count: block.activities.length })}\n${items}` : "";
+}
+
+function formatContentHtml(block) {
+  if (block.type === "text") return markdownToTelegramHtml(block.text);
+  if (block.activities.length === 0) return "";
+  return `<blockquote expandable><b>${escapeHtml(t("card.tools.title", { count: block.activities.length }))}</b>\n${block.activities.map(formatActivityHtml).join("\n")}</blockquote>`;
+}
+
+function clampContentText(content, limit) {
+  const total = content.reduce(
+    (sum, block) => sum + (block.type === "text" ? String(block.text ?? "").length : 0),
+    0,
   );
-  const tools = activities.length > 0
-    ? `<blockquote expandable><b>${escapeHtml(t("card.tools.title", { count: activities.length }))}</b>\n${activities.map(formatActivityHtml).join("\n")}</blockquote>`
-    : "";
-  return [title, stepLine, tools, body].filter(Boolean).join("\n\n");
+  if (total <= limit) return content;
+
+  const marker = t("state.chunk.truncated");
+  let remove = total - limit + marker.length + 1;
+  let marked = false;
+  return content
+    .map((block) => {
+      if (block.type !== "text" || remove <= 0) return block;
+      const value = String(block.text ?? "");
+      if (value.length <= remove) {
+        remove -= value.length;
+        return { ...block, text: "" };
+      }
+      const text = `${marker}\n${value.slice(remove)}`;
+      remove = 0;
+      marked = true;
+      return { ...block, text };
+    })
+    .filter((block) => block.type !== "text" || block.text)
+    .map((block, index, blocks) => {
+      if (marked || block.type !== "text" || index !== blocks.findIndex((entry) => entry.type === "text")) {
+        return block;
+      }
+      marked = true;
+      return { ...block, text: `${marker}\n${block.text}` };
+    });
 }
 
 function activityParts(activity) {

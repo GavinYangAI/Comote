@@ -284,6 +284,78 @@ test("a live card preserves every agent message produced during one turn", async
   assert.equal(finalCard.match(/First, I inspected the code\./g)?.length, 1, "delta completion does not duplicate one item");
 });
 
+test("a live card places tool summaries where the tools were used", async () => {
+  const { transport, desktop, state } = buildState();
+  await desktop.client.connect();
+  state.commandRouter.conversationByIdentity.set("feishu:ou_owner", {
+    channel: "feishu",
+    conversationId: "oc_chat",
+  });
+  state.commandRouter.bindThreadForIdentity(
+    { channel: "feishu", stableId: "ou_owner" },
+    "thread_ordered_tools",
+  );
+
+  const calls = { sent: [], updated: [] };
+  state.runtime.feishu.__setTestDriver({
+    getStatus: () => ({ state: "configured" }),
+    verifyEvent: () => true,
+    async sendCard(message) {
+      calls.sent.push(message);
+      return { messageId: "om_ordered_tools" };
+    },
+    async updateCard(message) {
+      calls.updated.push(message);
+      return { code: 0 };
+    },
+  });
+
+  transport.receive({ jsonrpc: "2.0", method: "turn/started", params: { threadId: "thread_ordered_tools" } });
+  await tick();
+  transport.receive({
+    jsonrpc: "2.0",
+    method: "item/completed",
+    params: {
+      threadId: "thread_ordered_tools",
+      item: { type: "agentMessage", id: "commentary_before", text: "I will inspect the code." },
+    },
+  });
+  transport.receive({
+    jsonrpc: "2.0",
+    method: "item/started",
+    params: {
+      threadId: "thread_ordered_tools",
+      item: { type: "commandExecution", id: "command_1", command: "npm test" },
+    },
+  });
+  transport.receive({
+    jsonrpc: "2.0",
+    method: "item/completed",
+    params: {
+      threadId: "thread_ordered_tools",
+      item: { type: "agentMessage", id: "commentary_after", text: "The tests passed." },
+    },
+  });
+  transport.receive({
+    jsonrpc: "2.0",
+    method: "item/started",
+    params: {
+      threadId: "thread_ordered_tools",
+      item: { type: "commandExecution", id: "command_2", command: "npm test" },
+    },
+  });
+  transport.receive({ jsonrpc: "2.0", method: "turn/completed", params: { threadId: "thread_ordered_tools" } });
+  await waitFor(() => calls.updated.length > 0);
+
+  const elements = calls.updated.at(-1).card.elements;
+  const before = elements.findIndex((element) => element.content === "I will inspect the code.");
+  const tools = elements.findIndex((element) => element.tag === "collapsible_panel");
+  const after = elements.findIndex((element) => element.content === "The tests passed.");
+  const laterTools = elements.findLastIndex((element) => element.tag === "collapsible_panel");
+  assert.ok(before < tools && tools < after, "tool summary remains between its surrounding commentary");
+  assert.ok(after < laterTools, "the same tool used after later commentary remains at its later position");
+});
+
 // Lets queued microtasks (the async card calls) settle.
 function tick() {
   return new Promise((resolve) => setTimeout(resolve, 5));

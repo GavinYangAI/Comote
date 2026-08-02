@@ -66,27 +66,24 @@ export function textCard(text) {
   };
 }
 
-export function statusCard({ phase, threadId = null, steps = 0, text = "", done = false, files = [], activities = [] }) {
+export function statusCard({ phase, threadId = null, steps = 0, text = "", done = false, files = [], activities = [], content = [] }) {
   const meta = PHASES[phase] ?? PHASES.progress;
   const elements = [];
   if (phase === "started" || phase === "progress") {
     elements.push({ tag: "markdown", content: stepsLine(steps) });
   }
-  if (activities.length > 0) {
-    elements.push({
-      tag: "collapsible_panel",
-      expanded: false,
-      header: {
-        title: {
-          tag: "plain_text",
-          content: t("card.tools.title", { count: activities.length }),
-        },
-      },
-      elements: renderMarkdown(activities.map(formatActivityMarkdown).join("\n\n")),
-    });
-  }
-  if (text) {
-    elements.push(...renderMarkdown(text));
+  const orderedContent = content.length > 0
+    ? content
+    : [
+        ...(activities.length > 0 ? [{ type: "activities", activities }] : []),
+        ...(text ? [{ type: "text", text }] : []),
+      ];
+  for (const block of orderedContent) {
+    if (block.type === "activities" && block.activities?.length > 0) {
+      elements.push(activityPanel(block.activities));
+    } else if (block.type === "text" && block.text) {
+      elements.push(...renderMarkdown(block.text));
+    }
   }
   if (!done && threadId) {
     elements.push({
@@ -125,6 +122,20 @@ export function statusCard({ phase, threadId = null, steps = 0, text = "", done 
     config: { wide_screen_mode: true },
     header: { title: { tag: "plain_text", content: t(meta.titleKey) }, template: meta.template },
     elements: elements.length > 0 ? elements : [{ tag: "markdown", content: "…" }],
+  };
+}
+
+function activityPanel(activities) {
+  return {
+    tag: "collapsible_panel",
+    expanded: false,
+    header: {
+      title: {
+        tag: "plain_text",
+        content: t("card.tools.title", { count: activities.length }),
+      },
+    },
+    elements: renderMarkdown(activities.map(formatActivityMarkdown).join("\n\n")),
   };
 }
 

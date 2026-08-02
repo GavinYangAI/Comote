@@ -76,6 +76,21 @@ test("statusCard renders tool activity inside the card", () => {
   assert.match(body, /edited app\.js/);
 });
 
+test("statusCard keeps tool activity between the text blocks where it occurred", () => {
+  const card = statusCard({
+    phase: "streaming",
+    content: [
+      { type: "text", text: "before tools" },
+      { type: "activities", activities: ["running npm"] },
+      { type: "text", text: "after tools" },
+    ],
+  });
+  const before = card.elements.findIndex((element) => element.content === "before tools");
+  const tools = card.elements.findIndex((element) => element.tag === "collapsible_panel");
+  const after = card.elements.findIndex((element) => element.content === "after tools");
+  assert.ok(before < tools && tools < after);
+});
+
 test("approvalCard carries approve/session/decline button values", () => {
   const card = approvalCard({ shortCode: "a1", detail: "rm -rf build" });
   assert.match(card.header.title.content, /a1/);

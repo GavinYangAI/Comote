@@ -528,6 +528,7 @@ export function createComoteState({
     streamTextByThread.clear();
     streamItemsByThread.clear();
     activityByThread.clear();
+    contentByThread.clear();
     progressByThread.clear();
     for (const stack of channelStacks.values()) {
       if (stack.plugin.meta.capabilities?.reactions) {
@@ -785,6 +786,9 @@ export function createComoteState({
   const progressByThread = new Map();
   // threadId -> all agent-message text assembled for the current turn.
   const streamTextByThread = new Map();
+  // threadId -> ordered live-card content blocks. Agent text keeps the position
+  // where its item first appeared; consecutive tool events share one block.
+  const contentByThread = new Map();
   // A turn can contain multiple agent-message items (for example commentary
   // followed by a final answer). Track each item separately so a later item
   // updates its own slot instead of replacing everything already shown.
@@ -803,11 +807,17 @@ export function createComoteState({
     }
     if (!state.textByItem.has(key)) {
       state.order.push(key);
+      const content = contentByThread.get(threadId) ?? [];
+      content.push({ type: "text", key, text: "" });
+      contentByThread.set(threadId, content);
     }
     const incoming = String(text ?? "");
     const previous = state.textByItem.get(key) ?? "";
     // An empty completion/update must not erase a non-empty streamed prefix.
     state.textByItem.set(key, incoming || previous);
+    const content = contentByThread.get(threadId) ?? [];
+    const textBlock = content.find((block) => block.type === "text" && block.key === key);
+    if (textBlock) textBlock.text = incoming || previous;
     if (completed && !itemId) {
       state.anonymousKey = null;
     }
@@ -821,6 +831,47 @@ export function createComoteState({
   // threadId -> latest tool/file milestones rendered inside the live card.
   // Keep a short tail so platform message limits remain predictable.
   const activityByThread = new Map();
+  function appendThreadActivity(threadId, activity) {
+    const activities = activityByThread.get(threadId) ?? [];
+    const content = contentByThread.get(threadId) ?? [];
+    const lastBlock = content.at(-1);
+    const previous = lastBlock?.type === "activities" ? lastBlock.activities.at(-1) : null;
+    const duplicate = typeof activity === "string"
+      ? previous === activity
+      : typeof previous !== "string"
+        && previous != null
+        && previous?.label === activity.label
+        && previous?.detail === activity.detail;
+    if (duplicate) return activities;
+
+    activities.push(activity);
+    if (lastBlock?.type === "activities") {
+      lastBlock.activities.push(activity);
+    } else {
+      content.push({ type: "activities", activities: [activity] });
+    }
+
+    if (activities.length > 8) {
+      activities.shift();
+      const firstActivityBlock = content.find((block) => block.type === "activities");
+      firstActivityBlock?.activities.shift();
+      const emptyIndex = content.findIndex(
+        (block) => block.type === "activities" && block.activities.length === 0,
+      );
+      if (emptyIndex >= 0) content.splice(emptyIndex, 1);
+    }
+    activityByThread.set(threadId, activities);
+    contentByThread.set(threadId, content);
+    return activities;
+  }
+
+  function threadContent(threadId) {
+    return (contentByThread.get(threadId) ?? []).map((block) =>
+      block.type === "activities"
+        ? { type: "activities", activities: [...block.activities] }
+        : { type: "text", text: block.text },
+    );
+  }
   // Workflow B milestone state, keyed by threadId. Each entry tracks the running
   // sequence (dedupeKey source), the per-turn delivery count, the last delivered
   // {kind,label} (consecutive-dedup), the throttle timestamp + a pending coalesce
@@ -893,6 +944,7 @@ export function createComoteState({
       streamTextByThread.delete(event.threadId);
       streamItemsByThread.delete(event.threadId);
       activityByThread.delete(event.threadId);
+      contentByThread.delete(event.threadId);
       // Advance the per-thread turn nonce for EVERY channel — both the milestone
       // key and the agent: fallback key fold it in, and push channels (milestones
       // off) still rely on the latter. Must precede initMilestoneState, which
@@ -953,11 +1005,16 @@ export function createComoteState({
       const completedLive = liveCardRuntime(completedBinding?.channel);
       if (completedLive && completedLive.hasThreadCard(event.threadId)) {
         const tail = streamTextByThread.get(event.threadId) ?? t("state.completed.fallback");
+        const content = threadContent(event.threadId);
+        if (!content.some((block) => block.type === "text" && block.text)) {
+          content.push({ type: "text", text: tail });
+        }
         const claimedSession = completedLive.detachThreadCard(event.threadId);
         void deliverChangedFilesAndFinish(completedLive, completedBinding, {
           ...event,
           text: tail,
           activities: [...(activityByThread.get(event.threadId) ?? [])],
+          content,
         }, claimedSession).catch((error) => {
           completedLive.lastError = error.message;
         });
@@ -965,6 +1022,7 @@ export function createComoteState({
       streamTextByThread.delete(event.threadId);
       streamItemsByThread.delete(event.threadId);
       activityByThread.delete(event.threadId);
+      contentByThread.delete(event.threadId);
       sleepGuard.release(event.threadId);
       eventLog.info("Codex turn 完成", { threadId: event.threadId });
       return;
@@ -978,12 +1036,7 @@ export function createComoteState({
           event.decision === "decline" ? "card.approval.rejected" : "card.approval.accepted",
           { code: event.approval.shortCode },
         );
-        const activities = activityByThread.get(event.approval.threadId) ?? [];
-        if (activities.at(-1) !== resolvedLine) {
-          activities.push(resolvedLine);
-          if (activities.length > 8) activities.shift();
-          activityByThread.set(event.approval.threadId, activities);
-        }
+        const activities = appendThreadActivity(event.approval.threadId, resolvedLine);
         const progress = progressByThread.get(event.approval.threadId);
         resolvedLive.updateThreadCard(
           event.approval.threadId,
@@ -993,6 +1046,7 @@ export function createComoteState({
             steps: progress?.count ?? activities.length,
             text: streamTextByThread.get(event.approval.threadId) ?? "",
             activities,
+            content: threadContent(event.approval.threadId),
           }),
         );
       }
@@ -1056,6 +1110,7 @@ export function createComoteState({
             steps: entry.count,
             text: streamTextByThread.get(event.threadId) ?? "",
             activities: activityByThread.get(event.threadId) ?? [],
+            content: threadContent(event.threadId),
           }),
         );
         return;
@@ -1088,13 +1143,7 @@ export function createComoteState({
         const item = { kind: event.kind, label: event.label ?? null, status: event.status ?? null };
         const line = milestoneText(item);
         const activity = { label: line, detail: event.detail ?? null };
-        const activities = activityByThread.get(event.threadId) ?? [];
-        const previous = activities.at(-1);
-        if (typeof previous === "string" || previous?.label !== activity.label || previous?.detail !== activity.detail) {
-          activities.push(activity);
-          if (activities.length > 8) activities.shift();
-          activityByThread.set(event.threadId, activities);
-        }
+        const activities = appendThreadActivity(event.threadId, activity);
         const progress = progressByThread.get(event.threadId);
         milestoneLive.updateThreadCard(
           event.threadId,
@@ -1104,6 +1153,7 @@ export function createComoteState({
             steps: progress?.count ?? activities.length,
             text: streamTextByThread.get(event.threadId) ?? "",
             activities,
+            content: threadContent(event.threadId),
           }),
         );
         return;
@@ -1126,6 +1176,7 @@ export function createComoteState({
           threadId: event.threadId,
           text,
           activities: activityByThread.get(event.threadId) ?? [],
+          content: threadContent(event.threadId),
         }),
       );
       return;
@@ -1153,6 +1204,7 @@ export function createComoteState({
             threadId: event.threadId,
             text,
             activities: activityByThread.get(event.threadId) ?? [],
+            content: threadContent(event.threadId),
           }),
         );
         persistInBackground();
@@ -1254,6 +1306,10 @@ export function createComoteState({
               phase: "error",
               text: t("state.error.card", { message: errorMessage }),
               activities: activityByThread.get(event.threadId) ?? [],
+              content: [
+                ...threadContent(event.threadId),
+                { type: "text", text: t("state.error.card", { message: errorMessage }) },
+              ],
               done: true,
             }),
           )
@@ -1261,6 +1317,7 @@ export function createComoteState({
         streamTextByThread.delete(event.threadId);
         streamItemsByThread.delete(event.threadId);
         activityByThread.delete(event.threadId);
+        contentByThread.delete(event.threadId);
         progressByThread.delete(event.threadId);
         eventLog.error("Codex 错误", { threadId: event.threadId, message: errorMessage });
         return;
@@ -1268,6 +1325,7 @@ export function createComoteState({
       streamTextByThread.delete(event.threadId);
       streamItemsByThread.delete(event.threadId);
       activityByThread.delete(event.threadId);
+      contentByThread.delete(event.threadId);
       progressByThread.delete(event.threadId);
       eventLog.error("Codex 错误", { threadId: event.threadId, message: errorMessage });
       if (!binding) {
@@ -1522,6 +1580,7 @@ export function createComoteState({
       threadId: event.threadId,
       text: event.text ?? "",
       activities: event.activities ?? activityByThread.get(event.threadId) ?? [],
+      content: event.content ?? threadContent(event.threadId),
       done: true,
       files: plan.buttonFiles,
     });
