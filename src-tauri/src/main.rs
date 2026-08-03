@@ -340,28 +340,20 @@ fn main() {
         })
         .on_window_event(|window, event| {
             if let WindowEvent::CloseRequested { api, .. } = event {
-                let app_handle = window.app_handle();
-                if should_keep_daemon_alive(app_handle) {
-                    // Keep the phone bridge available only when the user has
-                    // explicitly enabled background operation.
-                    let _ = window.hide();
-                    api.prevent_close();
-                } else {
-                    // A tray icon keeps the event loop alive after the last
-                    // window closes, so explicitly exit and stop the sidecar.
-                    api.prevent_close();
-                    app_handle.exit(0);
-                }
+                // Closing the window only hides it. The tray menu is the
+                // explicit exit path, so the local daemon and IM bridge stay
+                // available while the desktop window is dismissed.
+                let _ = window.hide();
+                api.prevent_close();
             }
         })
         .build(tauri::generate_context!())
         .expect("error while building Comote");
 
     app.run(|app_handle, event| {
-        // Window close either hides or requests app termination depending on
-        // the keep-alive preference. ExitRequested does not fire on every quit
-        // path (e.g. an Apple-Event quit), so handle the final RunEvent::Exit
-        // too; the stop/release helpers are idempotent (they take the handle).
+        // The tray menu requests termination explicitly. ExitRequested does not
+        // fire on every quit path (e.g. an Apple-Event quit), so handle the
+        // final RunEvent::Exit too; the stop/release helpers are idempotent.
         match event {
             RunEvent::ExitRequested { .. } | RunEvent::Exit => handle_app_exit(app_handle),
             _ => {}

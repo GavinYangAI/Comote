@@ -209,6 +209,98 @@ test("Codex streaming for a Feishu thread drives a live card", async () => {
   assert.equal(state.outboundReplies.list({ channel: "feishu" }).length, 0);
 });
 
+test("a new Codex turn opens a new Feishu card and isolates late old events", async () => {
+  const { transport, desktop, state } = buildState();
+  await desktop.client.connect();
+
+  state.commandRouter.conversationByIdentity.set("feishu:ou_owner", {
+    channel: "feishu",
+    conversationId: "oc_chat",
+  });
+  state.commandRouter.bindThreadForIdentity(
+    { channel: "feishu", stableId: "ou_owner" },
+    "thread_turns",
+  );
+
+  const calls = { sent: [], updated: [] };
+  state.runtime.feishu.__setTestDriver({
+    getStatus: () => ({ state: "configured" }),
+    verifyEvent: () => true,
+    async sendCard(message) {
+      calls.sent.push(message);
+      return { messageId: `om_turn_${calls.sent.length}` };
+    },
+    async updateCard(message) {
+      calls.updated.push(message);
+      return { code: 0 };
+    },
+  });
+
+  transport.receive({
+    jsonrpc: "2.0",
+    method: "turn/started",
+    params: { threadId: "thread_turns", turnId: "turn_1" },
+  });
+  await waitFor(() => calls.sent.length === 1);
+
+  transport.receive({
+    jsonrpc: "2.0",
+    method: "item/agentMessage/delta",
+    params: { threadId: "thread_turns", turnId: "turn_1", itemId: "old_item", delta: "old prefix" },
+  });
+  transport.receive({
+    jsonrpc: "2.0",
+    method: "turn/started",
+    params: { threadId: "thread_turns", turnId: "turn_2" },
+  });
+  await waitFor(() => calls.sent.length === 2);
+
+  // The old turn's late completion must not be rendered into turn 2's card.
+  transport.receive({
+    jsonrpc: "2.0",
+    method: "item/completed",
+    params: {
+      threadId: "thread_turns",
+      turnId: "turn_1",
+      item: { type: "agentMessage", id: "old_item", text: "old final" },
+    },
+  });
+  transport.receive({
+    jsonrpc: "2.0",
+    method: "item/completed",
+    params: {
+      threadId: "thread_turns",
+      turnId: "turn_2",
+      item: { type: "agentMessage", id: "new_item", text: "new answer" },
+    },
+  });
+  await waitFor(() => calls.updated.some((call) =>
+    call.messageId === "om_turn_2" && JSON.stringify(call.card).includes("new answer")));
+
+  assert.equal(calls.sent.length, 2, "the second turn has its own card message");
+  assert.ok(
+    calls.updated.some((call) => call.messageId === "om_turn_2"),
+    "new-turn output updates the new card",
+  );
+  assert.ok(
+    !calls.updated.some((call) =>
+      call.messageId === "om_turn_1" && JSON.stringify(call.card).includes("new answer")),
+    "new-turn output never updates the old card",
+  );
+
+  transport.receive({
+    jsonrpc: "2.0",
+    method: "turn/completed",
+    params: { threadId: "thread_turns", turnId: "turn_1" },
+  });
+  transport.receive({
+    jsonrpc: "2.0",
+    method: "turn/completed",
+    params: { threadId: "thread_turns", turnId: "turn_2" },
+  });
+  await tick();
+});
+
 for (const interruption of [
   {
     name: "a recoverable Codex error",

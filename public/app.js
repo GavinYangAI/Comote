@@ -111,7 +111,7 @@ if (isTauri) {
   );
 }
 
-// Wires the "keep daemon alive after quit" toggle. Only meaningful inside the
+// Wires the "keep daemon alive after tray quit" toggle. Only meaningful inside the
 // desktop app (the preference is read by the Rust quit path), so the panel stays
 // hidden in a plain browser where the command does not exist.
 async function setupKeepAliveToggle() {

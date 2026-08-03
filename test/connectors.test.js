@@ -1040,12 +1040,14 @@ test("desktop connector accumulates Codex 0.136 agentMessage deltas", async () =
       threadId: "thread_7",
       itemId: "item_9",
       text: "partial ",
+      turnId: "turn_1",
     },
     {
       type: "agentMessageDelta",
       threadId: "thread_7",
       itemId: "item_9",
       text: "partial answer",
+      turnId: "turn_1",
     },
   ]);
 });

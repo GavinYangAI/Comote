@@ -46,6 +46,7 @@ export class CodexDesktopConnector {
     // Assumption: one active turn per connection at a time.
     this.changedPathsByThread = new Map();
     this._activeThreadId = null;
+    this._activeTurnId = null;
     // `${threadId}:${itemId}` -> accumulated agent text for Codex 0.136+
     // delta notifications, which only carry the newest text chunk.
     this.agentMessageTextByItem = new Map();
@@ -88,6 +89,7 @@ export class CodexDesktopConnector {
     // text would otherwise accumulate forever. Drop it alongside the paths.
     this.agentMessageTextByItem.clear();
     this._activeThreadId = null;
+    this._activeTurnId = null;
     this.#emit({ type: "connectionLost" });
     this.scheduleReconnect(1);
   }
@@ -201,6 +203,7 @@ export class CodexDesktopConnector {
       method,
       params: request.params,
       threadId: request.params?.threadId ?? null,
+      ...(request.params?.turnId != null ? { turnId: request.params.turnId } : {}),
       changes: itemId ? this.fileChangesByItem.get(itemId) ?? null : null,
     };
     this.pendingApprovals.set(key, approval);
@@ -229,11 +232,13 @@ export class CodexDesktopConnector {
         label: firstChangePathBasename(params.changes),
         detail: fileChangeDetail(params.changes),
         threadId: params.threadId ?? null,
+        ...(this.#eventTurnId(params) != null ? { turnId: this.#eventTurnId(params) } : {}),
       });
       return;
     }
     if (method === "item/agentMessage/delta" && params.itemId) {
-      const key = agentMessageKey(params.threadId, params.itemId);
+      const turnId = this.#eventTurnId(params);
+      const key = agentMessageKey(params.threadId, params.itemId, turnId);
       const text = `${this.agentMessageTextByItem.get(key) ?? ""}${params.delta ?? ""}`;
       this.agentMessageTextByItem.set(key, text);
       this.#emit({
@@ -241,15 +246,18 @@ export class CodexDesktopConnector {
         threadId: params.threadId ?? null,
         itemId: params.itemId ?? null,
         text,
+        ...(turnId != null ? { turnId } : {}),
       });
       return;
     }
     if (method === "item/updated" && params.item?.type === "agentMessage") {
+      const turnId = this.#eventTurnId(params);
       this.#emit({
         type: "agentMessageDelta",
         threadId: params.threadId ?? null,
         itemId: params.item.id ?? null,
         text: params.item.text ?? "",
+        ...(turnId != null ? { turnId } : {}),
       });
       return;
     }
@@ -258,11 +266,12 @@ export class CodexDesktopConnector {
       // paths accumulated during the turn are already available here. Read but
       // do NOT clear them — turn/completed remains the one that clears.
       const threadId = params.threadId ?? this._activeThreadId ?? null;
+      const turnId = this.#eventTurnId(params);
       const set = threadId != null ? this.changedPathsByThread.get(threadId) : null;
       // The agent message is final: drop its accumulated delta text so the map
       // does not leak across turns (Codex 0.136+ delta accumulation).
       if (params.item.id) {
-        this.agentMessageTextByItem.delete(agentMessageKey(params.threadId, params.item.id));
+        this.agentMessageTextByItem.delete(agentMessageKey(params.threadId, params.item.id, turnId));
       }
       this.#emit({
         type: "agentMessage",
@@ -270,29 +279,51 @@ export class CodexDesktopConnector {
         itemId: params.item.id ?? null,
         text: params.item.text ?? "",
         changedPaths: set ? [...set] : [],
+        ...(turnId != null ? { turnId } : {}),
       });
       return;
     }
     if (method === "turn/started") {
       this._activeThreadId = params.threadId ?? null;
-      this.#emit({ type: "turnStarted", threadId: params.threadId ?? null });
+      this._activeTurnId = params.turnId ?? null;
+      this.#emit({
+        type: "turnStarted",
+        threadId: params.threadId ?? null,
+        ...(params.turnId != null ? { turnId: params.turnId } : {}),
+      });
       return;
     }
     if (method === "turn/completed") {
       const threadId = params.threadId ?? this._activeThreadId ?? null;
+      // Keep a missing protocol turnId missing. The state layer has a FIFO
+      // fallback for older servers; substituting the newest active turn here
+      // would mislabel a late completion from an interrupted older turn.
+      const turnId = params.turnId ?? null;
       const set = threadId != null ? this.changedPathsByThread.get(threadId) : null;
       const changedPaths = set ? [...set] : [];
       if (threadId != null) {
         this.changedPathsByThread.delete(threadId);
       }
       this._activeThreadId = null;
-      this.#emit({ type: "turnCompleted", threadId: params.threadId ?? null, changedPaths });
+      this._activeTurnId = null;
+      this.#emit({
+        type: "turnCompleted",
+        threadId: params.threadId ?? null,
+        changedPaths,
+        ...(turnId != null ? { turnId } : {}),
+      });
       return;
     }
     if (method === "item/started") {
+      const turnId = this.#eventTurnId(params);
       const itemType = params.item?.type;
       if (itemType === "commandExecution" || itemType === "fileChange") {
-        this.#emit({ type: "progress", threadId: params.threadId ?? null, itemType });
+        this.#emit({
+          type: "progress",
+          threadId: params.threadId ?? null,
+          itemType,
+          ...(turnId != null ? { turnId } : {}),
+        });
       }
       // A command starting is a discrete milestone for the IM return path: label
       // is the command's first word (the program), null-safe when absent.
@@ -303,11 +334,13 @@ export class CodexDesktopConnector {
           label: commandLabel(params.item?.command),
           detail: commandDetail(params.item),
           threadId: params.threadId ?? null,
+          ...(turnId != null ? { turnId } : {}),
         });
       }
       return;
     }
     if (method === "item/completed" && params.item?.type === "commandExecution") {
+      const turnId = this.#eventTurnId(params);
       // Only surface a milestone when the command FAILED — a non-zero exit is the
       // signal worth interrupting the user for. Successful commands stay silent
       // so the IM return path is not flooded with every shell step.
@@ -320,6 +353,7 @@ export class CodexDesktopConnector {
           detail: commandDetail(params.item),
           status: "failed",
           threadId: params.threadId ?? null,
+          ...(turnId != null ? { turnId } : {}),
         });
       }
       return;
@@ -342,12 +376,18 @@ export class CodexDesktopConnector {
       // turn/completed; both reset accumulation. So we deliberately do not
       // touch changedPathsByThread here.
       const message = normalizeCodexErrorText(params);
+      const turnId = this.#eventTurnId(params);
       this.#emit({
         type: "error",
         threadId: params.threadId ?? null,
         message: message || "Codex 报告了一个错误",
+        ...(turnId != null ? { turnId } : {}),
       });
     }
+  }
+
+  #eventTurnId(params) {
+    return params.turnId ?? this._activeTurnId ?? null;
   }
 
   // Accumulates absolute paths of files changed during the active turn, keyed
@@ -1044,8 +1084,10 @@ function textFromContent(content) {
   return parts.length > 0 ? parts.join("\n") : null;
 }
 
-function agentMessageKey(threadId, itemId) {
-  return `${threadId ?? ""}:${itemId ?? ""}`;
+function agentMessageKey(threadId, itemId, turnId = null) {
+  return turnId == null
+    ? `${threadId ?? ""}:${itemId ?? ""}`
+    : `${threadId ?? ""}:${turnId}:${itemId ?? ""}`;
 }
 
 function isMethodMissingError(error) {
