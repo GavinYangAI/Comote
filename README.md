@@ -159,7 +159,7 @@ cp .env.example .env
 docker compose up -d --build
 ```
 
-浏览器访问 `http://127.0.0.1:16208/`。Compose 仅把网关发布到宿主机回环地址；网关负责向内部 Comote API 注入 token。容器会挂载宿主机的 `~/.comote`、`~/.codex` 和当前项目目录，分别用于持久化 Comote 状态、复用 Codex 登录状态，以及让容器内 Codex 操作此项目。
+浏览器访问 `http://127.0.0.1:16208/`。Compose 仅把网关发布到宿主机回环地址；网关负责向内部 Comote API 注入 token。容器会挂载宿主机的 `~/.comote`、Codex 的 `auth.json`/`config.toml` 和当前项目目录，分别用于持久化 Comote 状态、复用 Codex 登录状态，以及让容器内 Codex 操作此项目。Codex 的 Linux SQLite 状态保存在独立 Docker volume 中，避免与正在运行的 Windows Codex Desktop 争用同一数据库。
 
 默认基础镜像使用固定 digest 的 DaoCloud Docker Hub 代理，以适配 Docker Hub 访问受限的网络；可在 `.env` 中通过 `NODE_IMAGE` 和 `NGINX_IMAGE` 切换到官方或自建镜像源。
 
