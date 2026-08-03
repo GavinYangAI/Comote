@@ -1,10 +1,9 @@
-.comote/
-.private-docs/
-docs/
-.DS_Store
-node_modules/
+.git
+.github
 .env
+.comote/
 logs/
+node_modules/
 dist/
 release/
 build-assets/
@@ -12,6 +11,3 @@ src-tauri/target/
 src-tauri/binaries/
 src-tauri/gen/
 npm-debug.log*
-.gstack/
-build-assets/runtime-deps/
-.superpowers/

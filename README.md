@@ -150,6 +150,32 @@ Linux / 无界面服务器请看[下面](#linux--无界面服务器headless-vps)
 
 ## 配置与参考
 
+### Docker 运行
+
+项目根目录已提供 `Dockerfile` 和 `docker-compose.yml`。首次运行先复制环境变量模板并生成一个长随机 token：
+
+```bash
+cp .env.example .env
+docker compose up -d --build
+```
+
+浏览器访问 `http://127.0.0.1:16208/`。Compose 仅把网关发布到宿主机回环地址；网关负责向内部 Comote API 注入 token。容器会挂载宿主机的 `~/.comote`、`~/.codex` 和当前项目目录，分别用于持久化 Comote 状态、复用 Codex 登录状态，以及让容器内 Codex 操作此项目。
+
+默认基础镜像使用固定 digest 的 DaoCloud Docker Hub 代理，以适配 Docker Hub 访问受限的网络；可在 `.env` 中通过 `NODE_IMAGE` 和 `NGINX_IMAGE` 切换到官方或自建镜像源。
+
+查看状态和日志：
+
+```bash
+docker compose ps
+docker compose logs -f comote
+```
+
+停止服务：
+
+```bash
+docker compose down
+```
+
 ### 配置的三层结构
 
 Comote 的配置分三层，各管各的：

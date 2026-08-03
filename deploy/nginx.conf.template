@@ -1,0 +1,13 @@
+server {
+    listen 16208;
+    server_name _;
+
+    location /api/ {
+        proxy_set_header X-Comote-Token "${COMOTE_LOCAL_API_TOKEN}";
+        proxy_pass http://comote:16208;
+    }
+
+    location / {
+        proxy_pass http://comote:16208;
+    }
+}
