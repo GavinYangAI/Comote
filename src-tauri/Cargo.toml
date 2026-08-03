@@ -1,6 +1,6 @@
 [package]
 name = "comote"
-version = "0.7.4"
+version = "0.8.0"
 description = "Comote local remote companion for Codex Desktop."
 authors = ["Comote"]
 edition = "2021"
