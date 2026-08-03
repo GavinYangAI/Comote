@@ -517,6 +517,96 @@ test("/automode rejects invalid values and requires an active conversation", asy
   assert.match(missing.text, /\/use <编号>.*\/new <消息>/);
 });
 
+test("/model selects a model, then reasoning effort, and persists the settings", async () => {
+  const calls = [];
+  const desktop = {
+    getStatus: () => ({ state: "connected" }),
+    async resumeThread(params) {
+      calls.push(["resume", params]);
+      return {
+        thread: {
+          id: "thread_1",
+          model: "gpt-5.2",
+          reasoningEffort: "medium",
+        },
+      };
+    },
+    async listModels() {
+      return {
+        data: [
+          {
+            model: "gpt-5.2",
+            displayName: "GPT-5.2",
+            supportedReasoningEfforts: ["low", "medium", "high"],
+          },
+          {
+            model: "gpt-5.2-codex",
+            displayName: "GPT-5.2 Codex",
+            supportedReasoningEfforts: [{ reasoningEffort: "high" }],
+          },
+        ],
+      };
+    },
+    async updateThreadSettings(params) {
+      calls.push(["settings", params]);
+    },
+  };
+  const { authorization, projects, sessions, router } = makeRouter({ codexDesktop: desktop });
+  const identity = { channel: "wechat", stableId: "model-owner", displayName: "Alice" };
+  authorization.confirmIdentity(identity);
+  projects.replaceProjects([{ name: "comote", path: "/repo", source: "manual", status: "available" }]);
+  router.handleMessage({ identity, text: "/open 1" });
+  sessions.upsertExternalSession({
+    projectPath: "/repo",
+    id: "thread_1",
+    title: "Model test",
+    identityKey: "wechat:model-owner",
+  });
+
+  const models = await router.handleMessageAsync({ identity, text: "/model" });
+  assert.equal(models.picker.pickKind, "model");
+  assert.deepEqual(models.picker.items.map((item) => item.label), ["GPT-5.2", "GPT-5.2 Codex"]);
+
+  const reasoning = await router.handleMessageAsync({ identity, text: "2" });
+  assert.equal(reasoning.picker.pickKind, "reasoning");
+  assert.deepEqual(reasoning.picker.items.map((item) => item.label), ["high"]);
+
+  const changed = await router.handleMessageAsync({ identity, text: "1" });
+  assert.match(changed.text, /GPT-5\.2 Codex/);
+  assert.match(changed.text, /high/);
+  assert.deepEqual(calls.at(-1), ["settings", {
+    threadId: "thread_1",
+    model: "gpt-5.2-codex",
+    reasoningEffort: "high",
+  }]);
+  assert.deepEqual(router.getThreadSettings("thread_1"), {
+    model: "gpt-5.2-codex",
+    reasoningEffort: "high",
+  });
+  assert.equal(router.pendingByIdentity.has(router.identityKey(identity)), false);
+});
+
+test("/cancel exits either stage of the /model picker", async () => {
+  const desktop = {
+    getStatus: () => ({ state: "connected" }),
+    async listModels() { return { data: [{ model: "gpt-5.2", supportedReasoningEfforts: ["low"] }] }; },
+    async resumeThread() { return { thread: { id: "thread_1", model: "gpt-5.2" } }; },
+    async updateThreadSettings() {},
+  };
+  const { authorization, projects, sessions, router } = makeRouter({ codexDesktop: desktop });
+  const identity = { channel: "wechat", stableId: "cancel-model", displayName: "Alice" };
+  authorization.confirmIdentity(identity);
+  projects.replaceProjects([{ name: "comote", path: "/repo", source: "manual", status: "available" }]);
+  router.handleMessage({ identity, text: "/open 1" });
+  sessions.upsertExternalSession({ projectPath: "/repo", id: "thread_1", title: "Model test", identityKey: "wechat:cancel-model" });
+
+  await router.handleMessageAsync({ identity, text: "/model" });
+  assert.match((await router.handleMessageAsync({ identity, text: "/cancel" })).text, /退出选择/);
+  await router.handleMessageAsync({ identity, text: "/model" });
+  await router.handleMessageAsync({ identity, text: "1" });
+  assert.match((await router.handleMessageAsync({ identity, text: "/cancel" })).text, /退出选择/);
+});
+
 test("/new falls back to Codex CLI when Desktop is disconnected", async () => {
   const authorization = new AuthorizationStore();
   const projects = new ProjectStore();

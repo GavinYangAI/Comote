@@ -147,6 +147,7 @@ export function createComoteState({
     codexDesktop: desktop,
     codexCli: cli,
     outboundQueue: outboundReplies,
+    persist: async () => stateRef.persist?.(),
     persisted: persisted.router ?? {},
     transcript,
     scanLocalProjects,
@@ -475,6 +476,17 @@ export function createComoteState({
     return liveCardRuntime(channel) === null;
   }
 
+  function buildLiveStatusCard(live, status) {
+    const settings = status.threadId ? commandRouter.getThreadSettings(status.threadId) : null;
+    return live.buildStatusCard({
+      ...status,
+      model: status.model ?? settings?.model ?? null,
+      reasoningEffort: status.reasoningEffort !== undefined
+        ? status.reasoningEffort
+        : settings?.reasoningEffort,
+    });
+  }
+
   // Finishes every open live-card session across all live-card channels with a
   // terminal card. Only use this when reconnecting has given up: connectionLost
   // and app-server error notifications can be followed by more events for the
@@ -519,7 +531,7 @@ export function createComoteState({
   function finishLiveCardsAfterConnectionGaveUp() {
     notifyDisconnectToCardlessThreads();
     finishAllLiveCards((live) =>
-      live.buildStatusCard({
+      buildLiveStatusCard(live, {
         phase: "error",
         text: t("state.error.card", { message: DISCONNECT_NOTICE }),
         done: true,
@@ -548,7 +560,7 @@ export function createComoteState({
       for (const threadId of [...sessions.keys()]) {
         live.updateThreadCard(
           threadId,
-          live.buildStatusCard({
+          buildLiveStatusCard(live, {
             phase: "progress",
             threadId,
             text: DISCONNECT_NOTICE,
@@ -991,7 +1003,7 @@ export function createComoteState({
           .openThreadCard({
             threadId: event.threadId,
             conversationId: startedBinding.conversationId,
-            card: startedLive.buildStatusCard({ phase: "started", threadId: event.threadId }),
+            card: buildLiveStatusCard(startedLive, { phase: "started", threadId: event.threadId }),
           })
           .catch((error) => {
             startedLive.lastError = error.message;
@@ -1060,7 +1072,7 @@ export function createComoteState({
         const progress = progressByThread.get(event.approval.threadId);
         resolvedLive.updateThreadCard(
           event.approval.threadId,
-          resolvedLive.buildStatusCard({
+          buildLiveStatusCard(resolvedLive, {
             phase: "progress",
             threadId: event.approval.threadId,
             steps: progress?.count ?? activities.length,
@@ -1117,7 +1129,7 @@ export function createComoteState({
         progressByThread.set(event.threadId, entry);
         progressLive.updateThreadCard(
           event.threadId,
-          progressLive.buildStatusCard({
+          buildLiveStatusCard(progressLive, {
             phase: "progress",
             threadId: event.threadId,
             steps: entry.count,
@@ -1160,7 +1172,7 @@ export function createComoteState({
         const progress = progressByThread.get(event.threadId);
         milestoneLive.updateThreadCard(
           event.threadId,
-          milestoneLive.buildStatusCard({
+          buildLiveStatusCard(milestoneLive, {
             phase: "progress",
             threadId: event.threadId,
             steps: progress?.count ?? activities.length,
@@ -1184,7 +1196,7 @@ export function createComoteState({
       const text = updateStreamText(event.threadId, event.itemId, event.text);
       deltaLive.updateThreadCard(
         event.threadId,
-        deltaLive.buildStatusCard({
+        buildLiveStatusCard(deltaLive, {
           phase: "streaming",
           threadId: event.threadId,
           text,
@@ -1212,7 +1224,7 @@ export function createComoteState({
         const text = updateStreamText(event.threadId, event.itemId, event.text, { completed: true });
         msgLive.updateThreadCard(
           event.threadId,
-          msgLive.buildStatusCard({
+          buildLiveStatusCard(msgLive, {
             phase: "streaming",
             threadId: event.threadId,
             text,
@@ -1293,7 +1305,7 @@ export function createComoteState({
         content.push({ type: "text", text: errorText });
         errLive.updateThreadCard(
           event.threadId,
-          errLive.buildStatusCard({
+          buildLiveStatusCard(errLive, {
             phase: "error",
             threadId: event.threadId,
             text: errorText,
@@ -1557,7 +1569,7 @@ export function createComoteState({
         dedupeKey: `changedfiles:${binding.conversationId}:${event.threadId}:${stamp}:${i}`,
       });
     });
-    const completedCard = live.buildStatusCard({
+    const completedCard = buildLiveStatusCard(live, {
       phase: "completed",
       threadId: event.threadId,
       text: event.text ?? "",

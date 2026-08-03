@@ -55,6 +55,12 @@ test("statusCardData maps phase to a localized title + body text", () => {
   assert.equal(data.done, true); // raw boolean — renderer.buildStatusCard stringifies via toParamMap
 });
 
+test("statusCardData shows the current model and reasoning effort", () => {
+  const data = statusCardData({ phase: "progress", model: "gpt-5.2-codex", reasoningEffort: "high" });
+  assert.match(data.body, /gpt-5\.2-codex/);
+  assert.match(data.body, /high/);
+});
+
 test("statusCardData includes tool activity in the card body", () => {
   const data = statusCardData({
     phase: "progress",

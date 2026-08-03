@@ -66,11 +66,15 @@ export function textCard(text) {
   };
 }
 
-export function statusCard({ phase, threadId = null, steps = 0, text = "", done = false, files = [], activities = [], content = [] }) {
+export function statusCard({ phase, threadId = null, steps = 0, text = "", done = false, files = [], activities = [], content = [], model = null, reasoningEffort = undefined }) {
   const meta = PHASES[phase] ?? PHASES.progress;
   const elements = [];
   if (phase === "started" || phase === "progress") {
     elements.push({ tag: "markdown", content: stepsLine(steps) });
+  }
+  const settings = modelSettingsLine(model, reasoningEffort);
+  if (settings) {
+    elements.push({ tag: "markdown", content: settings });
   }
   const orderedContent = content.length > 0
     ? content
@@ -230,13 +234,28 @@ export function pickerCard({ kind, title, items = [], text = "" }) {
       value: { kind: "pick", pickKind: kind, index: String(item.index) },
     })),
   });
-  const headerTitle =
-    title ?? t(kind === "project" ? "card.picker.project" : "card.picker.conversation");
+  const headerTitle = title ?? pickerTitle(kind);
   return {
     config: { wide_screen_mode: true },
     header: { title: { tag: "plain_text", content: headerTitle }, template: "blue" },
     elements,
   };
+}
+
+function pickerTitle(kind) {
+  if (kind === "model") return t("card.picker.model");
+  if (kind === "reasoning") return t("card.picker.reasoning");
+  return t(kind === "project" ? "card.picker.project" : "card.picker.conversation");
+}
+
+function modelSettingsLine(model, reasoningEffort) {
+  if (!model && reasoningEffort === undefined) {
+    return null;
+  }
+  return t("card.model.settings", {
+    model: model ?? t("card.model.unknown"),
+    reasoningEffort: reasoningEffort ?? t("card.model.defaultReasoning"),
+  });
 }
 
 function stepsLine(steps) {

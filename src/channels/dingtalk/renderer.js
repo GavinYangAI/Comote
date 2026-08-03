@@ -78,6 +78,8 @@ export function createDingTalkRenderer({ templates = {} } = {}) {
     },
 
     pickerTitle(pickKind) {
+      if (pickKind === "model") return t("card.picker.model");
+      if (pickKind === "reasoning") return t("card.picker.reasoning");
       return t(pickKind === "project" ? "card.picker.project" : "card.picker.conversation");
     },
 

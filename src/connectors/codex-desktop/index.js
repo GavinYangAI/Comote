@@ -472,6 +472,10 @@ export class CodexDesktopConnector {
     return this.client.request("thread/list", params);
   }
 
+  async listModels() {
+    return this.client.request("model/list", {});
+  }
+
   async listProjects({ limit = 100 } = {}) {
     // Two sources, merged: Codex Desktop's own workspace list (active
     // workspace first, then project order) AND projects derived from thread
@@ -555,11 +559,18 @@ export class CodexDesktopConnector {
     return this.client.request("thread/resume", params);
   }
 
-  async updateThreadSettings({ threadId, approvalsReviewer }) {
-    return this.client.request("thread/settings/update", {
-      threadId,
-      approvalsReviewer,
-    });
+  async updateThreadSettings({ threadId, approvalsReviewer, model, reasoningEffort }) {
+    const params = { threadId };
+    if (approvalsReviewer !== undefined) {
+      params.approvalsReviewer = approvalsReviewer;
+    }
+    if (model !== undefined) {
+      params.model = model;
+    }
+    if (reasoningEffort !== undefined) {
+      params.reasoningEffort = reasoningEffort;
+    }
+    return this.client.request("thread/settings/update", params);
   }
 
   async startTurn({ threadId, text, cwd = null, images = [] }) {

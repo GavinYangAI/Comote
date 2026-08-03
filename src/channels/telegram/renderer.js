@@ -107,9 +107,16 @@ export function createTelegramRenderer() {
         await driver.sendMessage({ chatId: reply.conversationId, text });
         return;
       }
+      const titleKey = reply.pickKind === "project"
+        ? "card.picker.project"
+        : reply.pickKind === "model"
+          ? "card.picker.model"
+          : reply.pickKind === "reasoning"
+            ? "card.picker.reasoning"
+            : "card.picker.conversation";
       await driver.sendMessage({
         chatId: reply.conversationId,
-        text: reply.text || t(reply.pickKind === "project" ? "card.picker.project" : "card.picker.conversation"),
+        text: reply.text || t(titleKey),
         replyMarkup: pickerKeyboard(reply.pickKind, items),
       });
     },

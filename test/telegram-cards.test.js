@@ -101,6 +101,15 @@ test("statusText renders phase title + body + steps", () => {
   assert.equal(typeof text, "string");
 });
 
+test("statusText and statusHtml show the current model and reasoning effort", () => {
+  const text = statusText({ phase: "progress", model: "gpt-5.2-codex", reasoningEffort: "high" });
+  const html = statusHtml({ phase: "progress", model: "gpt-5.2-codex", reasoningEffort: "high" });
+  assert.match(text, /gpt-5\.2-codex/);
+  assert.match(text, /high/);
+  assert.match(html, /gpt-5\.2-codex/);
+  assert.match(html, /high/);
+});
+
 test("statusText includes tool activity in the same message", () => {
   const text = statusText({ phase: "progress", activities: ["running npm", "edited app.js"] });
   assert.match(text, /running npm/);

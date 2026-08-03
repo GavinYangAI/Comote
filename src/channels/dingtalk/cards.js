@@ -79,7 +79,7 @@ export function pickerCardData({ pickKind, title, text = "", items = [], convers
     params: { action: "pick", pickKind, index: String(item.index), conv: conversationId },
   }));
   return {
-    title: title ?? t(pickKind === "project" ? "card.picker.project" : "card.picker.conversation"),
+    title: title ?? pickerTitle(pickKind),
     text: String(text ?? ""),
     [PICKER_OPTIONS_KEY]: JSON.stringify(options),
   };
@@ -87,11 +87,12 @@ export function pickerCardData({ pickKind, title, text = "", items = [], convers
 
 // Raw status fields (renderer turns these into a cardParamMap). Part B uses this
 // for the live thread card; Part A ships it so the renderer's buildStatusCard exists.
-export function statusCardData({ phase, threadId = null, steps = 0, text = "", done = false, activities = [], content = [] }) {
+export function statusCardData({ phase, threadId = null, steps = 0, text = "", done = false, activities = [], content = [], model = null, reasoningEffort = undefined }) {
   const titleKey = PHASE_TITLE[phase] ?? PHASE_TITLE.progress;
+  const settings = modelSettingsLine(model, reasoningEffort);
   const body = content.length > 0
-    ? content.map(formatContentBlock).filter(Boolean).join("\n\n")
-    : [formatActivityBlock(activities), String(text ?? "")].filter(Boolean).join("\n\n");
+    ? [settings, ...content.map(formatContentBlock)].filter(Boolean).join("\n\n")
+    : [settings, formatActivityBlock(activities), String(text ?? "")].filter(Boolean).join("\n\n");
   return {
     title: t(titleKey),
     body,
@@ -101,6 +102,22 @@ export function statusCardData({ phase, threadId = null, steps = 0, text = "", d
     cancelLabel: t("card.cancelButton"),
     cancelParams: threadId && !done ? { action: "cancel", threadId } : null,
   };
+}
+
+function pickerTitle(kind) {
+  if (kind === "model") return t("card.picker.model");
+  if (kind === "reasoning") return t("card.picker.reasoning");
+  return t(kind === "project" ? "card.picker.project" : "card.picker.conversation");
+}
+
+function modelSettingsLine(model, reasoningEffort) {
+  if (!model && reasoningEffort === undefined) {
+    return null;
+  }
+  return t("card.model.settings", {
+    model: model ?? t("card.model.unknown"),
+    reasoningEffort: reasoningEffort ?? t("card.model.defaultReasoning"),
+  });
 }
 
 function formatContentBlock(block) {

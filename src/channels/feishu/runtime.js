@@ -572,10 +572,13 @@ export class FeishuRuntimeService extends BaseChannelRuntime {
     }
     let reply;
     try {
-      reply =
-        pickKind === "project"
-          ? await router.chooseProject(identity, selector)
-          : await router.useSessionAsync(identity, selector);
+      reply = pickKind === "project"
+        ? await router.chooseProject(identity, selector)
+        : pickKind === "model"
+          ? await router.chooseModel(identity, selector)
+          : pickKind === "reasoning"
+            ? await router.chooseReasoning(identity, selector)
+            : await router.useSessionAsync(identity, selector);
     } catch (error) {
       this.eventLog?.error("飞书卡片点击：路由失败", { error: error.message });
       // Enqueue a semantic failure reply; the feishu renderer turns it into a

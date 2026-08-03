@@ -365,6 +365,41 @@ test("desktop connector switches the approval reviewer for subsequent turns", as
   await updatePromise;
 });
 
+test("desktop connector lists models and updates model reasoning settings", async () => {
+  const transport = new MemoryTransport();
+  const connector = new CodexDesktopConnector({ transport });
+
+  const modelsPromise = connector.listModels();
+  await flushAsyncWork();
+  assert.deepEqual(transport.sent[0], {
+    jsonrpc: "2.0",
+    id: 1,
+    method: "model/list",
+    params: {},
+  });
+  transport.receive({ jsonrpc: "2.0", id: 1, result: { data: [] } });
+  assert.deepEqual(await modelsPromise, { data: [] });
+
+  const updatePromise = connector.updateThreadSettings({
+    threadId: "thread_1",
+    model: "gpt-5.2-codex",
+    reasoningEffort: "high",
+  });
+  await flushAsyncWork();
+  assert.deepEqual(transport.sent[1], {
+    jsonrpc: "2.0",
+    id: 2,
+    method: "thread/settings/update",
+    params: {
+      threadId: "thread_1",
+      model: "gpt-5.2-codex",
+      reasoningEffort: "high",
+    },
+  });
+  transport.receive({ jsonrpc: "2.0", id: 2, result: {} });
+  await updatePromise;
+});
+
 test("desktop connector forwards images as localImage input items", async () => {
   const transport = new MemoryTransport();
   const connector = new CodexDesktopConnector({ transport });

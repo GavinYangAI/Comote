@@ -44,6 +44,12 @@ test("statusCard shows a cancel button while running", () => {
   assert.deepEqual(action.actions[0].value, { kind: "cancel", threadId: "t1" });
 });
 
+test("statusCard shows the current model and reasoning effort", () => {
+  const card = statusCard({ phase: "progress", model: "gpt-5.2-codex", reasoningEffort: "high" });
+  assert.ok(card.elements.some((element) =>
+    element.tag === "markdown" && /gpt-5\.2-codex/.test(element.content) && /high/.test(element.content)));
+});
+
 test("statusCard for a completed turn has no cancel button and shows text", () => {
   const card = statusCard({ phase: "completed", threadId: "t1", text: "done", done: true });
   assert.equal(card.header.template, "green");

@@ -431,7 +431,13 @@ export class TelegramRuntimeService extends BaseChannelRuntime {
     if (!router) return;
     let reply;
     try {
-      reply = pickKind === "project" ? await router.chooseProject(identity, selector) : await router.useSessionAsync(identity, selector);
+      reply = pickKind === "project"
+        ? await router.chooseProject(identity, selector)
+        : pickKind === "model"
+          ? await router.chooseModel(identity, selector)
+          : pickKind === "reasoning"
+            ? await router.chooseReasoning(identity, selector)
+            : await router.useSessionAsync(identity, selector);
     } catch (error) {
       this.eventLog?.error?.("Telegram 选择器点击：路由失败", { error: error.message });
       const semantic = routerReplyToSemantic({ kind: "text", text: error.message }, { channel: "telegram", conversationId });

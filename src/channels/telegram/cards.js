@@ -26,13 +26,14 @@ export const BOT_COMMANDS = [
   { command: "approve", description: "Approve a Codex request" },
   { command: "deny", description: "Deny a Codex request" },
   { command: "automode", description: "Toggle Approve for me" },
+  { command: "model", description: "Choose model and reasoning" },
   { command: "cancel", description: "Cancel the current task" },
   { command: "file", description: "Send a project file here" },
   { command: "help", description: "Show all commands" },
 ];
 
-const PICK_KIND_CODE = { project: "p", session: "s" };
-const PICK_KIND_NAME = { p: "project", s: "session" };
+const PICK_KIND_CODE = { project: "p", session: "s", model: "m", reasoning: "r" };
+const PICK_KIND_NAME = { p: "project", s: "session", m: "model", r: "reasoning" };
 
 const PHASE_TITLE = {
   started: "card.phase.started",
@@ -114,9 +115,10 @@ export function cancelKeyboard(threadId) {
   return { inline_keyboard: [[{ text: t("card.cancelButton"), callback_data: encodeCallback({ action: "cancel", threadId }) }]] };
 }
 
-export function statusText({ phase, steps = 0, text = "", activities = [], content = [] }) {
+export function statusText({ phase, steps = 0, text = "", activities = [], content = [], model = null, reasoningEffort = undefined }) {
   const title = t(PHASE_TITLE[phase] ?? PHASE_TITLE.progress);
   const stepLine = steps > 0 ? t("card.steps.running", { steps }) : t("card.steps.starting");
+  const settings = modelSettingsLine(model, reasoningEffort);
   const orderedContent = statusContent(content, text, activities);
   const toolLength = orderedContent
     .filter((block) => block.type === "activities")
@@ -128,15 +130,17 @@ export function statusText({ phase, steps = 0, text = "", activities = [], conte
   const blocks = clampContentText(orderedContent, Math.max(500, STATUS_BODY_LIMIT - toolLength))
     .map(formatContentText)
     .filter(Boolean);
-  return [title, stepLine, ...blocks].filter(Boolean).join("\n\n");
+  return [title, stepLine, settings, ...blocks].filter(Boolean).join("\n\n");
 }
 
 // Telegram supports expandable blockquotes in HTML messages. Keep the normal
 // answer visible and place tool activity in a collapsed block so live updates
 // stay readable without losing operational detail.
-export function statusHtml({ phase, steps = 0, text = "", activities = [], content = [] }) {
+export function statusHtml({ phase, steps = 0, text = "", activities = [], content = [], model = null, reasoningEffort = undefined }) {
   const title = escapeHtml(t(PHASE_TITLE[phase] ?? PHASE_TITLE.progress));
   const stepLine = escapeHtml(steps > 0 ? t("card.steps.running", { steps }) : t("card.steps.starting"));
+  const settings = modelSettingsLine(model, reasoningEffort);
+  const escapedSettings = settings ? escapeHtml(settings) : null;
   const orderedContent = statusContent(content, text, activities);
   const toolLength = orderedContent
     .filter((block) => block.type === "activities")
@@ -146,7 +150,17 @@ export function statusHtml({ phase, steps = 0, text = "", activities = [], conte
   const blocks = clampContentText(orderedContent, Math.max(500, STATUS_BODY_LIMIT - toolLength))
     .map(formatContentHtml)
     .filter(Boolean);
-  return [title, stepLine, ...blocks].filter(Boolean).join("\n\n");
+  return [title, stepLine, escapedSettings, ...blocks].filter(Boolean).join("\n\n");
+}
+
+function modelSettingsLine(model, reasoningEffort) {
+  if (!model && reasoningEffort === undefined) {
+    return null;
+  }
+  return t("card.model.settings", {
+    model: model ?? t("card.model.unknown"),
+    reasoningEffort: reasoningEffort ?? t("card.model.defaultReasoning"),
+  });
 }
 
 function statusContent(content, text, activities) {
