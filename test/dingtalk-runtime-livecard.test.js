@@ -51,3 +51,102 @@ test("openThreadCard without a status template id is a no-op (degrades silently)
   assert.equal(driver.created.length, 0);
   assert.equal(runtime.hasThreadCard("t1"), false);
 });
+
+test("live approval updates and resumes one status card instance", async () => {
+  const { runtime, driver } = makeRuntime();
+  await runtime.openThreadCard({
+    threadId: "t1",
+    conversationId: "s",
+    card: runtime.buildStatusCard({ phase: "started", threadId: "t1" }),
+  });
+  await runtime.showThreadApproval({
+    threadId: "t1",
+    code: "a1",
+    approval: { shortCode: "a1", params: { command: "npm test" } },
+  });
+  assert.equal(driver.created.length, 1, "approval reuses the created status card");
+  assert.equal(driver.updated.at(-1).outTrackId, driver.created[0].outTrackId);
+  assert.equal(driver.updated.at(-1).cardParamMap.approvalVisible, "true");
+
+  const updateCount = driver.updated.length;
+  runtime.updateThreadCard("t1", { title: "working", body: "latest" });
+  await runtime.flushThreadCard("t1");
+  assert.equal(driver.updated.length, updateCount, "approval remains visible while progress accumulates");
+
+  const updateCard = driver.updateCard.bind(driver);
+  let failResume = true;
+  driver.updateCard = async (message) => {
+    if (failResume) {
+      failResume = false;
+      throw new Error("temporary update failure");
+    }
+    return updateCard(message);
+  };
+  await assert.rejects(
+    () => runtime.resolveApprovalMessage({ code: "a1", decision: "accept" }),
+    /temporary update failure/,
+  );
+  assert.equal(runtime.cardSessions.get("t1").paused, true);
+  assert.equal(runtime.liveApprovalThreads.has("a1"), true);
+
+  await runtime.resolveApprovalMessage({ code: "a1", decision: "accept" });
+  assert.equal(driver.updated.at(-1).cardParamMap.body, "latest");
+});
+
+test("failed live approval display restores queued progress", async () => {
+  const { runtime, driver } = makeRuntime();
+  runtime.cardUpdateIntervalMs = 60_000;
+  await runtime.openThreadCard({
+    threadId: "t1",
+    conversationId: "s",
+    card: runtime.buildStatusCard({ phase: "started", threadId: "t1" }),
+  });
+  const queued = { title: "working", body: "queued" };
+  runtime.updateThreadCard("t1", queued);
+  driver.updateCard = async () => { throw new Error("approval update failed"); };
+
+  await assert.rejects(
+    () => runtime.showThreadApproval({
+      threadId: "t1",
+      code: "a-fail",
+      approval: { shortCode: "a-fail", params: { command: "npm test" } },
+    }),
+    /approval update failed/,
+  );
+  const session = runtime.cardSessions.get("t1");
+  assert.equal(session.paused, false);
+  assert.equal(session.pendingCard, queued);
+  assert.equal(session.resumeCard, null);
+  assert.equal(runtime.liveApprovalThreads.has("a-fail"), false);
+});
+
+test("live approval registers before its DingTalk update can be resolved", async () => {
+  const { runtime, driver } = makeRuntime();
+  let releaseApproval;
+  const approvalBlocked = new Promise((resolve) => { releaseApproval = resolve; });
+  let updateCount = 0;
+  driver.updateCard = async (message) => {
+    driver.updated.push(message);
+    updateCount += 1;
+    if (updateCount === 1) await approvalBlocked;
+  };
+  await runtime.openThreadCard({
+    threadId: "t-race",
+    conversationId: "s",
+    card: runtime.buildStatusCard({ phase: "started", threadId: "t-race" }),
+  });
+
+  const showing = runtime.showThreadApproval({
+    threadId: "t-race",
+    code: "a-race",
+    approval: { shortCode: "a-race", params: { command: "npm test" } },
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  const resolving = runtime.resolveApprovalMessage({ code: "a-race", decision: "accept" });
+  releaseApproval();
+  await Promise.all([showing, resolving]);
+
+  assert.equal(driver.updated[0].cardParamMap.approvalVisible, "true");
+  assert.equal(driver.updated.at(-1).cardParamMap.approvalVisible, "false");
+  assert.equal(runtime.cardSessions.get("t-race").paused, false);
+});

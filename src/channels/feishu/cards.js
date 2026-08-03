@@ -66,14 +66,28 @@ export function textCard(text) {
   };
 }
 
-export function statusCard({ phase, threadId = null, steps = 0, text = "", done = false, files = [] }) {
+export function statusCard({ phase, threadId = null, steps = 0, text = "", done = false, files = [], activities = [], content = [], model = null, reasoningEffort = undefined }) {
   const meta = PHASES[phase] ?? PHASES.progress;
   const elements = [];
   if (phase === "started" || phase === "progress") {
     elements.push({ tag: "markdown", content: stepsLine(steps) });
   }
-  if (text) {
-    elements.push(...renderMarkdown(text));
+  const settings = modelSettingsLine(model, reasoningEffort);
+  if (settings) {
+    elements.push({ tag: "markdown", content: settings });
+  }
+  const orderedContent = content.length > 0
+    ? content
+    : [
+        ...(activities.length > 0 ? [{ type: "activities", activities }] : []),
+        ...(text ? [{ type: "text", text }] : []),
+      ];
+  for (const block of orderedContent) {
+    if (block.type === "activities" && block.activities?.length > 0) {
+      elements.push(activityPanel(block.activities));
+    } else if (block.type === "text" && block.text) {
+      elements.push(...renderMarkdown(block.text));
+    }
   }
   if (!done && threadId) {
     elements.push({
@@ -115,20 +129,32 @@ export function statusCard({ phase, threadId = null, steps = 0, text = "", done 
   };
 }
 
-export function approvalCard({ shortCode, detail }) {
+function activityPanel(activities) {
   return {
-    config: { wide_screen_mode: true },
+    tag: "collapsible_panel",
+    expanded: false,
     header: {
-      title: { tag: "plain_text", content: t("card.approval.title", { code: shortCode }) },
-      template: "orange",
+      title: {
+        tag: "plain_text",
+        content: t("card.tools.title", { count: activities.length }),
+      },
     },
-    elements: [
-      { tag: "markdown", content: String(detail ?? t("card.approval.detailFallback")) },
+    elements: renderMarkdown(activities.map(formatActivityMarkdown).join("\n\n")),
+  };
+}
+
+export function approvalCard({ shortCode, detail, autoApproved = false }) {
+  const elements = [
+    { tag: "markdown", content: String(detail ?? t("card.approval.detailFallback")) },
+  ];
+  if (autoApproved) {
+    elements.push({ tag: "markdown", content: t("state.approval.autoApproved") });
+  } else {
+    elements.push(
       // Text-command fallback: card-action button callbacks are not guaranteed to
       // reach Comote (Feishu long-connection delivery of `card.action.trigger` is
       // app-config dependent), but `/approve|/deny <code>` always works over the
-      // message-event path. Surfacing it here means a user is never stuck with
-      // dead buttons and forced back to the Comote desktop to approve.
+      // message-event path.
       { tag: "markdown", content: t("state.approval.instructions", { code: shortCode }) },
       {
         tag: "action",
@@ -141,35 +167,57 @@ export function approvalCard({ shortCode, detail }) {
           },
           {
             tag: "button",
+            text: { tag: "plain_text", content: t("card.approval.acceptForSession") },
+            value: { kind: "approval", code: shortCode, decision: "acceptForSession" },
+          },
+          {
+            tag: "button",
             text: { tag: "plain_text", content: t("card.approval.reject") },
             type: "danger",
             value: { kind: "approval", code: shortCode, decision: "decline" },
           },
         ],
       },
-    ],
-  };
-}
-
-export function approvalResolvedCard({ code, decision }) {
-  const accepted = decision === "accept";
+    );
+  }
   return {
     config: { wide_screen_mode: true },
     header: {
-      title: {
-        tag: "plain_text",
-        content: accepted
-          ? t("card.approval.accepted", { code })
-          : t("card.approval.rejected", { code }),
-      },
-      template: accepted ? "green" : "grey",
+      title: { tag: "plain_text", content: t("card.approval.title", { code: shortCode }) },
+      template: "orange",
     },
-    elements: [
+    elements,
+  };
+}
+
+export function approvalResolvedCard({ code, decision, detail = "" }) {
+  const accepted = decision === "accept" || decision === "acceptForSession";
+  const status = accepted
+    ? t("card.approval.accepted", { code })
+    : t("card.approval.rejected", { code });
+  const elements = [];
+  if (detail) {
+    elements.push({ tag: "markdown", content: String(detail) });
+  }
+  elements.push({
+    tag: "action",
+    actions: [
       {
-        tag: "markdown",
-        content: accepted ? t("card.approval.acceptedBody") : t("card.approval.rejectedBody"),
+        tag: "button",
+        text: { tag: "plain_text", content: status },
+        // Feishu has no green success button type. Primary is the documented
+        // blue fallback; rejected approvals use the red danger type.
+        type: accepted ? "primary" : "danger",
       },
     ],
+  });
+  return {
+    config: { wide_screen_mode: true },
+    header: {
+      title: { tag: "plain_text", content: status },
+      template: accepted ? "green" : "red",
+    },
+    elements,
   };
 }
 
@@ -186,8 +234,7 @@ export function pickerCard({ kind, title, items = [], text = "" }) {
       value: { kind: "pick", pickKind: kind, index: String(item.index) },
     })),
   });
-  const headerTitle =
-    title ?? t(kind === "project" ? "card.picker.project" : "card.picker.conversation");
+  const headerTitle = title ?? pickerTitle(kind);
   return {
     config: { wide_screen_mode: true },
     header: { title: { tag: "plain_text", content: headerTitle }, template: "blue" },
@@ -195,8 +242,32 @@ export function pickerCard({ kind, title, items = [], text = "" }) {
   };
 }
 
+function pickerTitle(kind) {
+  if (kind === "model") return t("card.picker.model");
+  if (kind === "reasoning") return t("card.picker.reasoning");
+  return t(kind === "project" ? "card.picker.project" : "card.picker.conversation");
+}
+
+function modelSettingsLine(model, reasoningEffort) {
+  if (!model && reasoningEffort === undefined) {
+    return null;
+  }
+  return t("card.model.settings", {
+    model: model ?? t("card.model.unknown"),
+    reasoningEffort: reasoningEffort ?? t("card.model.defaultReasoning"),
+  });
+}
+
 function stepsLine(steps) {
   return steps > 0 ? t("card.steps.running", { steps }) : t("card.steps.starting");
+}
+
+function formatActivityMarkdown(activity) {
+  if (typeof activity === "string") return `- ${activity}`;
+  const label = String(activity?.label ?? "");
+  const detail = String(activity?.detail ?? "").trim();
+  if (!detail) return `- ${label}`;
+  return `- **${label}**\n\`\`\`\n${detail.replace(/\`\`\`/g, "` ` `")}\n\`\`\``;
 }
 
 function truncate(value, max) {

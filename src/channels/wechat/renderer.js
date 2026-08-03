@@ -30,7 +30,7 @@ export function createWeChatRenderer() {
     _textFor(reply) {
       switch (reply.kind) {
         case "approval":
-          return describeApprovalForChat(reply.approval);
+          return describeApprovalForChat(reply.approval, { autoApproved: reply.autoApproved });
         case "approvalResolved":
           // Resolution surfaces via the next agent reply; no extra wechat
           // message (matches current routeDesktopEvent, which only logs it).

@@ -3,7 +3,7 @@ import { stat } from "node:fs/promises";
 import { basename } from "node:path";
 import { t } from "../../core/i18n/index.js";
 import { describeApprovalForChat } from "../base/approval-format.js";
-import { approvalKeyboard, pickerKeyboard, cancelKeyboard, filesKeyboard, statusText, chunkMessage, markdownToTelegramHtml } from "./cards.js";
+import { approvalKeyboard, pickerKeyboard, cancelKeyboard, filesKeyboard, statusHtml, statusText, chunkMessage, markdownToTelegramHtml } from "./cards.js";
 
 // Telegram: photos ≤10MB via sendPhoto, documents ≤50MB via sendDocument; degrade
 // past the ceiling. Telegram natively supports inline keyboards, so approval/picker
@@ -21,23 +21,62 @@ export function createTelegramRenderer() {
       if (status.done && status.threadId && status.files?.length) {
         replyMarkup = filesKeyboard(status.threadId, status.files);
       }
-      return { text: statusText(status), replyMarkup };
+      return {
+        text: statusHtml(status),
+        plainText: statusText(status),
+        parseMode: "HTML",
+        replyMarkup,
+      };
     },
 
-    async render(reply, { driver }) {
+    buildApprovalCard({ code, approval, autoApproved = false }) {
+      return {
+        text: describeApprovalForChat(approval, { autoApproved }),
+        replyMarkup: autoApproved ? null : approvalKeyboard(code),
+      };
+    },
+
+    async render(reply, { driver, runtime = null }) {
       switch (reply.kind) {
         case "media":
           return this._renderMedia(reply, driver);
-        case "approval":
-          return driver.sendMessage({
+        case "approval": {
+          if (!reply.liveCardAttempted
+            && reply.approval?.threadId
+            && runtime?.hasThreadCard?.(reply.approval.threadId)
+            && typeof runtime.showThreadApproval === "function") {
+            const shown = await runtime.showThreadApproval({
+              threadId: reply.approval.threadId,
+              code: reply.code,
+              approval: reply.approval,
+              autoApproved: reply.autoApproved,
+            });
+            if (shown) return shown;
+          }
+          const text = describeApprovalForChat(reply.approval, { autoApproved: reply.autoApproved });
+          const result = await driver.sendMessage({
             chatId: reply.conversationId,
-            text: describeApprovalForChat(reply.approval),
-            replyMarkup: approvalKeyboard(reply.code),
+            text,
+            ...(reply.autoApproved ? {} : { replyMarkup: approvalKeyboard(reply.code) }),
           });
+          if (result?.message_id != null) {
+            runtime?.rememberApprovalMessage?.(reply.code, {
+              messageId: result.message_id,
+              conversationId: reply.conversationId,
+              approval: reply.approval,
+              text,
+            });
+          }
+          return result;
+        }
         case "picker":
           return this._renderPicker(reply, driver);
         case "approvalResolved":
-          return; // silent: handled by the callback_query
+          return runtime?.resolveApprovalMessage?.({
+            code: reply.code,
+            decision: reply.decision,
+            approval: reply.approval,
+          });
         case "status":
         case "text":
         default: {
@@ -80,9 +119,16 @@ export function createTelegramRenderer() {
         await driver.sendMessage({ chatId: reply.conversationId, text });
         return;
       }
+      const titleKey = reply.pickKind === "project"
+        ? "card.picker.project"
+        : reply.pickKind === "model"
+          ? "card.picker.model"
+          : reply.pickKind === "reasoning"
+            ? "card.picker.reasoning"
+            : "card.picker.conversation";
       await driver.sendMessage({
         chatId: reply.conversationId,
-        text: reply.text || t(reply.pickKind === "project" ? "card.picker.project" : "card.picker.conversation"),
+        text: reply.text || t(titleKey),
         replyMarkup: pickerKeyboard(reply.pickKind, items),
       });
     },

@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "Comote",
-  "version": "0.7.1",
+  "version": "0.8.0",
   "identifier": "dev.comote.desktop",
   "build": {
     "beforeDevCommand": "",
@@ -26,18 +26,19 @@
       "../build-assets/runtime-deps/node_modules": "comote-server/node_modules"
     },
     "icon": [
-      "../build-assets/AppIcon.png",
-      "../build-assets/AppIcon.icns",
-      "../build-assets/AppIcon.ico"
+      "icons/icon.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
     ],
     "macOS": {
       "minimumSystemVersion": "12.0"
     },
     "windows": {
       "nsis": {
-        "installerIcon": "../build-assets/AppIcon.ico",
+        "installerIcon": "icons/icon.ico",
         "installMode": "currentUser",
-        "displayLanguageSelector": false
+        "displayLanguageSelector": false,
+        "installerHooks": "installer-hooks.nsh"
       }
     }
   }

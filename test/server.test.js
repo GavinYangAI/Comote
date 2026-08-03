@@ -102,6 +102,7 @@ test("version API reports the running process id and version", async () => {
   server.close();
 
   assert.equal(response.status, 200);
+  assert.equal(body.service, "comote");
   // The Tauri shell parses pid from this response to adopt an already-running
   // daemon (B3b PID adoption), so it must be a positive integer.
   assert.equal(typeof body.pid, "number");
@@ -159,6 +160,21 @@ test("serves svg assets with an image content type", async () => {
   assert.equal(response.status, 200);
   assert.match(response.headers.get("content-type") ?? "", /image\/svg\+xml/);
   assert.match(body, /<svg/);
+});
+
+test("serves the web icon with a PNG content type", async () => {
+  const app = createServer();
+  const server = app.listen(0);
+  await new Promise((resolve) => server.once("listening", resolve));
+
+  const { port } = server.address();
+  const response = await fetch(`http://127.0.0.1:${port}/icon.png`);
+  const body = await response.arrayBuffer();
+  server.close();
+
+  assert.equal(response.status, 200);
+  assert.equal(response.headers.get("content-type"), "image/png");
+  assert.ok(body.byteLength > 0);
 });
 
 test("identity API confirms local authorization", async () => {
@@ -403,6 +419,38 @@ test("approval APIs expose and resolve pending Codex approvals", async () => {
   assert.deepEqual(resolved, { id: "approval_1", decision: "accept" });
 });
 
+test("approval API accepts session decisions and rejects unsupported values", async () => {
+  const decisions = [];
+  const state = createFakeState();
+  state.connectors.desktop = {
+    ...state.connectors.desktop,
+    async resolveApproval(id, decision) {
+      decisions.push([id, decision]);
+      return { id, decision };
+    },
+  };
+  const app = createServer(state);
+  const server = app.listen(0);
+  await new Promise((resolve) => server.once("listening", resolve));
+  const { port } = server.address();
+
+  const accepted = await fetch(`http://127.0.0.1:${port}/api/approvals/a1`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ decision: "acceptForSession" }),
+  });
+  const rejected = await fetch(`http://127.0.0.1:${port}/api/approvals/a2`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ decision: "anything" }),
+  });
+  server.close();
+
+  assert.equal(accepted.status, 200);
+  assert.equal(rejected.status, 400);
+  assert.deepEqual(decisions, [["a1", "acceptForSession"]]);
+});
+
 test("readJsonBody rejects oversized request bodies with a non-500 error response", async () => {
   const app = createServer();
   const server = app.listen(0);
@@ -462,6 +510,7 @@ test("GET /api/settings returns locale and supported list", async () => {
   assert.equal(response.status, 200);
   assert.equal(body.locale, "en");
   assert.equal(body.localeExplicit, true, "a persisted locale is an explicit choice");
+  assert.equal(body.preferredConnector, "desktop");
   assert.ok(body.supported.includes("ja"));
 
   // i18n locale is a module-level global; reset so other test files aren't polluted.
@@ -516,6 +565,41 @@ test("PUT /api/settings sets a valid locale and rejects an invalid one", async (
 
   // i18n locale is a module-level global; reset so other test files aren't polluted.
   setI18nLocale("zh");
+});
+
+test("PUT /api/settings persists a valid connector preference and rejects an invalid one", async () => {
+  let snapshot = null;
+  const state = createComoteState({
+    stateStore: { save: async (value) => { snapshot = value; } },
+    autoStartWeChatRuntime: false,
+    autoStartFeishuRuntime: false,
+    autoStartDingTalkRuntime: false,
+    autoStartTelegramRuntime: false,
+  });
+  const app = createServer(state);
+  const server = app.listen(0);
+  await new Promise((resolve) => server.once("listening", resolve));
+
+  const { port } = server.address();
+  const validResponse = await fetch(`http://127.0.0.1:${port}/api/settings`, {
+    method: "PUT",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ preferredConnector: "cli" }),
+  });
+  const valid = await validResponse.json();
+  const invalidResponse = await fetch(`http://127.0.0.1:${port}/api/settings`, {
+    method: "PUT",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ preferredConnector: "other" }),
+  });
+  server.close();
+
+  assert.equal(validResponse.status, 200);
+  assert.equal(valid.preferredConnector, "cli");
+  assert.equal(state.getSettings().preferredConnector, "cli");
+  assert.equal(snapshot.settings.preferredConnector, "cli");
+  assert.equal(invalidResponse.status, 400);
+  assert.equal(state.getSettings().preferredConnector, "cli");
 });
 
 test("wechat outbound queue lists replies and supports ack", async () => {

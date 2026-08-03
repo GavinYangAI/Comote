@@ -1,6 +1,12 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { describeApprovalForChat, approvalDetail, summarizeChanges, countDiffLines } from "../src/channels/base/approval-format.js";
+import {
+  describeApprovalForChat,
+  describeResolvedApprovalForChat,
+  approvalDetail,
+  summarizeChanges,
+  countDiffLines,
+} from "../src/channels/base/approval-format.js";
 
 test("countDiffLines counts +/- excluding headers", () => {
   const { added, removed } = countDiffLines("+++ a\n+x\n+y\n--- b\n-z");
@@ -17,6 +23,25 @@ test("describeApprovalForChat includes code, command and the /approve instructio
   const text = describeApprovalForChat({ shortCode: "a1", method: "exec", params: { command: "rm -rf build" } });
   assert.match(text, /rm -rf build/);
   assert.match(text, /\/approve a1/);
+});
+
+test("auto-approved chat text notifies without manual approval instructions", () => {
+  const text = describeApprovalForChat(
+    { shortCode: "a1", method: "exec", params: { command: "npm test" } },
+    { autoApproved: true },
+  );
+  assert.match(text, /自动模式/);
+  assert.doesNotMatch(text, /\/approve|\/deny/);
+});
+
+test("resolved chat text treats a session approval as approved", () => {
+  const text = describeResolvedApprovalForChat(
+    { method: "exec", params: { command: "npm test" } },
+    { code: "a1", decision: "acceptForSession" },
+  );
+  assert.match(text, /已批准/);
+  assert.match(text, /npm test/);
+  assert.doesNotMatch(text, /已拒绝|\/approve|\/deny/);
 });
 
 test("summarizeChanges lists changed paths with stats", () => {

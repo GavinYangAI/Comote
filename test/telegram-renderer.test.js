@@ -7,7 +7,7 @@ function fakeDriver() {
   const calls = [];
   return {
     calls,
-    async sendMessage(a) { calls.push(["sendMessage", a]); },
+    async sendMessage(a) { calls.push(["sendMessage", a]); return { message_id: 41 }; },
     async sendPhoto(a) { calls.push(["sendPhoto", a]); },
     async sendDocument(a) { calls.push(["sendDocument", a]); },
   };
@@ -99,12 +99,28 @@ test("empty text reply sends nothing", async () => {
   assert.equal(d.calls.length, 0);
 });
 
-test("approval reply sends message with approve/reject inline keyboard", async () => {
+test("approval reply sends message with all approval choices", async () => {
   const r = createTelegramRenderer();
   const d = fakeDriver();
   await r.render({ kind: "approval", conversationId: "9", code: "A1", approval: { command: "rm -rf", cwd: "/tmp" } }, { driver: d });
   assert.equal(d.calls[0][0], "sendMessage");
   assert.equal(d.calls[0][1].replyMarkup.inline_keyboard[0][0].callback_data, "ap:A1");
+  assert.equal(d.calls[0][1].replyMarkup.inline_keyboard[0][1].callback_data, "as:A1");
+});
+
+test("auto-approved notification has no inline keyboard or manual commands", async () => {
+  const r = createTelegramRenderer();
+  const d = fakeDriver();
+  await r.render({
+    kind: "approval",
+    conversationId: "9",
+    code: "A1",
+    autoApproved: true,
+    approval: { shortCode: "A1", method: "exec", params: { command: "npm test" } },
+  }, { driver: d });
+  assert.equal(d.calls[0][0], "sendMessage");
+  assert.equal(d.calls[0][1].replyMarkup, undefined);
+  assert.doesNotMatch(d.calls[0][1].text, /\/approve|\/deny/);
 });
 
 test("picker with items renders inline buttons; empty items → numbered text", async () => {
@@ -117,11 +133,16 @@ test("picker with items renders inline buttons; empty items → numbered text", 
   assert.equal(d.calls[0][1].replyMarkup ?? null, null);
 });
 
-test("approvalResolved is silent", async () => {
+test("approvalResolved edits through the runtime and sends no second message", async () => {
   const r = createTelegramRenderer();
   const d = fakeDriver();
-  await r.render({ kind: "approvalResolved", conversationId: "9" }, { driver: d });
+  const resolved = [];
+  await r.render({ kind: "approvalResolved", conversationId: "9", code: "A1", decision: "accept" }, {
+    driver: d,
+    runtime: { resolveApprovalMessage: async (reply) => resolved.push(reply) },
+  });
   assert.equal(d.calls.length, 0);
+  assert.equal(resolved[0].code, "A1");
 });
 
 test("media image under the limit sends a photo; missing file degrades to text", async () => {
@@ -144,6 +165,8 @@ test("buildStatusCard returns text + cancel keyboard while in-flight, no keyboar
   const r = createTelegramRenderer();
   const live = r.buildStatusCard({ phase: "progress", threadId: "t1", steps: 1, text: "go" });
   assert.match(live.text, /go/);
+  assert.equal(live.parseMode, "HTML");
+  assert.match(live.plainText, /go/);
   assert.equal(live.replyMarkup.inline_keyboard[0][0].callback_data, "ck:t1");
   const done = r.buildStatusCard({ phase: "completed", threadId: "t1", text: "done", done: true });
   assert.equal(done.replyMarkup ?? null, null);

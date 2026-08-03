@@ -7,6 +7,7 @@ import {
   approvalKeyboard,
   pickerKeyboard,
   cancelKeyboard,
+  statusHtml,
   statusText,
   generatePairingCode,
   markdownToTelegramHtml,
@@ -22,7 +23,7 @@ test("BOT_COMMANDS lists the main commands in Telegram's required shape (B-8)", 
     assert.ok(c.description.length >= 3 && c.description.length <= 256);
   }
   const names = BOT_COMMANDS.map((c) => c.command);
-  for (const want of ["status", "projects", "sessions", "use", "new", "tail", "approve", "deny", "cancel", "file", "help"]) {
+  for (const want of ["status", "projects", "sessions", "use", "new", "tail", "approve", "deny", "automode", "cancel", "file", "help"]) {
     assert.ok(names.includes(want), `includes /${want}`);
   }
 });
@@ -49,6 +50,7 @@ test("approve/reject callback round-trips and stays within 64 bytes", () => {
   assert.equal(data, "ap:A1B2");
   assert.ok(Buffer.byteLength(data) <= 64);
   assert.deepEqual(decodeCallback("ap:A1B2"), { action: "approve", code: "A1B2" });
+  assert.deepEqual(decodeCallback("as:A1B2"), { action: "approve_session", code: "A1B2" });
   assert.deepEqual(decodeCallback("rj:A1B2"), { action: "reject", code: "A1B2" });
 });
 
@@ -73,11 +75,12 @@ test("decodeCallback returns null for unknown/garbage", () => {
   assert.equal(decodeCallback(""), null);
 });
 
-test("approvalKeyboard has approve + reject buttons with encoded callback_data", () => {
+test("approvalKeyboard has approve + session + reject buttons with encoded callback_data", () => {
   const kb = approvalKeyboard("A1B2");
-  assert.equal(kb.inline_keyboard.length, 1);
+  assert.equal(kb.inline_keyboard.length, 2);
   assert.equal(kb.inline_keyboard[0][0].callback_data, "ap:A1B2");
-  assert.equal(kb.inline_keyboard[0][1].callback_data, "rj:A1B2");
+  assert.equal(kb.inline_keyboard[0][1].callback_data, "as:A1B2");
+  assert.equal(kb.inline_keyboard[1][0].callback_data, "rj:A1B2");
 });
 
 test("pickerKeyboard renders one button per item with pick callbacks", () => {
@@ -96,6 +99,66 @@ test("statusText renders phase title + body + steps", () => {
   const text = statusText({ phase: "progress", steps: 2, text: "working" });
   assert.match(text, /working/);
   assert.equal(typeof text, "string");
+});
+
+test("statusText and statusHtml show the current model and reasoning effort", () => {
+  const text = statusText({ phase: "progress", model: "gpt-5.2-codex", reasoningEffort: "high" });
+  const html = statusHtml({ phase: "progress", model: "gpt-5.2-codex", reasoningEffort: "high" });
+  assert.match(text, /gpt-5\.2-codex/);
+  assert.match(text, /high/);
+  assert.match(html, /gpt-5\.2-codex/);
+  assert.match(html, /high/);
+});
+
+test("statusText includes tool activity in the same message", () => {
+  const text = statusText({ phase: "progress", activities: ["running npm", "edited app.js"] });
+  assert.match(text, /running npm/);
+  assert.match(text, /edited app\.js/);
+});
+
+test("statusHtml puts tool activity in an expandable blockquote", () => {
+  const html = statusHtml({
+    phase: "progress",
+    text: "answer <ready>",
+    activities: [
+      { label: "running npm", detail: '{"command":"npm test","cwd":"/repo"}' },
+      "read <config>",
+    ],
+  });
+  assert.match(html, /<blockquote expandable>/);
+  assert.match(html, /running npm/);
+  assert.match(html, /npm test/);
+  assert.match(html, /\/repo/);
+  assert.match(html, /read &lt;config&gt;/);
+  assert.match(html, /answer &lt;ready&gt;/);
+});
+
+test("statusHtml keeps expandable tool activity at its event position", () => {
+  const html = statusHtml({
+    phase: "streaming",
+    content: [
+      { type: "text", text: "before tools" },
+      { type: "activities", activities: ["running npm"] },
+      { type: "text", text: "after tools" },
+    ],
+  });
+  assert.ok(html.indexOf("before tools") < html.indexOf("<blockquote expandable>"));
+  assert.ok(html.indexOf("running npm") < html.indexOf("after tools"));
+});
+
+test("statusHtml clamps multiple text blocks as one body and keeps the latest block", () => {
+  const latest = "latest-tail";
+  const html = statusHtml({
+    phase: "streaming",
+    content: [
+      { type: "text", text: "a".repeat(3000) },
+      { type: "activities", activities: ["running npm"] },
+      { type: "text", text: `${"b".repeat(3000)}${latest}` },
+    ],
+  });
+  assert.ok(html.length <= 4096);
+  assert.match(html, /running npm/);
+  assert.match(html, new RegExp(latest));
 });
 
 test("generatePairingCode is 8 chars from the safe alphabet, deterministic under injected rng", () => {

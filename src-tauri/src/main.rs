@@ -55,7 +55,12 @@ impl ComoteChild {
                 let _ = child.kill();
             }
             ComoteChild::System(mut child) => {
-                let _ = child.kill();
+                if child.kill().is_ok() {
+                    // TerminateProcess is asynchronous on Windows. Wait until
+                    // the executable is fully released before an updater
+                    // replaces it.
+                    let _ = child.wait();
+                }
             }
             ComoteChild::Pid(pid) => {
                 #[cfg(unix)]
@@ -227,16 +232,55 @@ fn main() {
                     return Ok(());
                 }
                 ExistingService::Reusable(pid) => {
-                    log_line(
-                        &log_path,
-                        &format!(
-                            "Existing service matches app version (pid {}); reusing without starting sidecar",
-                            pid.map(|p| p.to_string()).unwrap_or_else(|| "unknown".into())
-                        ),
-                    );
-                    // Adopt the daemon by pid so a quit with keep-alive OFF can
-                    // still stop it. With no pid we can only leave it running.
-                    pid.map(ComoteChild::Pid)
+                    // A package version is not a source revision. During `tauri
+                    // dev`, always restart an adopted daemon so same-version
+                    // frontend/backend edits cannot be masked by keep-alive.
+                    if cfg!(debug_assertions) {
+                        let Some(pid) = pid else {
+                            log_line(
+                                &log_path,
+                                "Development launch found a reusable daemon without a pid; refusing stale reuse",
+                            );
+                            show_launch_error(&window, &log_path);
+                            app.manage(ComoteSidecar(Mutex::new(None)));
+                            return Ok(());
+                        };
+                        log_line(
+                            &log_path,
+                            &format!(
+                                "Development launch restarting existing daemon pid {pid} so current sources are loaded"
+                            ),
+                        );
+                        ComoteChild::Pid(pid).graceful_stop();
+                        if !wait_for_service_shutdown(PORT, Duration::from_secs(5)) {
+                            log_line(
+                                &log_path,
+                                "Existing development daemon did not release the service port",
+                            );
+                            show_launch_error(&window, &log_path);
+                            app.manage(ComoteSidecar(Mutex::new(None)));
+                            return Ok(());
+                        }
+                        match start_comote_sidecar(app, PORT, &log_path) {
+                            Ok(child) => Some(child),
+                            Err(error) => {
+                                log_line(&log_path, &format!("Failed to restart development sidecar: {error}"));
+                                show_launch_error(&window, &log_path);
+                                None
+                            }
+                        }
+                    } else {
+                        log_line(
+                            &log_path,
+                            &format!(
+                                "Existing service matches app version (pid {}); reusing without starting sidecar",
+                                pid.map(|p| p.to_string()).unwrap_or_else(|| "unknown".into())
+                            ),
+                        );
+                        // Adopt the daemon by pid so a quit with keep-alive OFF can
+                        // still stop it. With no pid we can only leave it running.
+                        pid.map(ComoteChild::Pid)
+                    }
                 }
                 ExistingService::None => match start_comote_sidecar(app, PORT, &log_path) {
                     Ok(child) => Some(child),
@@ -296,8 +340,9 @@ fn main() {
         })
         .on_window_event(|window, event| {
             if let WindowEvent::CloseRequested { api, .. } = event {
-                // Hide instead of close: the daemon must keep running so the
-                // phone can still reach Codex while the window is dismissed.
+                // Closing the window only hides it. The tray menu is the
+                // explicit exit path, so the local daemon and IM bridge stay
+                // available while the desktop window is dismissed.
                 let _ = window.hide();
                 api.prevent_close();
             }
@@ -306,10 +351,9 @@ fn main() {
         .expect("error while building Comote");
 
     app.run(|app_handle, event| {
-        // Window close only hides (see on_window_event), so the daemon is dealt
-        // with on actual termination. ExitRequested does not fire on every quit
-        // path (e.g. an Apple-Event quit), so handle the final RunEvent::Exit
-        // too; the stop/release helpers are idempotent (they take the handle).
+        // The tray menu requests termination explicitly. ExitRequested does not
+        // fire on every quit path (e.g. an Apple-Event quit), so handle the
+        // final RunEvent::Exit too; the stop/release helpers are idempotent.
         match event {
             RunEvent::ExitRequested { .. } | RunEvent::Exit => handle_app_exit(app_handle),
             _ => {}
@@ -321,16 +365,19 @@ fn main() {
 // our handle so its Drop won't kill it) when keep-alive is ON, otherwise stop it
 // gracefully (SIGTERM → poll → SIGKILL).
 fn handle_app_exit(app_handle: &AppHandle) {
-    let keep_alive = app_handle
-        .path()
-        .app_data_dir()
-        .map(|dir| load_keep_daemon_alive_from_dir(&dir))
-        .unwrap_or(DEFAULT_KEEP_DAEMON_ALIVE);
-    if keep_alive {
+    if should_keep_daemon_alive(app_handle) {
         release_comote_sidecar(app_handle);
     } else {
         stop_comote_sidecar(app_handle);
     }
+}
+
+fn should_keep_daemon_alive(app_handle: &AppHandle) -> bool {
+    app_handle
+        .path()
+        .app_data_dir()
+        .map(|dir| load_keep_daemon_alive_from_dir(&dir))
+        .unwrap_or(DEFAULT_KEEP_DAEMON_ALIVE)
 }
 
 // Reads the persisted "keep daemon alive after quit" preference for the UI
@@ -403,11 +450,7 @@ fn start_comote_sidecar(
     let app_data_dir = app.path().app_data_dir()?;
     fs::create_dir_all(&app_data_dir)?;
 
-    let server_entry = resource_dir
-        .join("comote-server")
-        .join("src")
-        .join("server")
-        .join("index.js");
+    let server_entry = server_entry_path(&resource_dir);
     let state_path = app_data_dir.join("state.json");
 
     log_line(
@@ -490,6 +533,25 @@ fn start_comote_sidecar(
     }
 }
 
+#[cfg(debug_assertions)]
+fn server_entry_path(_resource_dir: &Path) -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .expect("src-tauri must be inside the Comote repository")
+        .join("src")
+        .join("server")
+        .join("index.js")
+}
+
+#[cfg(not(debug_assertions))]
+fn server_entry_path(resource_dir: &Path) -> PathBuf {
+    resource_dir
+        .join("comote-server")
+        .join("src")
+        .join("server")
+        .join("index.js")
+}
+
 // Launches comote-node directly (no Tauri shell). On Windows this is the primary
 // path: it searches known candidate locations for comote-node.exe, redirects
 // stdout/stderr to log files, and uses CREATE_NO_WINDOW so no console flashes.
@@ -537,6 +599,13 @@ fn start_manual_comote_node(
                     "comote-node.exe was not found",
                 )
             })?;
+        // Never execute Cargo's copied sidecar in development. Windows locks a
+        // running executable, while tauri-build unconditionally removes and
+        // recopies target/debug/comote-node.exe before the app can stop an
+        // adopted daemon. Running this stable app-data copy leaves every build
+        // input/output replaceable when an IDE starts desktop:dev again.
+        #[cfg(debug_assertions)]
+        let executable = stage_windows_development_sidecar(&executable, &log_dir)?;
         log_line(
             log_path,
             &format!(
@@ -582,6 +651,20 @@ fn windows_manual_sidecar_candidates(resource_dir: &Path) -> Vec<PathBuf> {
     ]
 }
 
+#[cfg(any(all(target_os = "windows", debug_assertions), test))]
+fn stage_windows_development_sidecar(
+    source: &Path,
+    app_data_dir: &Path,
+) -> std::io::Result<PathBuf> {
+    fs::create_dir_all(app_data_dir)?;
+    let staged = app_data_dir.join("comote-node.dev.exe");
+    if staged.exists() {
+        fs::remove_file(&staged)?;
+    }
+    fs::copy(source, &staged)?;
+    Ok(staged)
+}
+
 // Strips the Windows verbatim/extended-length prefix (\\?\) that Tauri's
 // resolved paths sometimes carry, which std::process::Command and the daemon
 // handle poorly. Identity on paths without the prefix. Available to tests
@@ -621,6 +704,17 @@ fn wait_for_service(port: u16, timeout: Duration) -> bool {
         thread::sleep(Duration::from_millis(200));
     }
     false
+}
+
+fn wait_for_service_shutdown(port: u16, timeout: Duration) -> bool {
+    let deadline = Instant::now() + timeout;
+    while Instant::now() < deadline {
+        if TcpStream::connect(("127.0.0.1", port)).is_err() {
+            return true;
+        }
+        thread::sleep(Duration::from_millis(100));
+    }
+    TcpStream::connect(("127.0.0.1", port)).is_err()
 }
 
 // Outcome of probing the daemon port. Distinguishing "nothing is listening"
@@ -1075,6 +1169,29 @@ mod tests {
         assert!(candidates.contains(&resource_dir.join("comote-node-x86_64-pc-windows-msvc.exe")));
         assert!(candidates.contains(&resource_dir.join("comote-node-aarch64-pc-windows-msvc.exe")));
         assert!(candidates.contains(&resource_dir.join("binaries").join("comote-node.exe")));
+    }
+
+    #[test]
+    fn stages_windows_development_sidecar_outside_build_output() {
+        let dir = std::env::temp_dir().join(format!(
+            "comote-dev-sidecar-{}-{}",
+            std::process::id(),
+            line!()
+        ));
+        let build_dir = dir.join("target").join("debug");
+        let app_data_dir = dir.join("app-data");
+        fs::create_dir_all(&build_dir).unwrap();
+        let source = build_dir.join("comote-node.exe");
+        fs::write(&source, b"first build").unwrap();
+
+        let staged = stage_windows_development_sidecar(&source, &app_data_dir).unwrap();
+        assert_eq!(staged, app_data_dir.join("comote-node.dev.exe"));
+        assert_eq!(fs::read(&staged).unwrap(), b"first build");
+
+        fs::write(&source, b"second build").unwrap();
+        let staged = stage_windows_development_sidecar(&source, &app_data_dir).unwrap();
+        assert_eq!(fs::read(&staged).unwrap(), b"second build");
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]

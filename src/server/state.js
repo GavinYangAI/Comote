@@ -10,7 +10,7 @@ import { CommandRouter } from "../core/commands.js";
 import { ProjectStore } from "../core/projects.js";
 import { scanLocalProjects as defaultScanLocalProjects } from "../core/local-projects.js";
 import { SessionStore } from "../core/sessions.js";
-import { CodexDesktopConnector } from "../connectors/codex-desktop/index.js";
+import { CodexDesktopConnector, normalizeCodexErrorText } from "../connectors/codex-desktop/index.js";
 import { CodexCliConnector } from "../connectors/codex-cli/index.js";
 import feishuPlugin from "../channels/feishu/index.js";
 import wechatPlugin from "../channels/wechat/index.js";
@@ -41,6 +41,11 @@ const DISCONNECT_NOTICE = "与 Codex Desktop 的连接已断开";
 const MILESTONE_MIN_INTERVAL_MS = 8_000;
 const MILESTONE_MAX_PER_TURN = 6;
 const HEARTBEAT_MS = 90_000;
+const CONNECTOR_PREFERENCES = new Set(["desktop", "cli"]);
+
+function normalizeConnectorPreference(value) {
+  return CONNECTOR_PREFERENCES.has(value) ? value : "desktop";
+}
 
 export function createComoteState({
   persisted = {},
@@ -63,6 +68,7 @@ export function createComoteState({
   const settings = {
     locale: setI18nLocale(persisted?.settings?.locale ?? DEFAULT_LOCALE),
     localeExplicit: Boolean(persisted?.settings?.locale),
+    preferredConnector: normalizeConnectorPreference(persisted?.settings?.preferredConnector),
   };
 
   const authorization = new AuthorizationStore({ identities: persisted.identities ?? [] });
@@ -141,9 +147,11 @@ export function createComoteState({
     codexDesktop: desktop,
     codexCli: cli,
     outboundQueue: outboundReplies,
+    persist: async () => stateRef.persist?.(),
     persisted: persisted.router ?? {},
     transcript,
     scanLocalProjects,
+    getPreferredConnector: () => settings.preferredConnector,
   });
   const registry = createRegistry([feishuPlugin, wechatPlugin, dingtalkPlugin, telegramPlugin]);
 
@@ -278,6 +286,9 @@ export function createComoteState({
         supportsMedia: Boolean(stack.plugin.meta.capabilities?.media),
         onDetectedIdentity: (identity) => authorization.detectIdentity(identity),
         resolveDisplayName: (openId) => stack.runtime?.driver?.resolveUserName?.(openId) ?? null,
+        beginInboundFeedback: (message) => stack.runtime?.beginInboundFeedback(message),
+        finishInboundFeedback: (feedback) => stack.runtime?.finishInboundFeedback(feedback),
+        singleMessageTurns: true,
         downloadAttachment: makeDownloadAttachment(stack, ({ driver, attachment, destPath }) =>
           driver.downloadMessageResource({
             messageId: attachment.messageId,
@@ -349,6 +360,7 @@ export function createComoteState({
         commandRouter,
         supportsMedia: Boolean(stack.plugin.meta.capabilities?.media),
         onDetectedIdentity: (identity) => authorization.detectIdentity(identity),
+        singleMessageTurns: () => stack.runtime?.liveCardsOperational?.() ?? false,
         downloadAttachment: makeDownloadAttachment(stack, ({ driver, attachment, destPath }) =>
           driver.downloadMessageResource({
             downloadCode: attachment.downloadCode,
@@ -375,6 +387,9 @@ export function createComoteState({
         supportsMedia: Boolean(stack.plugin.meta.capabilities?.media),
         onDetectedIdentity: (identity) => authorization.detectIdentity(identity),
         isAuthorized: (identity) => authorization.isAuthorized(identity),
+        beginInboundFeedback: (message) => stack.runtime?.beginInboundFeedback(message),
+        finishInboundFeedback: (feedback) => stack.runtime?.finishInboundFeedback(feedback),
+        singleMessageTurns: true,
         getPairingState: () => ({ pairingCode: stack.config.pairingCode, linkedChatId: stack.config.linkedChatId }),
         onPaired: async ({ chatId, identity, displayName }) => {
           authorization.confirmIdentity(identity);
@@ -461,11 +476,22 @@ export function createComoteState({
     return liveCardRuntime(channel) === null;
   }
 
+  function buildLiveStatusCard(live, status) {
+    const settings = status.threadId ? commandRouter.getThreadSettings(status.threadId) : null;
+    return live.buildStatusCard({
+      ...status,
+      model: status.model ?? settings?.model ?? null,
+      reasoningEffort: status.reasoningEffort !== undefined
+        ? status.reasoningEffort
+        : settings?.reasoningEffort,
+    });
+  }
+
   // Finishes every open live-card session across all live-card channels with a
-  // terminal card. Used when the Codex Desktop connection drops for good (or is
-  // lost): otherwise the in-progress card sessions leak in cardSessions and the
-  // user's chat shows a card stuck "in progress" forever, since no turnCompleted/
-  // error event will ever arrive to finish it.
+  // terminal card. Only use this when reconnecting has given up: connectionLost
+  // and app-server error notifications can be followed by more events for the
+  // same thread, so detaching there would split the rest of the turn into new
+  // IM messages.
   function finishAllLiveCards(buildCard) {
     for (const [channel] of channelStacks) {
       const live = liveCardRuntime(channel);
@@ -482,10 +508,11 @@ export function createComoteState({
   // below, but a card-less channel (wechat, or a degraded dingtalk) with a turn
   // in flight would go silent FOREVER — no turnCompleted/error will ever arrive.
   // Enqueue one disconnect text per such active turn. milestoneByThread holds an
-  // entry for every thread between turnStarted and its turn-ending event, so its
-  // keys ARE the active turns; must run BEFORE teardownAllMilestoneState clears it.
+  // entry for every turn between turnStarted and its turn-ending event, so its
+  // values carry the thread ids; must run BEFORE teardownAllMilestoneState clears it.
   function notifyDisconnectToCardlessThreads() {
-    for (const threadId of milestoneByThread.keys()) {
+    for (const state of milestoneByThread.values()) {
+      const threadId = state.threadId;
       const binding = commandRouter.getThreadBinding(threadId);
       if (!binding || liveCardRuntime(binding.channel) !== null) continue;
       outboundReplies.enqueue({
@@ -501,20 +528,49 @@ export function createComoteState({
   }
 
   // Closes every open live card with a disconnect notice and clears the per-turn
-  // bookkeeping. Shared by connectionLost and connectionGaveUp.
-  function finishLiveCardsForDisconnect() {
+  // bookkeeping after reconnecting has permanently given up.
+  function finishLiveCardsAfterConnectionGaveUp() {
     notifyDisconnectToCardlessThreads();
     finishAllLiveCards((live) =>
-      live.buildStatusCard({
+      buildLiveStatusCard(live, {
         phase: "error",
         text: t("state.error.card", { message: DISCONNECT_NOTICE }),
         done: true,
       }),
     );
     streamTextByThread.clear();
+    streamItemsByThread.clear();
+    activityByThread.clear();
+    contentByThread.clear();
     progressByThread.clear();
-    changedFilesDeliveredThreads.clear();
+    activeTurnByThread.clear();
+    detachedCardsByThread.clear();
+    for (const stack of channelStacks.values()) {
+      if (stack.plugin.meta.capabilities?.reactions) {
+        void stack.runtime.completeAllInboundFeedback?.();
+      }
+    }
     teardownAllMilestoneState();
+  }
+
+  // A temporary disconnect does not end a turn. Keep each session attached so
+  // reconnect-driven output can continue updating the same IM card.
+  function showDisconnectOnLiveCards() {
+    for (const [channel] of channelStacks) {
+      const live = liveCardRuntime(channel);
+      const sessions = live?.cardSessions;
+      if (!sessions || typeof sessions.keys !== "function") continue;
+      for (const threadId of [...sessions.keys()]) {
+        live.updateThreadCard(
+          threadId,
+          buildLiveStatusCard(live, {
+            phase: "progress",
+            threadId,
+            text: DISCONNECT_NOTICE,
+          }),
+        );
+      }
+    }
   }
 
   // Per-channel re-drain timer guard, so overlapping deliverIfPush calls don't
@@ -665,6 +721,13 @@ export function createComoteState({
       settings.localeExplicit = true;
       return applied;
     },
+    setPreferredConnector(preferredConnector) {
+      if (!CONNECTOR_PREFERENCES.has(preferredConnector)) {
+        throw new Error("unsupported connector preference");
+      }
+      settings.preferredConnector = preferredConnector;
+      return preferredConnector;
+    },
     async persist() {
       if (!stateStore) {
         return;
@@ -754,19 +817,99 @@ export function createComoteState({
     },
   };
   // --- Codex Desktop return path: route thread events back to the phone ---
-  // threadId -> { count, lastSentAt } for throttled progress updates.
+  // turnKey -> { count, lastSentAt } for throttled progress updates. A Codex
+  // thread can contain multiple turns, and a late event from an interrupted
+  // turn must never update the card belonging to the next turn.
   const progressByThread = new Map();
-  // threadId -> latest accumulated streaming text, for Feishu live cards.
+  // turnKey -> all agent-message text assembled for that turn.
   const streamTextByThread = new Map();
-  // Threads whose changed-file delivery already ran this turn. A turn can emit
-  // more than one agentMessage; only the FIRST claims the live card and delivers
-  // the turn's changed files. Subsequent agentMessages must enqueue their own
-  // text but MUST NOT re-run deliverChangedFilesAndFinish — its fresh-millisecond
-  // dedupeKey stamp would slip past the outbound queue's dedup and deliver the
-  // changed files twice. Cleared on turnStarted and turnCompleted.
-  const changedFilesDeliveredThreads = new Set();
+  // turnKey -> ordered live-card content blocks. Agent text keeps the position
+  // where its item first appeared; consecutive tool events share one block.
+  const contentByThread = new Map();
+  // A turn can contain multiple agent-message items (for example commentary
+  // followed by a final answer). Track each item separately so a later item
+  // updates its own slot instead of replacing everything already shown.
+  const streamItemsByThread = new Map();
+  function updateStreamText(threadId, itemId, text, { completed = false } = {}) {
+    let state = streamItemsByThread.get(threadId);
+    if (!state) {
+      state = { order: [], textByItem: new Map(), anonymousKey: null, nextAnonymous: 1 };
+      streamItemsByThread.set(threadId, state);
+    }
+    let key = itemId ? `item:${itemId}` : state.anonymousKey;
+    if (!key) {
+      key = `anonymous:${state.nextAnonymous}`;
+      state.nextAnonymous += 1;
+      state.anonymousKey = key;
+    }
+    if (!state.textByItem.has(key)) {
+      state.order.push(key);
+      const content = contentByThread.get(threadId) ?? [];
+      content.push({ type: "text", key, text: "" });
+      contentByThread.set(threadId, content);
+    }
+    const incoming = String(text ?? "");
+    const previous = state.textByItem.get(key) ?? "";
+    // An empty completion/update must not erase a non-empty streamed prefix.
+    state.textByItem.set(key, incoming || previous);
+    const content = contentByThread.get(threadId) ?? [];
+    const textBlock = content.find((block) => block.type === "text" && block.key === key);
+    if (textBlock) textBlock.text = incoming || previous;
+    if (completed && !itemId) {
+      state.anonymousKey = null;
+    }
+    const combined = state.order
+      .map((orderedKey) => state.textByItem.get(orderedKey) ?? "")
+      .filter(Boolean)
+      .join("\n\n");
+    streamTextByThread.set(threadId, combined);
+    return combined;
+  }
+  // turnKey -> latest tool/file milestones rendered inside the live card.
+  // Keep a short tail so platform message limits remain predictable.
+  const activityByThread = new Map();
+  function appendThreadActivity(threadId, activity) {
+    const activities = activityByThread.get(threadId) ?? [];
+    const content = contentByThread.get(threadId) ?? [];
+    const lastBlock = content.at(-1);
+    const previous = lastBlock?.type === "activities" ? lastBlock.activities.at(-1) : null;
+    const duplicate = typeof activity === "string"
+      ? previous === activity
+      : typeof previous !== "string"
+        && previous != null
+        && previous?.label === activity.label
+        && previous?.detail === activity.detail;
+    if (duplicate) return activities;
 
-  // Workflow B milestone state, keyed by threadId. Each entry tracks the running
+    activities.push(activity);
+    if (lastBlock?.type === "activities") {
+      lastBlock.activities.push(activity);
+    } else {
+      content.push({ type: "activities", activities: [activity] });
+    }
+
+    if (activities.length > 8) {
+      activities.shift();
+      const firstActivityBlock = content.find((block) => block.type === "activities");
+      firstActivityBlock?.activities.shift();
+      const emptyIndex = content.findIndex(
+        (block) => block.type === "activities" && block.activities.length === 0,
+      );
+      if (emptyIndex >= 0) content.splice(emptyIndex, 1);
+    }
+    activityByThread.set(threadId, activities);
+    contentByThread.set(threadId, content);
+    return activities;
+  }
+
+  function threadContent(threadId) {
+    return (contentByThread.get(threadId) ?? []).map((block) =>
+      block.type === "activities"
+        ? { type: "activities", activities: [...block.activities] }
+        : { type: "text", text: block.text },
+    );
+  }
+  // Workflow B milestone state, keyed by turnKey. Each entry tracks the running
   // sequence (dedupeKey source), the per-turn delivery count, the last delivered
   // {kind,label} (consecutive-dedup), the throttle timestamp + a pending coalesce
   // slot ({latest, count, flushTimer}), the heartbeat watchdog timer, and the
@@ -786,9 +929,60 @@ export function createComoteState({
   // the agent: fallback too, not just milestone channels). Cleared on full
   // teardown only — per-turn teardown must preserve it.
   const turnNonceByThread = new Map();
+  // The current turn identity for each Codex thread. The connector supplies a
+  // protocol turnId on modern app-server events; the nonce fallback keeps
+  // manually-created/test events isolated too.
+  const activeTurnByThread = new Map();
+  // Sessions detached when a newer turn starts before the older turn's
+  // turn/completed notification arrives. They remain addressable by turnId so
+  // the old completion can finish the old message instead of the new card.
+  const detachedCardsByThread = new Map();
   // The current turn nonce for a thread, used by the agent: fallback key when
   // itemId is absent. Defaults to 0 for a thread with no turn yet.
   const turnNonce = (threadId) => turnNonceByThread.get(threadId) ?? 0;
+  const makeTurnKey = (threadId, turnId, nonce = turnNonce(threadId)) =>
+    `${threadId ?? ""}:${turnId != null ? `id:${turnId}` : `nonce:${nonce}`}`;
+  const currentTurnKey = (threadId) =>
+    activeTurnByThread.get(threadId)?.key ?? makeTurnKey(threadId, null);
+  const eventTurnKey = (event) =>
+    makeTurnKey(event.threadId, event.turnId, activeTurnByThread.get(event.threadId)?.nonce ?? turnNonce(event.threadId));
+  const isCurrentTurnEvent = (event) => {
+    const active = activeTurnByThread.get(event.threadId);
+    if (!active || event.turnId == null) return true;
+    return String(active.turnId) === String(event.turnId);
+  };
+  const snapshotTurnState = (turnKey) => ({
+    text: streamTextByThread.get(turnKey) ?? "",
+    activities: [...(activityByThread.get(turnKey) ?? [])],
+    content: (contentByThread.get(turnKey) ?? []).map((block) =>
+      block.type === "activities"
+        ? { type: "activities", activities: [...block.activities] }
+        : { type: "text", text: block.text },
+    ),
+  });
+  const clearTurnState = (turnKey) => {
+    streamTextByThread.delete(turnKey);
+    streamItemsByThread.delete(turnKey);
+    activityByThread.delete(turnKey);
+    contentByThread.delete(turnKey);
+    progressByThread.delete(turnKey);
+  };
+  const rememberDetachedCard = (threadId, entry) => {
+    const cards = detachedCardsByThread.get(threadId) ?? [];
+    cards.push(entry);
+    detachedCardsByThread.set(threadId, cards);
+  };
+  const takeDetachedCard = (threadId, turnId = null) => {
+    const cards = detachedCardsByThread.get(threadId);
+    if (!cards || cards.length === 0) return null;
+    const index = turnId == null
+      ? 0
+      : cards.findIndex((entry) => String(entry.turnId) === String(turnId));
+    if (index < 0) return null;
+    const [entry] = cards.splice(index, 1);
+    if (cards.length === 0) detachedCardsByThread.delete(threadId);
+    return entry;
+  };
   // Milestone/heartbeat persist coalescer. Milestone state is never serialized,
   // so each delivered line used to trigger a full state.json write for nothing —
   // ~7 writes on a chatty turn. Instead, deliveries just SET this flag; the
@@ -805,7 +999,7 @@ export function createComoteState({
   // the fallback repeats every turn, so turn N+1's final agentMessage reuses turn
   // N's still-retained key and the outbound queue silently drops it.
   const agentDedupeKey = (event) =>
-    `agent:${event.itemId ?? `${event.threadId}:${turnNonce(event.threadId)}`}`;
+    `agent:${event.itemId ?? `${event.threadId}:${event.turnId ?? turnNonce(event.threadId)}`}`;
   const flushMilestonePersist = () => {
     if (!milestonePersistDirty) return;
     milestonePersistDirty = false;
@@ -835,31 +1029,66 @@ export function createComoteState({
 
   function routeDesktopEvent(event) {
     if (event.type === "turnStarted") {
-      changedFilesDeliveredThreads.delete(event.threadId);
+      const previousTurn = activeTurnByThread.get(event.threadId);
+      // A duplicated turn/started notification must not create another IM card
+      // for the same Codex turn.
+      if (event.turnId != null
+        && previousTurn?.turnId != null
+        && String(previousTurn.turnId) === String(event.turnId)) {
+        return;
+      }
       // Advance the per-thread turn nonce for EVERY channel — both the milestone
       // key and the agent: fallback key fold it in, and push channels (milestones
       // off) still rely on the latter. Must precede initMilestoneState, which
       // snapshots the current nonce into the milestone state.
-      turnNonceByThread.set(event.threadId, turnNonce(event.threadId) + 1);
-      initMilestoneState(event.threadId);
-      sleepGuard.acquire(event.threadId);
+      const nextNonce = turnNonce(event.threadId) + 1;
+      const startedKey = makeTurnKey(event.threadId, event.turnId, nextNonce);
       const startedBinding = commandRouter.getThreadBinding(event.threadId);
+      const startedLive = liveCardRuntime(startedBinding?.channel);
+      if (previousTurn) {
+        // The user can interrupt a turn and immediately send another message.
+        // Claim the old message before opening the next one so later events can
+        // never mutate the new card through the old threadId-only lookup.
+        const previousSnapshot = snapshotTurnState(previousTurn.key);
+        const previousSession = startedLive?.detachThreadCard(event.threadId);
+        if (previousSession) {
+          rememberDetachedCard(event.threadId, {
+            key: previousTurn.key,
+            turnId: previousTurn.turnId,
+            session: previousSession,
+            snapshot: previousSnapshot,
+          });
+        }
+        teardownMilestoneState(previousTurn.key);
+        clearTurnState(previousTurn.key);
+      }
+      turnNonceByThread.set(event.threadId, nextNonce);
+      activeTurnByThread.set(event.threadId, {
+        key: startedKey,
+        nonce: nextNonce,
+        turnId: event.turnId ?? null,
+      });
+      clearTurnState(startedKey);
+      initMilestoneState(startedKey, event.threadId);
+      sleepGuard.acquire(event.threadId);
       // Typing indicator, driven by the EXPLICIT capabilities.typing bit (B-8):
       // wechat and telegram declare it and expose runtime.sendTyping (never
       // throws); other channels no-op. Behavior for wechat is unchanged.
       const startedStack = startedBinding ? channelStacks.get(startedBinding.channel) : null;
+      if (startedStack?.plugin.meta.capabilities?.reactions) {
+        startedStack.runtime.resetInboundFeedback?.(event.threadId);
+      }
       if (startedStack?.plugin.meta.capabilities?.typing && typeof startedStack.runtime.sendTyping === "function") {
         startedStack.runtime
           .sendTyping({ conversationId: startedBinding.conversationId })
           .catch(() => {});
       }
-      const startedLive = liveCardRuntime(startedBinding?.channel);
       if (startedLive) {
         startedLive
           .openThreadCard({
             threadId: event.threadId,
             conversationId: startedBinding.conversationId,
-            card: startedLive.buildStatusCard({ phase: "started", threadId: event.threadId }),
+            card: buildLiveStatusCard(startedLive, { phase: "started", threadId: event.threadId }),
           })
           .catch((error) => {
             startedLive.lastError = error.message;
@@ -883,48 +1112,149 @@ export function createComoteState({
       return;
     }
     if (event.type === "turnCompleted") {
-      progressByThread.delete(event.threadId);
-      teardownMilestoneState(event.threadId);
-      const completedBinding = commandRouter.getThreadBinding(event.threadId);
-      const completedLive = liveCardRuntime(completedBinding?.channel);
-      if (completedLive && completedLive.hasThreadCard(event.threadId)) {
-        // Reached only for the rare turn with NO agentMessage (codex normally
-        // emits agentMessage first, which claims the card and runs the B/C split
-        // in deliverChangedFilesAndFinish). Here the card just renders all files
-        // as buttons — no inline-text split, no dingtalk auto-attach, no tooMany
-        // cap. Acceptable for this edge case; files stay reachable via /file.
-        const tail = streamTextByThread.get(event.threadId) ?? t("state.completed.fallback");
-        completedLive
-          .finishThreadCard(
-            event.threadId,
-            completedLive.buildStatusCard({
-              phase: "completed",
-              threadId: event.threadId,
-              text: tail,
-              done: true,
-              files: buildChangedFiles(event.threadId, event.changedPaths),
-            }),
-          )
-          .catch(() => {});
+      const activeTurn = activeTurnByThread.get(event.threadId);
+      let completedKey = null;
+      let isCurrent = true;
+      let detachedEntry = null;
+      if (event.turnId != null) {
+        isCurrent = Boolean(activeTurn && String(activeTurn.turnId) === String(event.turnId));
+        completedKey = activeTurn?.turnId != null && isCurrent
+          ? activeTurn.key
+          : makeTurnKey(event.threadId, event.turnId);
+        if (!isCurrent) {
+          detachedEntry = takeDetachedCard(event.threadId, event.turnId);
+          completedKey = detachedEntry?.key ?? completedKey;
+        }
+      } else if (detachedCardsByThread.get(event.threadId)?.length) {
+        // Older Codex builds omitted turnId. If a newer turn already detached
+        // an older card, the next completion is the queued older completion.
+        isCurrent = false;
+        detachedEntry = takeDetachedCard(event.threadId);
+        completedKey = detachedEntry?.key ?? currentTurnKey(event.threadId);
+      } else {
+        completedKey = activeTurn?.key ?? currentTurnKey(event.threadId);
       }
-      streamTextByThread.delete(event.threadId);
-      changedFilesDeliveredThreads.delete(event.threadId);
-      sleepGuard.release(event.threadId);
+      teardownMilestoneState(completedKey);
+      const completedBinding = commandRouter.getThreadBinding(event.threadId);
+      const completedStack = completedBinding ? channelStacks.get(completedBinding.channel) : null;
+      if (isCurrent && completedStack?.plugin.meta.capabilities?.reactions) {
+        void completedStack.runtime.completeInboundFeedback?.(event.threadId);
+      }
+      const completedLive = liveCardRuntime(completedBinding?.channel);
+      const claimedSession = detachedEntry?.session
+        ?? (isCurrent ? completedLive?.detachThreadCard(event.threadId) : null);
+      if (completedLive && claimedSession) {
+        const snapshot = detachedEntry?.snapshot ?? snapshotTurnState(completedKey);
+        const tail = snapshot.text || t("state.completed.fallback");
+        const content = snapshot.content;
+        if (!content.some((block) => block.type === "text" && block.text)) {
+          content.push({ type: "text", text: tail });
+        }
+        void deliverChangedFilesAndFinish(completedLive, completedBinding, {
+          ...event,
+          turnKey: completedKey,
+          text: tail,
+          activities: snapshot.activities,
+          content,
+        }, claimedSession).catch((error) => {
+          completedLive.lastError = error.message;
+        });
+      }
+      clearTurnState(completedKey);
+      if (isCurrent) {
+        if (activeTurn?.key === completedKey) {
+          activeTurnByThread.delete(event.threadId);
+        }
+        sleepGuard.release(event.threadId);
+      }
       eventLog.info("Codex turn 完成", { threadId: event.threadId });
       return;
     }
     if (event.type === "approvalResolved") {
-      eventLog.info(`审批 ${event.approval.shortCode} 已处理`, { decision: event.decision });
+      const binding = commandRouter.getThreadBinding(event.approval.threadId);
+      const stack = binding ? channelStacks.get(binding.channel) : null;
+      const resolvedLive = liveCardRuntime(binding?.channel);
+      const approvalEvent = {
+        threadId: event.approval.threadId,
+        turnId: event.approval.turnId,
+      };
+      const approvalKey = eventTurnKey(approvalEvent);
+      const approvalIsCurrent = isCurrentTurnEvent(approvalEvent);
+      if (approvalIsCurrent && resolvedLive?.hasThreadCard(event.approval.threadId)) {
+        const resolvedLine = t(
+          event.decision === "decline" ? "card.approval.rejected" : "card.approval.accepted",
+          { code: event.approval.shortCode },
+        );
+        const activities = appendThreadActivity(approvalKey, resolvedLine);
+        const progress = progressByThread.get(approvalKey);
+        resolvedLive.updateThreadCard(
+          event.approval.threadId,
+          buildLiveStatusCard(resolvedLive, {
+            phase: "progress",
+            threadId: event.approval.threadId,
+            steps: progress?.count ?? activities.length,
+            text: streamTextByThread.get(approvalKey) ?? "",
+            activities,
+            content: threadContent(approvalKey),
+          }),
+        );
+      }
+      if (binding && typeof stack?.runtime?.resolveApprovalMessage === "function") {
+        const enqueueResolved = () => {
+          outboundReplies.enqueue({
+            channel: binding.channel,
+            conversationId: binding.conversationId,
+            ...(binding.accountId ? { accountId: binding.accountId } : {}),
+            kind: "approvalResolved",
+            code: event.approval.shortCode,
+            approval: event.approval,
+            decision: event.decision,
+            dedupeKey: `approval-resolved:${event.approval.id}`,
+          });
+          deliverIfPush(binding.channel);
+        };
+        if (approvalIsCurrent && resolvedLive?.hasThreadCard(event.approval.threadId)) {
+          const session = resolvedLive.cardSessions?.get(event.approval.threadId);
+          const fallback = session
+            ? {
+                messageId: session.messageId,
+                outTrackId: session.outTrackId,
+                conversationId: session.conversationId ?? binding.conversationId,
+                approval: event.approval,
+                threadId: event.approval.threadId,
+              }
+            : null;
+          void Promise.resolve(stack.runtime.resolveApprovalMessage({
+            code: event.approval.shortCode,
+            decision: event.decision,
+            approval: event.approval,
+            fallback,
+          })).then((resumed) => {
+            if (!resumed) enqueueResolved();
+          }).catch((error) => {
+            eventLog.error("恢复实时审批卡片失败", {
+              threadId: event.approval.threadId,
+              shortCode: event.approval.shortCode,
+              error: error?.message ?? String(error),
+            });
+            enqueueResolved();
+          });
+        } else {
+          enqueueResolved();
+        }
+        persistInBackground();
+      }
+      const outcome = event.decision === "decline"
+        ? "已拒绝"
+        : event.decision === "acceptForSession"
+          ? "已批准（本次会话）"
+          : "已批准";
+      eventLog.info(`审批 ${event.approval.shortCode} ${outcome}`, { decision: event.decision });
       return;
     }
     if (event.type === "connectionLost") {
-      // Turns cannot complete once the connection is gone — release the
-      // sleep guard so the Mac is not held awake indefinitely.
-      sleepGuard.releaseAll();
-      // Finish any open live cards: no turnCompleted/error will arrive to close
-      // them while the connection is down, so otherwise they leak (cardSessions
-      // grows unbounded) and the chat shows a perpetual "in progress" card.
-      finishLiveCardsForDisconnect();
+      notifyDisconnectToCardlessThreads();
+      showDisconnectOnLiveCards();
       eventLog.warn(DISCONNECT_NOTICE);
       return;
     }
@@ -934,26 +1264,28 @@ export function createComoteState({
     }
     if (event.type === "connectionGaveUp") {
       sleepGuard.releaseAll();
-      // Same leak as connectionLost, and now no reconnect is coming at all — close
-      // every open live card so none is left hanging.
-      finishLiveCardsForDisconnect();
+      finishLiveCardsAfterConnectionGaveUp();
       eventLog.error("多次重连 Codex Desktop 失败，已停止重试，请手动重试连接");
       return;
     }
     if (event.type === "progress") {
-      const entry = progressByThread.get(event.threadId) ?? { count: 0, lastSentAt: 0 };
+      if (!isCurrentTurnEvent(event)) return;
+      const turnKey = eventTurnKey(event);
+      const entry = progressByThread.get(turnKey) ?? { count: 0, lastSentAt: 0 };
       entry.count += 1;
       const progressBinding = commandRouter.getThreadBinding(event.threadId);
       const progressLive = liveCardRuntime(progressBinding?.channel);
       if (progressLive) {
-        progressByThread.set(event.threadId, entry);
+        progressByThread.set(turnKey, entry);
         progressLive.updateThreadCard(
           event.threadId,
-          progressLive.buildStatusCard({
+          buildLiveStatusCard(progressLive, {
             phase: "progress",
             threadId: event.threadId,
             steps: entry.count,
-            text: streamTextByThread.get(event.threadId) ?? "",
+            text: streamTextByThread.get(turnKey) ?? "",
+            activities: activityByThread.get(turnKey) ?? [],
+            content: threadContent(turnKey),
           }),
         );
         return;
@@ -975,28 +1307,55 @@ export function createComoteState({
           deliverIfPush(binding.channel);
         }
       }
-      progressByThread.set(event.threadId, entry);
+      progressByThread.set(turnKey, entry);
       return;
     }
 
     if (event.type === "milestone") {
-      handleMilestone(event);
+      if (!isCurrentTurnEvent(event)) return;
+      const turnKey = eventTurnKey(event);
+      const binding = commandRouter.getThreadBinding(event.threadId);
+      const milestoneLive = liveCardRuntime(binding?.channel);
+      if (milestoneLive) {
+        const item = { kind: event.kind, label: event.label ?? null, status: event.status ?? null };
+        const line = milestoneText(item);
+        const activity = { label: line, detail: event.detail ?? null };
+        const activities = appendThreadActivity(turnKey, activity);
+        const progress = progressByThread.get(turnKey);
+        milestoneLive.updateThreadCard(
+          event.threadId,
+          buildLiveStatusCard(milestoneLive, {
+            phase: "progress",
+            threadId: event.threadId,
+            steps: progress?.count ?? activities.length,
+            text: streamTextByThread.get(turnKey) ?? "",
+            activities,
+            content: threadContent(turnKey),
+          }),
+        );
+        return;
+      }
+      handleMilestone({ ...event, turnKey });
       return;
     }
 
     if (event.type === "agentMessageDelta") {
+      if (!isCurrentTurnEvent(event)) return;
+      const turnKey = eventTurnKey(event);
       const binding = commandRouter.getThreadBinding(event.threadId);
       const deltaLive = liveCardRuntime(binding?.channel);
       if (!deltaLive) {
         return;
       }
-      streamTextByThread.set(event.threadId, event.text ?? "");
+      const text = updateStreamText(turnKey, event.itemId, event.text);
       deltaLive.updateThreadCard(
         event.threadId,
-        deltaLive.buildStatusCard({
+        buildLiveStatusCard(deltaLive, {
           phase: "streaming",
           threadId: event.threadId,
-          text: event.text ?? "",
+          text,
+          activities: activityByThread.get(turnKey) ?? [],
+          content: threadContent(turnKey),
         }),
       );
       return;
@@ -1014,35 +1373,26 @@ export function createComoteState({
         eventLog.warn("收到 Codex 输出但找不到对应会话，未转发", { threadId: event.threadId });
         return;
       }
+      if (!isCurrentTurnEvent(event)) {
+        // A late item from an interrupted turn belongs to its already-detached
+        // card. Do not fall back to a new standalone reply or mutate the next
+        // turn's live card.
+        return;
+      }
+      const turnKey = eventTurnKey(event);
       const msgLive = liveCardRuntime(binding.channel);
-      if (msgLive) {
-        streamTextByThread.delete(event.threadId);
-        if (changedFilesDeliveredThreads.has(event.threadId)) {
-          // A prior agentMessage this turn already claimed the card and delivered
-          // the turn's changed files. Re-running deliverChangedFilesAndFinish would
-          // re-enqueue those files under a fresh-millisecond dedupeKey the queue
-          // cannot collapse — a double delivery. Enqueue only this message's text.
-          outboundReplies.enqueue({
-            channel: binding.channel,
-            conversationId: binding.conversationId,
-            ...(binding.accountId ? { accountId: binding.accountId } : {}),
-            kind: "text",
-            text: event.text ?? "",
-            dedupeKey: agentDedupeKey(event),
-          });
-          deliverIfPush(binding.channel);
-          persistInBackground();
-          return;
-        }
-        changedFilesDeliveredThreads.add(event.threadId);
-        // Claim the live card SYNCHRONOUSLY now, before the async file work below.
-        // agentMessage is the live-card completion path; detaching here means a
-        // racing turnCompleted sees no card (hasThreadCard=false) and skips, so the
-        // turn's files are delivered exactly once (here), never doubled.
-        const claimedSession = msgLive.detachThreadCard(event.threadId);
-        void deliverChangedFilesAndFinish(msgLive, binding, event, claimedSession).catch((error) => {
-          msgLive.lastError = error.message;
-        });
+      if (msgLive?.hasThreadCard(event.threadId)) {
+        const text = updateStreamText(turnKey, event.itemId, event.text, { completed: true });
+        msgLive.updateThreadCard(
+          event.threadId,
+          buildLiveStatusCard(msgLive, {
+            phase: "streaming",
+            threadId: event.threadId,
+            text,
+            activities: activityByThread.get(turnKey) ?? [],
+            content: threadContent(turnKey),
+          }),
+        );
         persistInBackground();
         return;
       }
@@ -1061,6 +1411,11 @@ export function createComoteState({
     }
 
     if (event.type === "approval") {
+      const approvalTurnEvent = {
+        threadId: event.approval.threadId,
+        turnId: event.approval.turnId,
+      };
+      const approvalIsCurrent = isCurrentTurnEvent(approvalTurnEvent);
       const binding = commandRouter.getThreadBinding(event.approval.threadId);
       eventLog.warn("Codex 请求审批", {
         shortCode: event.approval.shortCode,
@@ -1072,49 +1427,67 @@ export function createComoteState({
         });
         return;
       }
-      // Both channels enqueue a channel-neutral SEMANTIC approval reply; the
-      // renderer turns it into a card (feishu) or text (wechat) at delivery.
-      outboundReplies.enqueue({
-        channel: binding.channel,
-        conversationId: binding.conversationId,
-        ...(binding.accountId ? { accountId: binding.accountId } : {}),
-        kind: "approval",
-        code: event.approval.shortCode,
-        approval: event.approval,
-        dedupeKey: `approval:${event.approval.id}`,
-      });
-      deliverIfPush(binding.channel);
+      const enqueueApproval = ({ liveCardAttempted = false } = {}) => {
+        outboundReplies.enqueue({
+          channel: binding.channel,
+          conversationId: binding.conversationId,
+          ...(binding.accountId ? { accountId: binding.accountId } : {}),
+          kind: "approval",
+          code: event.approval.shortCode,
+          approval: event.approval,
+          ...(liveCardAttempted ? { liveCardAttempted: true } : {}),
+          dedupeKey: `approval:${event.approval.id}`,
+        });
+        deliverIfPush(binding.channel);
+      };
+      const approvalLive = liveCardRuntime(binding.channel);
+      let delivery;
+      if (approvalIsCurrent
+        && approvalLive?.hasThreadCard(event.approval.threadId)
+        && typeof approvalLive.showThreadApproval === "function") {
+        delivery = Promise.resolve(approvalLive.showThreadApproval({
+            threadId: event.approval.threadId,
+            code: event.approval.shortCode,
+            approval: event.approval,
+          })).then((shown) => {
+            if (!shown) enqueueApproval({ liveCardAttempted: true });
+          }).catch((error) => {
+            approvalLive.lastError = error.message;
+            enqueueApproval({ liveCardAttempted: true });
+          });
+      } else {
+        enqueueApproval();
+        delivery = Promise.resolve();
+      }
       persistInBackground();
       return;
     }
 
     if (event.type === "error") {
-      // A turn can end via error with no following turnCompleted. Release the
-      // sleep guard here too, otherwise caffeinate is held awake until the next
-      // (successful) turn completes — or indefinitely. Clear the per-turn
-      // changed-files marker for the same reason.
-      sleepGuard.release(event.threadId);
-      changedFilesDeliveredThreads.delete(event.threadId);
-      teardownMilestoneState(event.threadId);
+      if (!isCurrentTurnEvent(event)) return;
+      const turnKey = eventTurnKey(event);
       const binding = commandRouter.getThreadBinding(event.threadId);
       const errLive = liveCardRuntime(binding?.channel);
+      const errorMessage = normalizeCodexErrorText(event.message) || "Codex 报告了一个错误";
       if (errLive && errLive.hasThreadCard(event.threadId)) {
-        errLive
-          .finishThreadCard(
-            event.threadId,
-            errLive.buildStatusCard({
-              phase: "error",
-              text: t("state.error.card", { message: event.message }),
-              done: true,
-            }),
-          )
-          .catch(() => {});
-        streamTextByThread.delete(event.threadId);
-        progressByThread.delete(event.threadId);
-        eventLog.error("Codex 错误", { threadId: event.threadId, message: event.message });
+        const errorText = t("state.error.card", { message: errorMessage });
+        const content = threadContent(turnKey);
+        content.push({ type: "text", text: errorText });
+        errLive.updateThreadCard(
+          event.threadId,
+          buildLiveStatusCard(errLive, {
+            phase: "error",
+            threadId: event.threadId,
+            text: errorText,
+            activities: activityByThread.get(turnKey) ?? [],
+            content,
+          }),
+        );
+        eventLog.error("Codex 错误", { threadId: event.threadId, message: errorMessage });
         return;
       }
-      eventLog.error("Codex 错误", { threadId: event.threadId, message: event.message });
+      clearTurnState(turnKey);
+      eventLog.error("Codex 错误", { threadId: event.threadId, message: errorMessage });
       if (!binding) {
         eventLog.warn("收到 Codex 输出但找不到对应会话，未转发", {
           threadId: event.threadId ?? null,
@@ -1126,7 +1499,7 @@ export function createComoteState({
         conversationId: binding.conversationId,
         ...(binding.accountId ? { accountId: binding.accountId } : {}),
         kind: "text",
-        text: t("state.error.reply", { message: event.message }),
+        text: t("state.error.reply", { message: errorMessage }),
         dedupeKey: `error:${event.threadId ?? ""}:${Date.now()}`,
       });
       deliverIfPush(binding.channel);
@@ -1162,9 +1535,10 @@ export function createComoteState({
   // card instead) the watchdog could only ever no-op, so spinning a 90s interval
   // every turn is pure waste. The lightweight state + turn nonce are kept for all
   // channels regardless (the agent: fallback key needs the nonce).
-  function initMilestoneState(threadId) {
-    teardownMilestoneState(threadId);
+  function initMilestoneState(turnKey, threadId) {
+    teardownMilestoneState(turnKey);
     const state = {
+      threadId,
       turn: turnNonce(threadId), // per-thread turn nonce, folded into the dedupeKey
       seq: 0, // per-turn delivery counter — feeds the dedupeKey AND gates the cap
       last: null, // last delivered {kind,label} for consecutive-dedup
@@ -1177,10 +1551,10 @@ export function createComoteState({
     };
     const binding = commandRouter.getThreadBinding(threadId);
     if (binding && milestonesEnabledFor(binding.channel)) {
-      state.heartbeatTimer = setInterval(() => runHeartbeat(threadId), msHeartbeatMs);
+      state.heartbeatTimer = setInterval(() => runHeartbeat(turnKey), msHeartbeatMs);
       state.heartbeatTimer.unref?.();
     }
-    milestoneByThread.set(threadId, state);
+    milestoneByThread.set(turnKey, state);
   }
 
   // Any turn-ending event: flush a residual pending milestone, clear both timers,
@@ -1188,29 +1562,31 @@ export function createComoteState({
   // residual flush above may deliver one last milestone (which only marks the
   // persist dirty), so flush the coalesced persist here — at most one full
   // state.json write per turn for the whole milestone/heartbeat path.
-  function teardownMilestoneState(threadId) {
-    const state = milestoneByThread.get(threadId);
+  function teardownMilestoneState(turnKey) {
+    const state = milestoneByThread.get(turnKey);
     if (!state) return;
     if (state.flushTimer) {
       clearTimeout(state.flushTimer);
       state.flushTimer = null;
     }
-    flushPendingMilestone(threadId, state);
+    flushPendingMilestone(turnKey, state);
     if (state.heartbeatTimer) {
       clearInterval(state.heartbeatTimer);
       state.heartbeatTimer = null;
     }
-    milestoneByThread.delete(threadId);
+    milestoneByThread.delete(turnKey);
     flushMilestonePersist();
   }
 
   function teardownAllMilestoneState() {
-    for (const threadId of [...milestoneByThread.keys()]) {
-      teardownMilestoneState(threadId);
+    for (const turnKey of [...milestoneByThread.keys()]) {
+      teardownMilestoneState(turnKey);
     }
     // Full teardown (close/shutdown) is the only point the turn nonce resets;
     // per-turn teardown must preserve it so keys stay cross-turn unique.
     turnNonceByThread.clear();
+    activeTurnByThread.clear();
+    detachedCardsByThread.clear();
   }
 
   // Routes one milestone event through the three throttle gates and (when it
@@ -1218,7 +1594,8 @@ export function createComoteState({
   // has no milestone state, no binding, the channel has milestones disabled, or
   // the per-turn cap is already hit.
   function handleMilestone(event) {
-    const state = milestoneByThread.get(event.threadId);
+    const turnKey = event.turnKey ?? eventTurnKey(event);
+    const state = milestoneByThread.get(turnKey);
     if (!state) return;
     const binding = commandRouter.getThreadBinding(event.threadId);
     if (!binding || !milestonesEnabledFor(binding.channel)) return;
@@ -1240,24 +1617,24 @@ export function createComoteState({
         const delay = Math.max(0, msMinInterval - (now - state.lastSentAt));
         state.flushTimer = setTimeout(() => {
           state.flushTimer = null;
-          flushPendingMilestone(event.threadId, state);
+          flushPendingMilestone(turnKey, state);
         }, delay);
         state.flushTimer.unref?.();
       }
       return;
     }
-    deliverMilestone(event.threadId, state, binding, milestoneText(item), item);
+    deliverMilestone(turnKey, state, binding, milestoneText(item), item);
   }
 
   // Emits the coalesced pending milestone (if any) as one merged line. Called by
   // the flush timer and synchronously on teardown so a residual is never lost.
-  function flushPendingMilestone(threadId, state) {
+  function flushPendingMilestone(turnKey, state) {
     if (!state.pending) return;
     if (state.seq >= msMaxPerTurn) {
       state.pending = null;
       return;
     }
-    const binding = commandRouter.getThreadBinding(threadId);
+    const binding = commandRouter.getThreadBinding(state.threadId);
     if (!binding || !milestonesEnabledFor(binding.channel)) {
       state.pending = null;
       return;
@@ -1268,7 +1645,7 @@ export function createComoteState({
       count > 1
         ? t("state.milestone.merged", { count, label: milestoneLabelText(latest) })
         : milestoneText(latest);
-    deliverMilestone(threadId, state, binding, text, latest);
+    deliverMilestone(turnKey, state, binding, text, latest);
   }
 
   // Enqueues one milestone text reply with an ms:<thread>:<turn>:<seq> dedupeKey
@@ -1278,7 +1655,7 @@ export function createComoteState({
   // persist: milestone state isn't serialized, so a per-line full state.json write
   // (up to ~7 per chatty turn) buys nothing. The turn-ending teardown persists
   // once instead (markMilestonePersistDirty / flushMilestonePersist).
-  function deliverMilestone(threadId, state, binding, text, item) {
+  function deliverMilestone(turnKey, state, binding, text, item) {
     state.seq += 1;
     state.last = { kind: item.kind, label: item.label };
     state.lastSentAt = Date.now();
@@ -1290,7 +1667,7 @@ export function createComoteState({
       ...(binding.accountId ? { accountId: binding.accountId } : {}),
       kind: "text",
       text,
-      dedupeKey: `ms:${threadId}:${state.turn}:${state.seq}`,
+      dedupeKey: `ms:${state.threadId}:${state.turn}:${state.seq}`,
     });
     deliverIfPush(binding.channel);
     markMilestonePersistDirty();
@@ -1300,11 +1677,11 @@ export function createComoteState({
   // the heartbeat window, send ONE minimal "still working" reply. Re-armed on the
   // next milestone (heartbeatSent reset in deliverMilestone). One per quiet
   // stretch, so a stuck-but-alive turn never spams the chat.
-  function runHeartbeat(threadId) {
-    const state = milestoneByThread.get(threadId);
+  function runHeartbeat(turnKey) {
+    const state = milestoneByThread.get(turnKey);
     if (!state || state.heartbeatSent) return;
     if (Date.now() - state.lastMilestoneAt < msHeartbeatMs) return;
-    const binding = commandRouter.getThreadBinding(threadId);
+    const binding = commandRouter.getThreadBinding(state.threadId);
     if (!binding || !milestonesEnabledFor(binding.channel)) return;
     state.heartbeatSent = true;
     const minutes = Math.max(1, Math.round((Date.now() - state.lastMilestoneAt) / 60_000));
@@ -1314,7 +1691,7 @@ export function createComoteState({
       ...(binding.accountId ? { accountId: binding.accountId } : {}),
       kind: "text",
       text: t("state.heartbeat.quiet", { minutes }),
-      dedupeKey: `heartbeat:${threadId}:${state.turn}:${state.seq}`,
+      dedupeKey: `heartbeat:${state.threadId}:${state.turn}:${state.seq}`,
     });
     deliverIfPush(binding.channel);
     markMilestonePersistDirty();
@@ -1344,7 +1721,7 @@ export function createComoteState({
   // Splits a completed turn's changed files (Task 3) and delivers them: small
   // text inlines + the rest become card buttons (fileButtons channels) or
   // auto-sent attachments. Finishes the live card with the button files. Used
-  // fire-and-forget from the agentMessage handler so routeDesktopEvent stays sync.
+  // fire-and-forget from the turnCompleted handler so routeDesktopEvent stays sync.
   async function deliverChangedFilesAndFinish(live, binding, event, claimedSession) {
     const channel = binding.channel;
     const supportsButtons = Boolean(channelStacks.get(channel)?.plugin.meta.capabilities?.fileButtons);
@@ -1362,10 +1739,12 @@ export function createComoteState({
         dedupeKey: `changedfiles:${binding.conversationId}:${event.threadId}:${stamp}:${i}`,
       });
     });
-    const completedCard = live.buildStatusCard({
+    const completedCard = buildLiveStatusCard(live, {
       phase: "completed",
       threadId: event.threadId,
       text: event.text ?? "",
+      activities: event.activities ?? activityByThread.get(event.turnKey ?? eventTurnKey(event)) ?? [],
+      content: event.content ?? threadContent(event.turnKey ?? eventTurnKey(event)),
       done: true,
       files: plan.buttonFiles,
     });

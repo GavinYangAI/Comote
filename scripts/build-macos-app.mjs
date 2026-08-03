@@ -3,7 +3,7 @@ import { chmod, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { promisify } from "node:util";
 
-import { makeIcns, makeIconPng } from "./icon-utils.mjs";
+import { generateDesktopIcons } from "./desktop-icon-assets.mjs";
 
 const execFileAsync = promisify(execFile);
 const pkg = JSON.parse(await readFile(join(process.cwd(), "package.json"), "utf8"));
@@ -14,18 +14,17 @@ const contents = join(appRoot, "Contents");
 const macos = join(contents, "MacOS");
 const resources = join(contents, "Resources");
 const buildDir = join(process.cwd(), "dist", "build");
-const iconset = join(buildDir, "Comote.iconset");
+const iconsDir = join(process.cwd(), "src-tauri", "icons");
 const executablePath = join(macos, "Comote");
 const swiftPath = join(buildDir, "ComoteApp.swift");
 
 await rm(appRoot, { recursive: true, force: true });
 await mkdir(macos, { recursive: true });
 await mkdir(resources, { recursive: true });
-await mkdir(iconset, { recursive: true });
 
-const iconPngs = await writeIconset(iconset);
-await writeFile(join(resources, "AppIcon.icns"), makeIcns(iconPngs));
-await writeFile(join(resources, "AppIcon.png"), iconPngs.get(1024));
+await generateDesktopIcons(iconsDir);
+await writeFile(join(resources, "AppIcon.icns"), await readFile(join(iconsDir, "icon.icns")));
+await writeFile(join(resources, "AppIcon.png"), await readFile(join(iconsDir, "icon.png")));
 
 await writeFile(
   join(contents, "Info.plist"),
@@ -197,25 +196,3 @@ await execFileAsync("swiftc", [
 await chmod(executablePath, 0o755);
 
 console.log(`Built ${appRoot}`);
-
-async function writeIconset(targetDir) {
-  const pngs = new Map();
-  const sizes = [
-    ["icon_16x16.png", 16],
-    ["icon_16x16@2x.png", 32],
-    ["icon_32x32.png", 32],
-    ["icon_32x32@2x.png", 64],
-    ["icon_128x128.png", 128],
-    ["icon_128x128@2x.png", 256],
-    ["icon_256x256.png", 256],
-    ["icon_256x256@2x.png", 512],
-    ["icon_512x512.png", 512],
-    ["icon_512x512@2x.png", 1024],
-  ];
-  for (const [name, size] of sizes) {
-    const png = makeIconPng(size);
-    pngs.set(size, png);
-    await writeFile(join(targetDir, name), png);
-  }
-  return pngs;
-}

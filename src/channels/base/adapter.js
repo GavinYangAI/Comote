@@ -44,6 +44,9 @@ export class BaseChannelAdapter {
     supportsMedia = null,
     allowGroups = false,
     noProjectMessage = null,
+    beginInboundFeedback = null,
+    finishInboundFeedback = null,
+    singleMessageTurns = false,
   }) {
     this.channelId = channelId;
     this.commandRouter = commandRouter;
@@ -60,6 +63,9 @@ export class BaseChannelAdapter {
     this.supportsMedia = supportsMedia ?? Boolean(downloadAttachment);
     this.allowGroups = allowGroups;
     this.noProjectMessage = noProjectMessage;
+    this.beginInboundFeedback = beginInboundFeedback;
+    this.finishInboundFeedback = finishInboundFeedback;
+    this.singleMessageTurns = singleMessageTurns;
     // Group conversations already told "direct messages only" — one notice per
     // group, in-memory (a restart re-noticing once is acceptable), FIFO-capped
     // so an adapter that sees many groups can't grow this without bound.
@@ -118,6 +124,38 @@ export class BaseChannelAdapter {
     }
     await this.resolveIdentityName?.(message.identity);
     this.onDetectedIdentity?.(message.identity);
+
+    let feedback = null;
+    try {
+      const isAuthorized = this.commandRouter?.authorization?.isAuthorized;
+      const mayAcknowledge = typeof isAuthorized !== "function"
+        || isAuthorized.call(this.commandRouter.authorization, message.identity);
+      feedback = mayAcknowledge
+        ? await this.beginInboundFeedback?.(message) ?? null
+        : null;
+    } catch {
+      // An acknowledgement reaction is optional UI feedback. It must never
+      // prevent the actual user message from reaching the command router.
+    }
+
+    let result = null;
+    try {
+      result = await this._handleRoutableMessage(message);
+      return result;
+    } finally {
+      try {
+        await this.finishInboundFeedback?.({
+          feedback,
+          message,
+          threadId: result?.startedThreadId ?? null,
+        });
+      } catch {
+        // Removing/binding optional feedback is best-effort for the same reason.
+      }
+    }
+  }
+
+  async _handleRoutableMessage(message) {
 
     let promptText = message.text;
     let attachments = message.attachments;
@@ -204,7 +242,12 @@ export class BaseChannelAdapter {
       accountId: message.accountId,
       inReplyTo: message.messageId,
     });
-    if (semantic) {
+    const oneMessageMode = typeof this.singleMessageTurns === "function"
+      ? this.singleMessageTurns()
+      : this.singleMessageTurns;
+    const redundantLiveReply = oneMessageMode
+      && (reply?.startedThreadId || reply?.approvalResolution);
+    if (semantic && !redundantLiveReply) {
       await this.sendReply(semantic);
     }
     return reply ?? { kind: "ignored" };

@@ -10,11 +10,11 @@ import { ProjectStore } from "../src/core/projects.js";
 import { SessionStore } from "../src/core/sessions.js";
 import { CommandRouter } from "../src/core/commands.js";
 
-function makeRouter() {
+function makeRouter(overrides = {}) {
   const authorization = new AuthorizationStore();
   const projects = new ProjectStore();
   const sessions = new SessionStore();
-  const router = new CommandRouter({ authorization, projects, sessions });
+  const router = new CommandRouter({ authorization, projects, sessions, ...overrides });
   return { authorization, projects, sessions, router };
 }
 
@@ -449,6 +449,164 @@ test("/approve and /deny resolve pending Codex Desktop approvals", async () => {
   ]);
 });
 
+test("/automode switches the approval reviewer on the caller's active Codex thread", async () => {
+  const calls = [];
+  const settingsUpdates = [];
+  const codexDesktop = {
+    async resumeThread(params) {
+      calls.push(["resume", params]);
+    },
+    async updateThreadSettings(settings) {
+      calls.push(["settings", settings]);
+      settingsUpdates.push(settings);
+    },
+  };
+  const { authorization, projects, sessions, router } = makeRouter({ codexDesktop });
+  const alice = { channel: "wechat", stableId: "alice", displayName: "Alice" };
+  const bob = { channel: "wechat", stableId: "bob", displayName: "Bob" };
+  authorization.confirmIdentity(alice);
+  authorization.confirmIdentity(bob);
+  projects.replaceProjects([{ name: "comote", path: "/repo", source: "manual", status: "available" }]);
+  router.handleMessage({ identity: alice, text: "/open 1" });
+  router.handleMessage({ identity: bob, text: "/open 1" });
+  sessions.upsertExternalSession({
+    projectPath: "/repo",
+    id: "thread_alice",
+    title: "Alice thread",
+    identityKey: "wechat:alice",
+  });
+  sessions.upsertExternalSession({
+    projectPath: "/repo",
+    id: "thread_bob",
+    title: "Bob thread",
+    identityKey: "wechat:bob",
+  });
+
+  const enabled = await router.handleMessageAsync({ identity: alice, text: "/automode true" });
+  assert.match(enabled.text, /Approve for me/);
+  assert.deepEqual(settingsUpdates.at(-1), {
+    threadId: "thread_alice",
+    approvalsReviewer: "auto_review",
+  });
+  assert.deepEqual(calls.slice(0, 2), [
+    ["resume", { threadId: "thread_alice", cwd: "/repo" }],
+    ["settings", { threadId: "thread_alice", approvalsReviewer: "auto_review" }],
+  ]);
+
+  const disabled = await router.handleMessageAsync({ identity: alice, text: "/automode false" });
+  assert.match(disabled.text, /Ask for approval/);
+  assert.deepEqual(settingsUpdates.at(-1), {
+    threadId: "thread_alice",
+    approvalsReviewer: "user",
+  });
+});
+
+test("/automode rejects invalid values and requires an active conversation", async () => {
+  const { authorization, projects, router } = makeRouter({
+    codexDesktop: { updateThreadSettings: async () => {} },
+  });
+  const identity = { channel: "wechat", stableId: "owner", displayName: "Owner" };
+  authorization.confirmIdentity(identity);
+
+  const invalid = await router.handleMessageAsync({ identity, text: "/automode yes" });
+  assert.match(invalid.text, /\/automode <true\|false>/);
+
+  projects.replaceProjects([{ name: "comote", path: "/repo", source: "manual", status: "available" }]);
+  router.handleMessage({ identity, text: "/open 1" });
+  const missing = await router.handleMessageAsync({ identity, text: "/automode true" });
+  assert.match(missing.text, /\/use <编号>.*\/new <消息>/);
+});
+
+test("/model selects a model, then reasoning effort, and persists the settings", async () => {
+  const calls = [];
+  const desktop = {
+    getStatus: () => ({ state: "connected" }),
+    async resumeThread(params) {
+      calls.push(["resume", params]);
+      return {
+        thread: {
+          id: "thread_1",
+          model: "gpt-5.2",
+          reasoningEffort: "medium",
+        },
+      };
+    },
+    async listModels() {
+      return {
+        data: [
+          {
+            model: "gpt-5.2",
+            displayName: "GPT-5.2",
+            supportedReasoningEfforts: ["low", "medium", "high"],
+          },
+          {
+            model: "gpt-5.2-codex",
+            displayName: "GPT-5.2 Codex",
+            supportedReasoningEfforts: [{ reasoningEffort: "high" }],
+          },
+        ],
+      };
+    },
+    async updateThreadSettings(params) {
+      calls.push(["settings", params]);
+    },
+  };
+  const { authorization, projects, sessions, router } = makeRouter({ codexDesktop: desktop });
+  const identity = { channel: "wechat", stableId: "model-owner", displayName: "Alice" };
+  authorization.confirmIdentity(identity);
+  projects.replaceProjects([{ name: "comote", path: "/repo", source: "manual", status: "available" }]);
+  router.handleMessage({ identity, text: "/open 1" });
+  sessions.upsertExternalSession({
+    projectPath: "/repo",
+    id: "thread_1",
+    title: "Model test",
+    identityKey: "wechat:model-owner",
+  });
+
+  const models = await router.handleMessageAsync({ identity, text: "/model" });
+  assert.equal(models.picker.pickKind, "model");
+  assert.deepEqual(models.picker.items.map((item) => item.label), ["GPT-5.2", "GPT-5.2 Codex"]);
+
+  const reasoning = await router.handleMessageAsync({ identity, text: "2" });
+  assert.equal(reasoning.picker.pickKind, "reasoning");
+  assert.deepEqual(reasoning.picker.items.map((item) => item.label), ["high"]);
+
+  const changed = await router.handleMessageAsync({ identity, text: "1" });
+  assert.match(changed.text, /GPT-5\.2 Codex/);
+  assert.match(changed.text, /high/);
+  assert.deepEqual(calls.at(-1), ["settings", {
+    threadId: "thread_1",
+    model: "gpt-5.2-codex",
+    reasoningEffort: "high",
+  }]);
+  assert.deepEqual(router.getThreadSettings("thread_1"), {
+    model: "gpt-5.2-codex",
+    reasoningEffort: "high",
+  });
+  assert.equal(router.pendingByIdentity.has(router.identityKey(identity)), false);
+});
+
+test("/cancel exits either stage of the /model picker", async () => {
+  const desktop = {
+    getStatus: () => ({ state: "connected" }),
+    async listModels() { return { data: [{ model: "gpt-5.2", supportedReasoningEfforts: ["low"] }] }; },
+    async resumeThread() { return { thread: { id: "thread_1", model: "gpt-5.2" } }; },
+    async updateThreadSettings() {},
+  };
+  const { authorization, projects, sessions, router } = makeRouter({ codexDesktop: desktop });
+  const identity = { channel: "wechat", stableId: "cancel-model", displayName: "Alice" };
+  authorization.confirmIdentity(identity);
+  projects.replaceProjects([{ name: "comote", path: "/repo", source: "manual", status: "available" }]);
+  router.handleMessage({ identity, text: "/open 1" });
+  sessions.upsertExternalSession({ projectPath: "/repo", id: "thread_1", title: "Model test", identityKey: "wechat:cancel-model" });
+
+  await router.handleMessageAsync({ identity, text: "/model" });
+  assert.match((await router.handleMessageAsync({ identity, text: "/cancel" })).text, /退出选择/);
+  await router.handleMessageAsync({ identity, text: "/model" });
+  await router.handleMessageAsync({ identity, text: "1" });
+  assert.match((await router.handleMessageAsync({ identity, text: "/cancel" })).text, /退出选择/);
+});
+
 test("/new falls back to Codex CLI when Desktop is disconnected", async () => {
   const authorization = new AuthorizationStore();
   const projects = new ProjectStore();
@@ -470,8 +628,87 @@ test("/new falls back to Codex CLI when Desktop is disconnected", async () => {
   router.handleMessage({ identity, text: "/open 1" });
   const reply = await router.handleMessageAsync({ identity, text: "/new inspect repo" });
 
-  assert.match(reply.text, /已启动 Codex CLI 备用会话/);
+  assert.match(reply.text, /已通过 Codex CLI 启动会话/);
   assert.match(reply.text, /CLI response/);
+});
+
+test("preferred CLI wins for a new session even while Desktop is connected", async () => {
+  const authorization = new AuthorizationStore();
+  const projects = new ProjectStore();
+  const sessions = new SessionStore();
+  const identity = { channel: "wechat", stableId: "wxid_owner", displayName: "Alice" };
+  let desktopStarted = false;
+  const codexDesktop = {
+    getStatus: () => ({ state: "connected" }),
+    startThread: async () => {
+      desktopStarted = true;
+      return { thread: { id: "desktop_thread" } };
+    },
+  };
+  const codexCli = {
+    getStatus: () => ({ state: "available" }),
+    runPrompt: async () => ({ id: "019_cli_thread", output: "CLI preferred" }),
+  };
+  const router = new CommandRouter({
+    authorization,
+    projects,
+    sessions,
+    codexDesktop,
+    codexCli,
+    getPreferredConnector: () => "cli",
+  });
+  authorization.confirmIdentity(identity);
+  projects.replaceProjects([{ name: "comote", path: "/repo", source: "codex-desktop", status: "available" }]);
+
+  router.handleMessage({ identity, text: "/open 1" });
+  const reply = await router.handleMessageAsync({ identity, text: "/new inspect repo" });
+
+  assert.equal(desktopStarted, false);
+  assert.match(reply.text, /CLI preferred/);
+  assert.equal(sessions.getActiveSession("/repo", "wechat:wxid_owner").connector, "cli");
+});
+
+test("a thread opened with CLI preference continues through codex exec resume", async () => {
+  const authorization = new AuthorizationStore();
+  const projects = new ProjectStore();
+  const sessions = new SessionStore();
+  const identity = { channel: "wechat", stableId: "wxid_owner", displayName: "Alice" };
+  let desktopResumed = false;
+  const cliCalls = [];
+  const codexDesktop = {
+    getStatus: () => ({ state: "connected" }),
+    listThreads: async () => ({ threads: [{ id: "019_thread", title: "Existing task", cwd: "/repo" }] }),
+    resumeThread: async () => {
+      desktopResumed = true;
+      return { thread: { id: "019_thread" } };
+    },
+  };
+  const codexCli = {
+    getStatus: () => ({ state: "available" }),
+    runPrompt: async (options) => {
+      cliCalls.push(options);
+      return { id: options.resumeId, output: "continued in CLI" };
+    },
+  };
+  const router = new CommandRouter({
+    authorization,
+    projects,
+    sessions,
+    codexDesktop,
+    codexCli,
+    getPreferredConnector: () => "cli",
+  });
+  authorization.confirmIdentity(identity);
+  projects.replaceProjects([{ name: "comote", path: "/repo", source: "codex-desktop", status: "available" }]);
+
+  router.handleMessage({ identity, text: "/open 1" });
+  await router.handleMessageAsync({ identity, text: "/use 1" });
+  const reply = await router.handleMessageAsync({ identity, text: "continue" });
+
+  assert.equal(desktopResumed, false);
+  assert.equal(cliCalls[0].resumeId, "019_thread");
+  assert.match(reply.text, /continued in CLI/);
+  assert.equal(sessions.getActiveSession("/repo", "wechat:wxid_owner").connector, "cli");
 });
 
 test("projects reply carries a picker descriptor", async () => {
@@ -594,7 +831,7 @@ test("/help is the grouped single-source command reference", async () => {
   // Every command still documented (single source of truth).
   for (const cmd of [
     "/projects", "/open", "/sessions", "/use", "/switch", "/new", "/current",
-    "/file", "/approve", "/deny", "/cancel", "/tail", "/status",
+    "/file", "/approve", "/deny", "/automode", "/cancel", "/tail", "/status",
   ]) {
     assert.ok(reply.text.includes(cmd), `expected /help to document ${cmd}`);
   }

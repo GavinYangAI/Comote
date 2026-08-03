@@ -30,6 +30,42 @@ function makeRuntime(overrides = {}) {
   return { runtime, queue, rendered };
 }
 
+test("inbound reaction stays for a running turn and is removed on completion", async () => {
+  const { runtime } = makeRuntime();
+  const removed = [];
+  runtime.addInboundReaction = async (message) => ({ messageId: message.messageId, reactionId: "r1" });
+  runtime.removeInboundReaction = async (feedback) => { removed.push(feedback); };
+
+  const feedback = await runtime.beginInboundFeedback({ messageId: "m1" });
+  await runtime.finishInboundFeedback({ feedback, threadId: "t1" });
+  assert.equal(runtime.inboundFeedbackByThread.has("t1"), true);
+  assert.equal(removed.length, 0);
+  await runtime.completeInboundFeedback("t1");
+  assert.deepEqual(removed, [{ messageId: "m1", reactionId: "r1" }]);
+});
+
+test("a completion that races ahead of reaction binding still clears it", async () => {
+  const { runtime } = makeRuntime();
+  const removed = [];
+  runtime.removeInboundReaction = async (feedback) => { removed.push(feedback); };
+  await runtime.completeInboundFeedback("fast-thread");
+  await runtime.finishInboundFeedback({
+    feedback: { messageId: "m-fast", reactionId: "r-fast" },
+    threadId: "fast-thread",
+  });
+  assert.equal(runtime.inboundFeedbackByThread.has("fast-thread"), false);
+  assert.equal(removed[0].reactionId, "r-fast");
+});
+
+test("reaction cleanup failures do not disrupt turn completion", async () => {
+  const { runtime } = makeRuntime();
+  runtime.removeInboundReaction = async () => { throw new Error("reaction API unavailable"); };
+  runtime.inboundFeedbackByThread.set("t1", { messageId: "m1", reactionId: "r1" });
+
+  await assert.doesNotReject(() => runtime.completeInboundFeedback("t1"));
+  assert.equal(runtime.inboundFeedbackByThread.has("t1"), false);
+});
+
 test("deliverQueued renders each queued reply for this channel and marks delivered", async () => {
   const { runtime, queue, rendered } = makeRuntime();
   queue.enqueue({ channel: "test", conversationId: "c1", kind: "text", text: "a", dedupeKey: "t:a" });

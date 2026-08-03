@@ -64,6 +64,11 @@ test("approval callback resolves the approval and returns a card update", async 
   const res = await runtime.handleCardAction(cardPayload({ params: { action: "approve", code: "a1" } }));
   assert.deepEqual(resolved[0], { code: "a1", decision: "accept" });
   assert.ok(res.cardData?.cardParamMap, "returns an in-frame card update");
+  assert.equal(res.cardData.cardParamMap.done, "true");
+  assert.equal(res.cardData.cardParamMap.statusType, "primary");
+  assert.equal(res.cardData.cardParamMap.approveParams, "");
+  assert.equal(res.cardData.cardParamMap.sessionParams, "");
+  assert.equal(res.cardData.cardParamMap.rejectParams, "");
 });
 
 test("review-2 (B-4): approval callback forwards the clicker identity to the router", async () => {
@@ -81,6 +86,12 @@ test("reject maps to decline", async () => {
   const { runtime, resolved } = makeRuntime();
   await runtime.handleCardAction(cardPayload({ params: { action: "reject", code: "a2" } }));
   assert.deepEqual(resolved[0], { code: "a2", decision: "decline" });
+});
+
+test("session approval maps to acceptForSession", async () => {
+  const { runtime, resolved } = makeRuntime();
+  await runtime.handleCardAction(cardPayload({ params: { action: "approve_session", code: "a3" } }));
+  assert.deepEqual(resolved[0], { code: "a3", decision: "acceptForSession" });
 });
 
 test("pick callback dispatches async and returns immediately", async () => {

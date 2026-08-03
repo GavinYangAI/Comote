@@ -44,6 +44,12 @@ test("statusCard shows a cancel button while running", () => {
   assert.deepEqual(action.actions[0].value, { kind: "cancel", threadId: "t1" });
 });
 
+test("statusCard shows the current model and reasoning effort", () => {
+  const card = statusCard({ phase: "progress", model: "gpt-5.2-codex", reasoningEffort: "high" });
+  assert.ok(card.elements.some((element) =>
+    element.tag === "markdown" && /gpt-5\.2-codex/.test(element.content) && /high/.test(element.content)));
+});
+
 test("statusCard for a completed turn has no cancel button and shows text", () => {
   const card = statusCard({ phase: "completed", threadId: "t1", text: "done", done: true });
   assert.equal(card.header.template, "green");
@@ -57,12 +63,54 @@ test("statusCard renders the error phase with a red header and the message", () 
   assert.ok(card.elements.some((el) => el.tag === "markdown" && el.content === "boom"));
 });
 
-test("approvalCard carries approve/decline button values", () => {
+test("statusCard renders tool activity inside the card", () => {
+  const card = statusCard({
+    phase: "progress",
+    threadId: "t1",
+    activities: [
+      { label: "running npm", detail: '{"command":"npm test","cwd":"/repo"}' },
+      "edited app.js",
+    ],
+  });
+  const panel = card.elements.find((element) => element.tag === "collapsible_panel");
+  assert.ok(panel, "tool activity uses Feishu's collapsible panel");
+  assert.equal(panel.expanded, false);
+  const body = panel.elements.map((element) => element.content ?? "").join("\n");
+  assert.match(body, /running npm/);
+  assert.match(body, /npm test/);
+  assert.match(body, /\/repo/);
+  assert.match(body, /edited app\.js/);
+});
+
+test("statusCard keeps tool activity between the text blocks where it occurred", () => {
+  const card = statusCard({
+    phase: "streaming",
+    content: [
+      { type: "text", text: "before tools" },
+      { type: "activities", activities: ["running npm"] },
+      { type: "text", text: "after tools" },
+    ],
+  });
+  const before = card.elements.findIndex((element) => element.content === "before tools");
+  const tools = card.elements.findIndex((element) => element.tag === "collapsible_panel");
+  const after = card.elements.findIndex((element) => element.content === "after tools");
+  assert.ok(before < tools && tools < after);
+});
+
+test("approvalCard carries approve/session/decline button values", () => {
   const card = approvalCard({ shortCode: "a1", detail: "rm -rf build" });
   assert.match(card.header.title.content, /a1/);
   const action = card.elements.find((el) => el.tag === "action");
-  assert.deepEqual(action.actions.map((b) => b.value.decision), ["accept", "decline"]);
+  assert.deepEqual(action.actions.map((b) => b.value.decision), ["accept", "acceptForSession", "decline"]);
   assert.ok(action.actions.every((b) => b.value.kind === "approval" && b.value.code === "a1"));
+});
+
+test("auto-approved approvalCard has a notice and no actions", () => {
+  const card = approvalCard({ shortCode: "a1", detail: "npm test", autoApproved: true });
+  assert.ok(!card.elements.some((element) => element.tag === "action"));
+  const body = card.elements.map((element) => element.content ?? "").join("\n");
+  assert.match(body, /自动模式/);
+  assert.doesNotMatch(body, /\/approve|\/deny/);
 });
 
 test("approvalCard includes the /approve text-command fallback (works when buttons can't)", () => {
@@ -80,8 +128,21 @@ test("approvalCard includes the /approve text-command fallback (works when butto
 });
 
 test("approvalResolvedCard reflects the decision", () => {
-  assert.match(approvalResolvedCard({ code: "a1", decision: "accept" }).header.title.content, /已批准/);
-  assert.match(approvalResolvedCard({ code: "a1", decision: "decline" }).header.title.content, /已拒绝/);
+  const accepted = approvalResolvedCard({ code: "a1", decision: "acceptForSession", detail: "`npm test`" });
+  assert.match(accepted.header.title.content, /已批准/);
+  assert.equal(accepted.header.template, "green");
+  assert.equal(accepted.elements[0].content, "`npm test`");
+  const acceptedActions = accepted.elements.find((element) => element.tag === "action").actions;
+  assert.equal(acceptedActions.length, 1);
+  assert.equal(acceptedActions[0].type, "primary");
+  assert.equal("value" in acceptedActions[0], false, "resolved button must have no callback value");
+
+  const rejected = approvalResolvedCard({ code: "a1", decision: "decline" });
+  assert.match(rejected.header.title.content, /已拒绝/);
+  assert.equal(rejected.header.template, "red");
+  const rejectedButton = rejected.elements.find((element) => element.tag === "action").actions[0];
+  assert.equal(rejectedButton.type, "danger");
+  assert.equal("value" in rejectedButton, false);
 });
 
 test("pickerCard renders one button per item with pick values", () => {

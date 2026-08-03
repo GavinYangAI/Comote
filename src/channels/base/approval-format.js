@@ -3,18 +3,23 @@
 // semantic reply to text (wechat) or a card body (feishu) without duplicating.
 import { t } from "../../core/i18n/index.js";
 
-export function describeApprovalForChat(approval) {
-  const params = approval.params ?? {};
+export function describeApprovalForChat(approval, { autoApproved = false } = {}) {
   const lines = [t("state.approval.title", { code: approval.shortCode })];
-  if (Array.isArray(approval.changes) && approval.changes.length > 0) {
-    lines.push(summarizeChanges(approval.changes));
-  } else {
-    const detail = params.command ?? params.reason ?? approval.method;
-    const cwd = params.cwd ? "\n" + t("state.approval.cwd", { cwd: params.cwd }) : "";
-    lines.push(`${detail}${cwd}`);
-  }
-  lines.push(t("state.approval.instructions", { code: approval.shortCode }));
+  lines.push(approvalSummaryForChat(approval));
+  lines.push(
+    autoApproved
+      ? t("state.approval.autoApproved")
+      : t("state.approval.instructions", { code: approval.shortCode }),
+  );
   return lines.join("\n\n");
+}
+
+export function describeResolvedApprovalForChat(approval, { code, decision } = {}) {
+  const accepted = decision === "accept" || decision === "acceptForSession";
+  const title = accepted
+    ? t("card.approval.accepted", { code })
+    : t("card.approval.rejected", { code });
+  return approval ? `${title}\n\n${approvalSummaryForChat(approval)}` : title;
 }
 
 // Markdown body for a Feishu approval card — reuses the diff/command summary.
@@ -26,6 +31,16 @@ export function approvalDetail(approval) {
   const detail = params.command ?? params.reason ?? approval.method;
   const cwd = params.cwd ? "\n\n" + t("state.approval.cwdMarkdown", { cwd: params.cwd }) : "";
   return `\`${detail}\`${cwd}`;
+}
+
+function approvalSummaryForChat(approval) {
+  const params = approval?.params ?? {};
+  if (Array.isArray(approval?.changes) && approval.changes.length > 0) {
+    return summarizeChanges(approval.changes);
+  }
+  const detail = params.command ?? params.reason ?? approval?.method ?? t("card.approval.detailFallback");
+  const cwd = params.cwd ? "\n" + t("state.approval.cwd", { cwd: params.cwd }) : "";
+  return `${detail}${cwd}`;
 }
 
 export function summarizeChanges(changes) {

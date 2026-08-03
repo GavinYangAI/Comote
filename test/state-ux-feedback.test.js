@@ -156,6 +156,30 @@ test("B-3: a second connection drop does not duplicate the notice for the same t
   assert.equal(texts.length, 1, "exactly one disconnect notice per active turn");
 });
 
+test("B-3: structured Codex errors are flattened before reaching IM", () => {
+  const { desktop, state } = buildState();
+  bindThread(state, "t1", "wechat");
+  desktop.onEvent({
+    type: "error",
+    threadId: "t1",
+    message: {
+      message: "Reconnecting... 3/5",
+      codexErrorInfo: {
+        responseStreamDisconnected: {
+          httpStatusCode: 403,
+        },
+      },
+      additionalDetails:
+        "Access blocked by Cloudflare. This usually happens when connecting from a restricted region (status 403 Forbidden), url: https://api.777358.xyz/responses, cf-ray: a247969829c73969-LAX",
+    },
+  });
+  const texts = textsFor(state, "wechat").filter((r) => r.dedupeKey.startsWith("error:"));
+  assert.equal(texts.length, 1, "one error reply reaches the IM queue");
+  assert.match(texts[0].text, /Reconnecting\.\.\. 3\/5/);
+  assert.match(texts[0].text, /Access blocked by Cloudflare/);
+  assert.ok(!texts[0].text.includes("[object Object]"));
+});
+
 // ---------------------------------------------------------------- B-8③ typing
 
 test("B-8: turnStarted on a telegram-bound thread fires the typing chat action", async () => {

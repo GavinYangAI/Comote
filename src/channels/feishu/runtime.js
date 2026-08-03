@@ -1,9 +1,11 @@
 import { BaseChannelRuntime } from "../base/runtime.js";
 import { routerReplyToSemantic } from "../base/messages.js";
-import { approvalResolvedCard } from "./cards.js";
+import { EditableApprovalMessages } from "../base/editable-approval-messages.js";
+import { approvalCard, approvalResolvedCard } from "./cards.js";
 import { createFeishuRenderer } from "./renderer.js";
 import { classifyMedia, resolveWithinProject } from "../../core/paths.js";
 import { t } from "../../core/i18n/index.js";
+import { approvalDetail } from "../base/approval-format.js";
 
 // Re-exported for back-compat: the media size guard now lives in the renderer
 // (A5), but external references still import it from here.
@@ -41,6 +43,21 @@ export class FeishuRuntimeService extends BaseChannelRuntime {
       dedupMax: 500,
     });
     this.cardUpdateIntervalMs = cardUpdateIntervalMs;
+    this.approvalMessages = new EditableApprovalMessages({
+      update: async (message, resolution) => {
+        if (message.threadId) {
+          return this._resumeLiveApproval(message, resolution);
+        }
+        await this.driver.updateCard({
+          messageId: message.messageId,
+          card: approvalResolvedCard({
+            code: resolution.code,
+            decision: resolution.decision,
+            detail: resolution.approval ? approvalDetail(resolution.approval) : "",
+          }),
+        });
+      },
+    });
     // threadId -> { messageId, conversationId, lastSentAt, pendingCard, timer }
     this.cardSessions = new Map();
     // Feishu delivers events at-least-once and redelivers when the consumer is
@@ -57,6 +74,29 @@ export class FeishuRuntimeService extends BaseChannelRuntime {
   // one card shape.
   buildStatusCard(status) {
     return this.renderer.buildStatusCard(status);
+  }
+
+  async addInboundReaction(message) {
+    const result = await this.driver?.addMessageReaction?.({
+      messageId: message.messageId,
+      emojiType: "EYES",
+    });
+    return result?.reactionId
+      ? { messageId: message.messageId, reactionId: result.reactionId }
+      : null;
+  }
+
+  async removeInboundReaction(feedback) {
+    if (!feedback?.messageId || !feedback?.reactionId) return false;
+    return this.driver?.removeMessageReaction?.(feedback);
+  }
+
+  rememberApprovalMessage(code, message) {
+    return this.approvalMessages.remember(code, message);
+  }
+
+  resolveApprovalMessage({ code, decision, approval = null, fallback = null }) {
+    return this.approvalMessages.resolve({ code, decision, approval, fallback });
   }
 
   // Override start() to preserve two feishu-specific guarantees the base does
@@ -174,8 +214,13 @@ export class FeishuRuntimeService extends BaseChannelRuntime {
         messageId: result.messageId,
         conversationId,
         lastSentAt: Date.now(),
+        lastCard: card,
         pendingCard: null,
         timer: null,
+        paused: false,
+        resumeCard: null,
+        liveApprovals: new Map(),
+        updateChain: Promise.resolve(),
       });
     }
     return result;
@@ -193,6 +238,9 @@ export class FeishuRuntimeService extends BaseChannelRuntime {
       return false;
     }
     session.pendingCard = card;
+    if (session.paused) {
+      return true;
+    }
     if (session.timer) {
       return true;
     }
@@ -207,14 +255,15 @@ export class FeishuRuntimeService extends BaseChannelRuntime {
 
   async flushThreadCard(threadId) {
     const session = this.cardSessions.get(threadId);
-    if (!session || !session.pendingCard) {
+    if (!session || session.paused || !session.pendingCard) {
       return false;
     }
     const card = session.pendingCard;
     session.pendingCard = null;
     session.lastSentAt = Date.now();
     try {
-      await this.driver.updateCard({ messageId: session.messageId, card });
+      await this._updateSessionCard(session, card);
+      session.lastCard = card;
       return true;
     } catch (error) {
       this.lastError = error.message;
@@ -239,7 +288,7 @@ export class FeishuRuntimeService extends BaseChannelRuntime {
   // Sends a final card to an ALREADY-detached session (from detachThreadCard).
   async sendDetachedThreadCard(session, card) {
     try {
-      await this.driver.updateCard({ messageId: session.messageId, card });
+      await this._updateSessionCard(session, card);
       return true;
     } catch (error) {
       this.lastError = error.message;
@@ -254,6 +303,112 @@ export class FeishuRuntimeService extends BaseChannelRuntime {
       return false;
     }
     return this.sendDetachedThreadCard(session, card);
+  }
+
+  async showThreadApproval({ threadId, code, approval, autoApproved = false }) {
+    const session = this.cardSessions.get(threadId);
+    if (!session) return false;
+    const previousState = {
+      paused: session.paused,
+      pendingCard: session.pendingCard,
+      resumeCard: session.resumeCard,
+      liveApprovals: new Map(session.liveApprovals ?? []),
+    };
+    if (session.timer) {
+      clearTimeout(session.timer);
+      session.timer = null;
+    }
+    if (session.pendingCard) {
+      session.resumeCard = session.pendingCard;
+    } else if (!session.resumeCard) {
+      session.resumeCard = session.lastCard;
+    }
+    session.pendingCard = null;
+    session.paused = true;
+    session.liveApprovals ??= new Map();
+    session.liveApprovals.set(String(code), { approval, autoApproved });
+    this.rememberApprovalMessage(code, {
+      messageId: session.messageId,
+      conversationId: session.conversationId,
+      approval,
+      threadId,
+    });
+    const card = approvalCard({
+      shortCode: code,
+      detail: approvalDetail(approval),
+      autoApproved,
+    });
+    try {
+      await this._updateSessionCard(session, card);
+    } catch (error) {
+      session.paused = previousState.paused;
+      session.pendingCard = previousState.pendingCard;
+      session.resumeCard = previousState.resumeCard;
+      session.liveApprovals = previousState.liveApprovals;
+      this.approvalMessages.messages.delete(String(code));
+      if (!session.paused && session.pendingCard) {
+        this.updateThreadCard(threadId, session.pendingCard);
+      }
+      throw error;
+    }
+    session.lastCard = card;
+    return true;
+  }
+
+  async _resumeLiveApproval(message, resolution) {
+    const session = this.cardSessions.get(message.threadId);
+    if (!session || session.messageId !== message.messageId) {
+      await this.driver.updateCard({
+        messageId: message.messageId,
+        card: approvalResolvedCard({
+          code: resolution.code,
+          decision: resolution.decision,
+          detail: resolution.approval ? approvalDetail(resolution.approval) : "",
+        }),
+      });
+      return;
+    }
+    const liveApprovals = session.liveApprovals ?? new Map();
+    session.liveApprovals = liveApprovals;
+    liveApprovals.delete(String(resolution.code));
+    if (liveApprovals.size > 0) {
+      const [code, pending] = [...liveApprovals.entries()].at(-1);
+      session.pendingCard = null;
+      const card = this.renderer.buildApprovalCard({
+        code,
+        approval: pending.approval,
+        autoApproved: pending.autoApproved,
+      });
+      await this._updateSessionCard(session, card);
+      session.lastCard = card;
+      session.paused = true;
+      return;
+    }
+    const card = session.pendingCard ?? session.resumeCard
+      ?? this.buildStatusCard({ phase: "progress", threadId: message.threadId });
+    await this._updateSessionCard(session, card);
+    // A new approval can arrive while the resume update is in flight. Its
+    // showThreadApproval call has already re-paused the session and queued its
+    // own card update, so do not clear that newer state here.
+    if (session.liveApprovals.size > 0) {
+      return;
+    }
+    if (session.pendingCard === card) session.pendingCard = null;
+    session.resumeCard = null;
+    session.lastCard = card;
+    session.lastSentAt = Date.now();
+    session.paused = false;
+    if (session.pendingCard) {
+      this.updateThreadCard(message.threadId, session.pendingCard);
+    }
+  }
+
+  _updateSessionCard(session, card) {
+    const update = Promise.resolve(session.updateChain)
+      .catch(() => {})
+      .then(() => this.driver.updateCard({ messageId: session.messageId, card }));
+    session.updateChain = update;
+    return update;
   }
 
   // Resolves the clicking user's Comote identity from a card action. Feishu
@@ -349,18 +504,16 @@ export class FeishuRuntimeService extends BaseChannelRuntime {
         });
         return this.deniedToast();
       }
-      if (action.messageId && this.driver?.updateCard) {
-        await this.driver
-          .updateCard({
-            messageId: action.messageId,
-            card: approvalResolvedCard({
-              code: action.value.code,
-              decision: action.value.decision,
-            }),
-          })
-          .catch(() => {});
+      if (this.driver?.updateCard) {
+        await this.resolveApprovalMessage({
+          code: action.value.code,
+          decision: action.value.decision,
+          fallback: action.messageId
+            ? { messageId: action.messageId, conversationId: action.chatId }
+            : null,
+        }).catch(() => {});
       }
-      const accepted = action.value.decision === "accept";
+      const accepted = action.value.decision === "accept" || action.value.decision === "acceptForSession";
       return {
         toast: {
           type: accepted ? "success" : "info",
@@ -451,10 +604,13 @@ export class FeishuRuntimeService extends BaseChannelRuntime {
     }
     let reply;
     try {
-      reply =
-        pickKind === "project"
-          ? await router.chooseProject(identity, selector)
-          : await router.useSessionAsync(identity, selector);
+      reply = pickKind === "project"
+        ? await router.chooseProject(identity, selector)
+        : pickKind === "model"
+          ? await router.chooseModel(identity, selector)
+          : pickKind === "reasoning"
+            ? await router.chooseReasoning(identity, selector)
+            : await router.useSessionAsync(identity, selector);
     } catch (error) {
       this.eventLog?.error("飞书卡片点击：路由失败", { error: error.message });
       // Enqueue a semantic failure reply; the feishu renderer turns it into a

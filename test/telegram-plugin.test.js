@@ -10,6 +10,7 @@ test("meta declares a token channel with the right shape", () => {
   assert.equal(m.binding, "token");
   assert.equal(m.capabilities.cards, 1);
   assert.equal(m.capabilities.liveUpdates, 1);
+  assert.equal(m.capabilities.reactions, 1);
   assert.deepEqual(m.configFields.map((f) => f.name), ["botToken"]);
   assert.equal(m.configFields[0].secret, true);
   assert.deepEqual(m.boundWhen, { source: "config", field: "linkedChatId" });

@@ -81,7 +81,7 @@ const feishuPlugin = {
     displayName: "飞书 / Lark",
     inboundMode: "push",
     binding: "qr",
-    capabilities: { cards: 1, media: 1, liveUpdates: 1, milestones: 0, typing: 0, fileButtons: 1 },
+    capabilities: { cards: 1, media: 1, liveUpdates: 1, milestones: 0, typing: 0, fileButtons: 1, reactions: 1 },
     descriptionKey: "web.channel.feishu.desc",
     icon: "飞",
     configFields: [

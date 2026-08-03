@@ -292,6 +292,33 @@ test("updateCard throws when the API returns HTTP 200 with nonzero code and clea
   assert.equal(driver.tenantAccessToken, null);
 });
 
+test("message reactions use the Feishu create/delete reaction endpoints", async () => {
+  const requests = [];
+  const driver = new FeishuDriver({
+    appId: "cli_a",
+    appSecret: "secret",
+    fetchImpl: async (url, options) => {
+      requests.push({ url, options });
+      if (url.endsWith("/auth/v3/tenant_access_token/internal")) {
+        return jsonResponse({ tenant_access_token: "tok", expire: 7200 });
+      }
+      if (options.method === "POST") {
+        return jsonResponse({ code: 0, data: { reaction_id: "react_1" } });
+      }
+      return jsonResponse({ code: 0 });
+    },
+  });
+
+  const added = await driver.addMessageReaction({ messageId: "om_1", emojiType: "EYES" });
+  await driver.removeMessageReaction({ messageId: "om_1", reactionId: added.reactionId });
+
+  const add = requests.find((request) => request.url.endsWith("/im/v1/messages/om_1/reactions"));
+  const remove = requests.find((request) => request.url.endsWith("/im/v1/messages/om_1/reactions/react_1"));
+  assert.equal(add.options.method, "POST");
+  assert.deepEqual(JSON.parse(add.options.body), { reaction_type: { emoji_type: "EYES" } });
+  assert.equal(remove.options.method, "DELETE");
+});
+
 test("concurrent getTenantAccessToken calls only fetch the token once", async () => {
   let tokenFetchCount = 0;
   const driver = new FeishuDriver({

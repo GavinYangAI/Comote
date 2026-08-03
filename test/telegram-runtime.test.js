@@ -10,12 +10,12 @@ import { encodeCallback } from "../src/channels/telegram/cards.js";
 
 function makeRuntime(overrides = {}) {
   const router = { authorization: { isAuthorized: () => true }, resolveApproval: async () => {}, cancelThread: async () => {}, chooseProject: async () => "chosen", useSessionAsync: async () => "used" };
-  const calls = { resolve: [], cancel: [], answer: [] };
+  const calls = { resolve: [], cancel: [], answer: [], edit: [] };
   router.resolveApproval = async (code, decision, identity) => { calls.resolve.push([code, decision, identity]); };
   router.cancelThread = async (tid) => { calls.cancel.push(tid); };
   const driver = {
     async answerCallbackQuery(a) { calls.answer.push(a); },
-    async editMessageText() {},
+    async editMessageText(a) { calls.edit.push(a); },
     async sendMessage() { return { message_id: 1 }; },
   };
   const adapter = { commandRouter: router, sendReply: async () => ({ ok: true }) };
@@ -39,6 +39,21 @@ test("approve callback resolves the approval + answers the callback query", asyn
   // identity must be forwarded for the router's thread-owner check.
   assert.deepEqual(calls.resolve[0][2], { channel: "telegram", stableId: "9" });
   assert.equal(calls.answer[0].callbackQueryId, "cq1");
+});
+
+test("session approval callback maps to acceptForSession", async () => {
+  const { rt, calls } = makeRuntime();
+  await rt.handleCallbackQuery({
+    id: "cq-session",
+    data: "as:A1",
+    message: { chat: { id: 42 }, message_id: 5 },
+    from: { id: 42 },
+  });
+  assert.deepEqual(calls.resolve[0].slice(0, 2), ["A1", "acceptForSession"]);
+  assert.equal(calls.edit[0].messageId, 5);
+  assert.match(calls.edit[0].text, /已批准/);
+  assert.doesNotMatch(calls.edit[0].text, /已拒绝/);
+  assert.equal(calls.edit[0].replyMarkup, null);
 });
 
 test("review-2 (B-4): a not-owner rejection from the router is swallowed gracefully", async () => {
@@ -168,7 +183,7 @@ test("start() registers the bot command menu via setMyCommands (B-8)", async () 
   await rt.start();
   assert.equal(registered.length, 1, "command menu registered once on start");
   const names = registered[0].map((c) => c.command);
-  for (const want of ["status", "projects", "sessions", "use", "new", "tail", "approve", "deny", "cancel", "file", "help"]) {
+  for (const want of ["status", "projects", "sessions", "use", "new", "tail", "approve", "deny", "automode", "cancel", "file", "help"]) {
     assert.ok(names.includes(want), `menu includes /${want}`);
   }
   for (const c of registered[0]) {

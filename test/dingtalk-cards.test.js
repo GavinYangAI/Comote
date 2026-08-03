@@ -4,6 +4,7 @@ import {
   toParamMap,
   approvalCardData,
   approvalResolvedCardData,
+  approvalResolvedParamMap,
   pickerCardData,
   statusCardData,
   PICKER_OPTIONS_KEY,
@@ -24,6 +25,7 @@ test("approvalCardData carries title/detail + button params", () => {
   assert.equal(typeof data.title, "string");
   assert.equal(data.detail, "rm -rf build");
   assert.deepEqual(data.approveParams, { action: "approve", code: "a1b2" });
+  assert.deepEqual(data.sessionParams, { action: "approve_session", code: "a1b2" });
   assert.deepEqual(data.rejectParams, { action: "reject", code: "a1b2" });
 });
 
@@ -53,10 +55,48 @@ test("statusCardData maps phase to a localized title + body text", () => {
   assert.equal(data.done, true); // raw boolean — renderer.buildStatusCard stringifies via toParamMap
 });
 
+test("statusCardData shows the current model and reasoning effort", () => {
+  const data = statusCardData({ phase: "progress", model: "gpt-5.2-codex", reasoningEffort: "high" });
+  assert.match(data.body, /gpt-5\.2-codex/);
+  assert.match(data.body, /high/);
+});
+
+test("statusCardData includes tool activity in the card body", () => {
+  const data = statusCardData({
+    phase: "progress",
+    text: "answer",
+    activities: [{ label: "running npm", detail: '{"command":"npm test","cwd":"/repo"}' }],
+  });
+  assert.match(data.body, /running npm/);
+  assert.match(data.body, /npm test/);
+  assert.match(data.body, /\/repo/);
+  assert.match(data.body, /answer/);
+});
+
+test("statusCardData keeps tool activity between its surrounding text blocks", () => {
+  const data = statusCardData({
+    phase: "streaming",
+    content: [
+      { type: "text", text: "before tools" },
+      { type: "activities", activities: ["running npm"] },
+      { type: "text", text: "after tools" },
+    ],
+  });
+  assert.ok(data.body.indexOf("before tools") < data.body.indexOf("running npm"));
+  assert.ok(data.body.indexOf("running npm") < data.body.indexOf("after tools"));
+});
+
 test("approvalResolvedCardData reflects the decision", () => {
   const accepted = approvalResolvedCardData({ code: "a1", decision: "accept" });
   assert.match(accepted.title, /a1/);
   assert.equal(accepted.accepted, true);
+  assert.equal(approvalResolvedCardData({ code: "a1", decision: "acceptForSession" }).accepted, true);
   const rejected = approvalResolvedCardData({ code: "a1", decision: "decline" });
   assert.equal(rejected.accepted, false);
+  const map = approvalResolvedParamMap({ code: "a1", decision: "decline" });
+  assert.equal(map.done, "true");
+  assert.equal(map.statusType, "danger");
+  assert.equal(map.approveParams, "");
+  assert.equal(map.sessionParams, "");
+  assert.equal(map.rejectParams, "");
 });

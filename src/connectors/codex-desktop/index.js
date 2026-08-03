@@ -46,6 +46,7 @@ export class CodexDesktopConnector {
     // Assumption: one active turn per connection at a time.
     this.changedPathsByThread = new Map();
     this._activeThreadId = null;
+    this._activeTurnId = null;
     // `${threadId}:${itemId}` -> accumulated agent text for Codex 0.136+
     // delta notifications, which only carry the newest text chunk.
     this.agentMessageTextByItem = new Map();
@@ -88,6 +89,7 @@ export class CodexDesktopConnector {
     // text would otherwise accumulate forever. Drop it alongside the paths.
     this.agentMessageTextByItem.clear();
     this._activeThreadId = null;
+    this._activeTurnId = null;
     this.#emit({ type: "connectionLost" });
     this.scheduleReconnect(1);
   }
@@ -201,6 +203,7 @@ export class CodexDesktopConnector {
       method,
       params: request.params,
       threadId: request.params?.threadId ?? null,
+      ...(request.params?.turnId != null ? { turnId: request.params.turnId } : {}),
       changes: itemId ? this.fileChangesByItem.get(itemId) ?? null : null,
     };
     this.pendingApprovals.set(key, approval);
@@ -227,12 +230,15 @@ export class CodexDesktopConnector {
         type: "milestone",
         kind: "file",
         label: firstChangePathBasename(params.changes),
+        detail: fileChangeDetail(params.changes),
         threadId: params.threadId ?? null,
+        ...(this.#eventTurnId(params) != null ? { turnId: this.#eventTurnId(params) } : {}),
       });
       return;
     }
     if (method === "item/agentMessage/delta" && params.itemId) {
-      const key = agentMessageKey(params.threadId, params.itemId);
+      const turnId = this.#eventTurnId(params);
+      const key = agentMessageKey(params.threadId, params.itemId, turnId);
       const text = `${this.agentMessageTextByItem.get(key) ?? ""}${params.delta ?? ""}`;
       this.agentMessageTextByItem.set(key, text);
       this.#emit({
@@ -240,15 +246,18 @@ export class CodexDesktopConnector {
         threadId: params.threadId ?? null,
         itemId: params.itemId ?? null,
         text,
+        ...(turnId != null ? { turnId } : {}),
       });
       return;
     }
     if (method === "item/updated" && params.item?.type === "agentMessage") {
+      const turnId = this.#eventTurnId(params);
       this.#emit({
         type: "agentMessageDelta",
         threadId: params.threadId ?? null,
         itemId: params.item.id ?? null,
         text: params.item.text ?? "",
+        ...(turnId != null ? { turnId } : {}),
       });
       return;
     }
@@ -257,11 +266,12 @@ export class CodexDesktopConnector {
       // paths accumulated during the turn are already available here. Read but
       // do NOT clear them — turn/completed remains the one that clears.
       const threadId = params.threadId ?? this._activeThreadId ?? null;
+      const turnId = this.#eventTurnId(params);
       const set = threadId != null ? this.changedPathsByThread.get(threadId) : null;
       // The agent message is final: drop its accumulated delta text so the map
       // does not leak across turns (Codex 0.136+ delta accumulation).
       if (params.item.id) {
-        this.agentMessageTextByItem.delete(agentMessageKey(params.threadId, params.item.id));
+        this.agentMessageTextByItem.delete(agentMessageKey(params.threadId, params.item.id, turnId));
       }
       this.#emit({
         type: "agentMessage",
@@ -269,29 +279,51 @@ export class CodexDesktopConnector {
         itemId: params.item.id ?? null,
         text: params.item.text ?? "",
         changedPaths: set ? [...set] : [],
+        ...(turnId != null ? { turnId } : {}),
       });
       return;
     }
     if (method === "turn/started") {
       this._activeThreadId = params.threadId ?? null;
-      this.#emit({ type: "turnStarted", threadId: params.threadId ?? null });
+      this._activeTurnId = params.turnId ?? null;
+      this.#emit({
+        type: "turnStarted",
+        threadId: params.threadId ?? null,
+        ...(params.turnId != null ? { turnId: params.turnId } : {}),
+      });
       return;
     }
     if (method === "turn/completed") {
       const threadId = params.threadId ?? this._activeThreadId ?? null;
+      // Keep a missing protocol turnId missing. The state layer has a FIFO
+      // fallback for older servers; substituting the newest active turn here
+      // would mislabel a late completion from an interrupted older turn.
+      const turnId = params.turnId ?? null;
       const set = threadId != null ? this.changedPathsByThread.get(threadId) : null;
       const changedPaths = set ? [...set] : [];
       if (threadId != null) {
         this.changedPathsByThread.delete(threadId);
       }
       this._activeThreadId = null;
-      this.#emit({ type: "turnCompleted", threadId: params.threadId ?? null, changedPaths });
+      this._activeTurnId = null;
+      this.#emit({
+        type: "turnCompleted",
+        threadId: params.threadId ?? null,
+        changedPaths,
+        ...(turnId != null ? { turnId } : {}),
+      });
       return;
     }
     if (method === "item/started") {
+      const turnId = this.#eventTurnId(params);
       const itemType = params.item?.type;
       if (itemType === "commandExecution" || itemType === "fileChange") {
-        this.#emit({ type: "progress", threadId: params.threadId ?? null, itemType });
+        this.#emit({
+          type: "progress",
+          threadId: params.threadId ?? null,
+          itemType,
+          ...(turnId != null ? { turnId } : {}),
+        });
       }
       // A command starting is a discrete milestone for the IM return path: label
       // is the command's first word (the program), null-safe when absent.
@@ -300,12 +332,15 @@ export class CodexDesktopConnector {
           type: "milestone",
           kind: "command",
           label: commandLabel(params.item?.command),
+          detail: commandDetail(params.item),
           threadId: params.threadId ?? null,
+          ...(turnId != null ? { turnId } : {}),
         });
       }
       return;
     }
     if (method === "item/completed" && params.item?.type === "commandExecution") {
+      const turnId = this.#eventTurnId(params);
       // Only surface a milestone when the command FAILED — a non-zero exit is the
       // signal worth interrupting the user for. Successful commands stay silent
       // so the IM return path is not flooded with every shell step.
@@ -315,8 +350,10 @@ export class CodexDesktopConnector {
           type: "milestone",
           kind: "command",
           label: commandLabel(params.item.command),
+          detail: commandDetail(params.item),
           status: "failed",
           threadId: params.threadId ?? null,
+          ...(turnId != null ? { turnId } : {}),
         });
       }
       return;
@@ -338,12 +375,19 @@ export class CodexDesktopConnector {
       // connection down (handled by handleDisconnect) or is followed by
       // turn/completed; both reset accumulation. So we deliberately do not
       // touch changedPathsByThread here.
+      const message = normalizeCodexErrorText(params);
+      const turnId = this.#eventTurnId(params);
       this.#emit({
         type: "error",
         threadId: params.threadId ?? null,
-        message: params.message ?? params.error ?? "Codex 报告了一个错误",
+        message: message || "Codex 报告了一个错误",
+        ...(turnId != null ? { turnId } : {}),
       });
     }
+  }
+
+  #eventTurnId(params) {
+    return params.turnId ?? this._activeTurnId ?? null;
   }
 
   // Accumulates absolute paths of files changed during the active turn, keyed
@@ -468,6 +512,10 @@ export class CodexDesktopConnector {
     return this.client.request("thread/list", params);
   }
 
+  async listModels() {
+    return this.client.request("model/list", {});
+  }
+
   async listProjects({ limit = 100 } = {}) {
     // Two sources, merged: Codex Desktop's own workspace list (active
     // workspace first, then project order) AND projects derived from thread
@@ -536,11 +584,12 @@ export class CodexDesktopConnector {
     );
   }
 
-  async startThread({ cwd }) {
-    return this.client.request("thread/start", {
-      cwd,
-      approvalsReviewer: "user",
-    });
+  async startThread({ cwd, approvalsReviewer } = {}) {
+    const params = { cwd };
+    if (approvalsReviewer !== undefined) {
+      params.approvalsReviewer = approvalsReviewer;
+    }
+    return this.client.request("thread/start", params);
   }
 
   async resumeThread({ threadId, cwd = null }) {
@@ -549,6 +598,20 @@ export class CodexDesktopConnector {
       params.cwd = cwd;
     }
     return this.client.request("thread/resume", params);
+  }
+
+  async updateThreadSettings({ threadId, approvalsReviewer, model, reasoningEffort }) {
+    const params = { threadId };
+    if (approvalsReviewer !== undefined) {
+      params.approvalsReviewer = approvalsReviewer;
+    }
+    if (model !== undefined) {
+      params.model = model;
+    }
+    if (reasoningEffort !== undefined) {
+      params.reasoningEffort = reasoningEffort;
+    }
+    return this.client.request("thread/settings/update", params);
   }
 
   async startTurn({ threadId, text, cwd = null, images = [] }) {
@@ -563,7 +626,6 @@ export class CodexDesktopConnector {
       threadId,
       input,
       cwd,
-      approvalsReviewer: "user",
     });
   }
 
@@ -616,6 +678,9 @@ export class CodexDesktopConnector {
   }
 
   async resolveApproval(idOrShortCode, decision) {
+    if (!APPROVAL_DECISIONS.has(decision)) {
+      throw new Error(`invalid approval decision: ${decision}`);
+    }
     const key = this.shortCodeToKey.get(idOrShortCode) ?? String(idOrShortCode);
     const approval = this.pendingApprovals.get(key);
     if (!approval) {
@@ -629,6 +694,8 @@ export class CodexDesktopConnector {
     return { ok: true };
   }
 }
+
+const APPROVAL_DECISIONS = new Set(["accept", "acceptForSession", "decline"]);
 
 // Pure helper: normalizes the various file-change shapes the app-server emits
 // into a flat list of paths. Arrays of change objects (or strings), or an
@@ -653,6 +720,71 @@ export function commandLabel(command) {
   if (typeof command !== "string") return null;
   const first = command.trim().split(/\s+/)[0];
   return first || null;
+}
+
+// Compact tool parameters for IM cards. Commands are usually short, but a
+// generated shell script can be large enough to exceed platform card limits.
+export function commandDetail(item = {}) {
+  return compactToolDetail({
+    ...(item.command != null ? { command: item.command } : {}),
+    ...(item.cwd != null ? { cwd: item.cwd } : {}),
+  });
+}
+
+function fileChangeDetail(changes) {
+  const paths = extractChangePaths(changes);
+  return paths.length > 0 ? compactToolDetail({ paths }) : null;
+}
+
+function compactToolDetail(value, max = 300) {
+  if (!value || Object.keys(value).length === 0) return null;
+  const text = JSON.stringify(value, null, 2);
+  if (text.length <= max) return text;
+  return `${text.slice(0, max - 3)}...`;
+}
+
+export function normalizeCodexErrorText(value, seen = new WeakSet()) {
+  if (value == null) return "";
+  if (typeof value === "string") return value.trim();
+  if (typeof value === "number" || typeof value === "boolean" || typeof value === "bigint") {
+    return String(value);
+  }
+  if (value instanceof Error) {
+    const parts = [];
+    const message = typeof value.message === "string" ? value.message.trim() : "";
+    if (message) {
+      parts.push(message);
+    }
+    const cause = normalizeCodexErrorText(value.cause, seen);
+    if (cause && !parts.includes(cause)) {
+      parts.push(cause);
+    }
+    return parts.join("\n");
+  }
+  if (typeof value !== "object") {
+    return String(value);
+  }
+  if (seen.has(value)) {
+    return "";
+  }
+  seen.add(value);
+  const parts = [];
+  for (const key of ["message", "additionalDetails", "details", "detail", "error", "description", "reason"]) {
+    if (!(key in value)) continue;
+    const text = normalizeCodexErrorText(value[key], seen);
+    if (text && !parts.includes(text)) {
+      parts.push(text);
+    }
+  }
+  if (parts.length > 0) {
+    return parts.join("\n");
+  }
+  try {
+    const json = JSON.stringify(value, null, 2);
+    return json && json !== "{}" ? json : String(value);
+  } catch {
+    return String(value);
+  }
 }
 
 // Pure helper: basename of the first changed path in a patch update, used as a
@@ -872,7 +1004,12 @@ function readCodexWorkspaceProjects(statePath) {
 
 function approvalResultFor(method, decision) {
   if (method === "execCommandApproval" || method === "applyPatchApproval") {
-    return { decision: decision === "accept" ? "approved" : "denied" };
+    const legacyDecision = decision === "accept"
+      ? "approved"
+      : decision === "acceptForSession"
+        ? "approved_for_session"
+        : "denied";
+    return { decision: legacyDecision };
   }
   return { decision };
 }
@@ -947,8 +1084,10 @@ function textFromContent(content) {
   return parts.length > 0 ? parts.join("\n") : null;
 }
 
-function agentMessageKey(threadId, itemId) {
-  return `${threadId ?? ""}:${itemId ?? ""}`;
+function agentMessageKey(threadId, itemId, turnId = null) {
+  return turnId == null
+    ? `${threadId ?? ""}:${itemId ?? ""}`
+    : `${threadId ?? ""}:${turnId}:${itemId ?? ""}`;
 }
 
 function isMethodMissingError(error) {

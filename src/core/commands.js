@@ -14,6 +14,8 @@ function isAbsolutePath(value) {
 // oldest-first rather than letting a scan of random strangers grow the state
 // file forever. Worst case an evicted identity sees the notice once more.
 const MAX_REMEMBERED_IDENTITIES = 500;
+const DEFAULT_REASONING_EFFORTS = ["low", "medium", "high"];
+const MODEL_PICKER_TYPES = new Set(["choose_model", "choose_reasoning"]);
 
 // Adds `key` to a Set that behaves as a FIFO of at most
 // MAX_REMEMBERED_IDENTITIES entries (Sets iterate in insertion order).
@@ -32,10 +34,12 @@ export class CommandRouter {
     codexDesktop = null,
     codexCli = null,
     outboundQueue = null,
+    persist = null,
     persisted = {},
     maxTurnsPerHour = 60,
     transcript = null,
     scanLocalProjects = defaultScanLocalProjects,
+    getPreferredConnector = null,
   }) {
     this.authorization = authorization;
     this.projects = projects;
@@ -43,7 +47,11 @@ export class CommandRouter {
     this.codexDesktop = codexDesktop;
     this.codexCli = codexCli;
     this.outboundQueue = outboundQueue;
+    this.persist = typeof persist === "function" ? persist : null;
     this.transcript = transcript;
+    this.getPreferredConnector = typeof getPreferredConnector === "function"
+      ? getPreferredConnector
+      : () => "desktop";
     // Headless/Linux fallback project source: enumerates folders under a root
     // when there is no Codex Desktop to list workspaces. Injectable for tests.
     this.scanLocalProjects = scanLocalProjects;
@@ -56,6 +64,10 @@ export class CommandRouter {
     this.conversationByIdentity = new Map(persisted.conversationByIdentity ?? []);
     // Codex threadId -> conversation, so the return path can find the chat.
     this.threadBindings = new Map(persisted.threadBindings ?? []);
+    // Codex threadId -> the latest model/reasoning settings observed from the
+    // app-server or selected through /model. This is persisted so a restarted
+    // daemon can still annotate live cards before the next resume call.
+    this.threadSettingsById = new Map(persisted.threadSettingsById ?? []);
     // Cost guard: identityKey -> array of turn-start epoch ms.
     this.maxTurnsPerHour = maxTurnsPerHour;
     this.turnTimestamps = new Map();
@@ -66,6 +78,31 @@ export class CommandRouter {
     this.greetedIdentities = new Set((persisted.greetedIdentities ?? []).slice(-MAX_REMEMBERED_IDENTITIES));
   }
 
+  preferredConnector() {
+    return this.getPreferredConnector() === "cli" ? "cli" : "desktop";
+  }
+
+  isDesktopAvailable() {
+    return this.codexDesktop?.getStatus?.().state === "connected";
+  }
+
+  isCliAvailable() {
+    if (!this.codexCli?.runPrompt) {
+      return false;
+    }
+    return this.codexCli.getStatus?.().state !== "not_found";
+  }
+
+  connectorForNextSession() {
+    if (this.preferredConnector() === "cli" && this.isCliAvailable()) {
+      return "cli";
+    }
+    if (this.isDesktopAvailable()) {
+      return "desktop";
+    }
+    return this.isCliAvailable() ? "cli" : null;
+  }
+
   // Serializable routing state for persistence. Transient UI state
   // (pending prompts, last project list) is intentionally not persisted.
   snapshot() {
@@ -73,6 +110,7 @@ export class CommandRouter {
       currentProjectByIdentity: [...this.currentProjectByIdentity],
       conversationByIdentity: [...this.conversationByIdentity],
       threadBindings: [...this.threadBindings],
+      threadSettingsById: [...this.threadSettingsById],
       noticedIdentities: [...this.noticedIdentities],
       greetedIdentities: [...this.greetedIdentities],
     };
@@ -189,11 +227,38 @@ export class CommandRouter {
       return this.deniedReply();
     }
     const reply = await this.dispatchAuthorizedMessage(message);
-    if (!this.greetedIdentities.has(key)) {
-      rememberIdentity(this.greetedIdentities, key);
-      return this.prependWelcome(reply);
+    const output = !this.greetedIdentities.has(key)
+      ? (() => {
+          rememberIdentity(this.greetedIdentities, key);
+          return this.prependWelcome(reply);
+        })()
+      : reply;
+    const startedThreadId = this.startedDesktopThreadForReply(message.identity, reply);
+    if (startedThreadId && output && typeof output === "object") {
+      // Runtime-only routing metadata: non-enumerable so the public command
+      // reply contract and persisted/outbound semantic shape stay unchanged.
+      Object.defineProperty(output, "startedThreadId", {
+        value: startedThreadId,
+        enumerable: false,
+        configurable: true,
+      });
     }
-    return reply;
+    return output;
+  }
+
+  startedDesktopThreadForReply(identity, reply) {
+    if (!reply || typeof reply.text !== "string") return null;
+    const key = this.identityKey(identity);
+    const projectPath = this.currentProjectByIdentity.get(key);
+    if (!projectPath) return null;
+    const active = this.sessions.getActiveSession(projectPath, key);
+    if (!active) return null;
+    const connector = active.connector
+      ?? (String(active.id).startsWith("cli_") ? "cli" : "desktop");
+    if (connector !== "desktop") return null;
+    const submitted = reply.text === t("cmd.send.processing", { id: active.id })
+      || reply.text === t("cmd.new.sentDesktop", { id: active.id });
+    return submitted ? active.id : null;
   }
 
   async dispatchAuthorizedMessage(message) {
@@ -232,22 +297,30 @@ export class CommandRouter {
       if (command === "/file") {
         return await this.handleFileCommand(message.identity, rest);
       }
+      if (command === "/automode") {
+        return this.text(await this.setAutoModeAsync(message.identity, rest));
+      }
+      if (command === "/model") {
+        return await this.modelTextAsync(message.identity);
+      }
       if (command === "/cancel") {
         // While a picker is open, /cancel is the escape hatch out of the
         // selection state (B-10); only otherwise does it cancel a Codex turn.
         const pendingKey = this.identityKey(message.identity);
         const pending = this.pendingByIdentity.get(pendingKey);
-        if (pending?.type === "choose_project" || pending?.type === "choose_session") {
+        if (pending?.type === "choose_project"
+          || pending?.type === "choose_session"
+          || MODEL_PICKER_TYPES.has(pending?.type)) {
           this.pendingByIdentity.delete(pendingKey);
           return this.text(t("cmd.picker.cancelled"));
         }
         return this.text(await this.cancelActiveTurn(message.identity));
       }
       if (command === "/approve") {
-        return this.text(await this.resolveApproval(rest, "accept", message.identity));
+        return this.approvalResolution(await this.resolveApproval(rest, "accept", message.identity));
       }
       if (command === "/deny") {
-        return this.text(await this.resolveApproval(rest, "decline", message.identity));
+        return this.approvalResolution(await this.resolveApproval(rest, "decline", message.identity));
       }
       if (!command.startsWith("/")) {
         return await this.handlePlainText(message.identity, message.text, message.attachments);
@@ -312,6 +385,16 @@ export class CommandRouter {
     return { kind: "text", text };
   }
 
+  approvalResolution(text) {
+    const reply = this.text(text);
+    Object.defineProperty(reply, "approvalResolution", {
+      value: true,
+      enumerable: false,
+      configurable: true,
+    });
+    return reply;
+  }
+
   // A text reply that also describes a clickable picker. Channels that render
   // cards (Feishu) turn `picker` into buttons; others fall back to `text`.
   picker(text, { pickKind, items }) {
@@ -334,7 +417,7 @@ export class CommandRouter {
   }
 
   helpText() {
-    return [t("cmd.help.title"), t("cmd.help.body")].join("\n");
+    return [t("cmd.help.title"), t("cmd.help.body"), t("cmd.model.help")].join("\n");
   }
 
   statusText(identity) {
@@ -348,6 +431,196 @@ export class CommandRouter {
       t("cmd.status.project", { project: projectPath ?? t("cmd.status.none") }),
       t("cmd.status.session", { session: activeSession?.title ?? t("cmd.status.none") }),
     ].join("\n");
+  }
+
+  async setAutoModeAsync(identity, value) {
+    const normalized = String(value ?? "").trim().toLowerCase();
+    if (normalized !== "true" && normalized !== "false") {
+      throw new Error(t("cmd.automode.usage"));
+    }
+    const projectPath = this.requireCurrentProject(identity);
+    const activeSession = this.sessions.getActiveSession(projectPath, this.identityKey(identity));
+    if (!activeSession) {
+      throw new Error(t("cmd.session.needActive"));
+    }
+    if (!this.codexDesktop?.updateThreadSettings) {
+      throw new Error(t("cmd.approve.unavailable"));
+    }
+
+    const enabled = normalized === "true";
+    await this.resumeDesktopThread(activeSession.id, projectPath);
+    await this.codexDesktop.updateThreadSettings({
+      threadId: activeSession.id,
+      approvalsReviewer: enabled ? "auto_review" : "user",
+    });
+    return t(enabled ? "cmd.automode.enabled" : "cmd.automode.disabled", { id: activeSession.id });
+  }
+
+  getThreadSettings(threadId) {
+    const settings = this.threadSettingsById.get(threadId);
+    return settings ? { ...settings } : null;
+  }
+
+  rememberThreadSettings(threadId, ...responses) {
+    if (!threadId) {
+      return null;
+    }
+    const sources = responses.flatMap((response) => [response?.thread, response]).filter(Boolean);
+    const current = this.threadSettingsById.get(threadId) ?? {};
+    const next = { ...current };
+    const model = firstStringSetting(sources, ["model", "modelId", "model_id"]);
+    const reasoningEffort = firstDefinedSetting(sources, [
+      "reasoningEffort",
+      "reasoning_effort",
+    ]);
+    if (typeof model === "string" && model.trim()) {
+      next.model = model.trim();
+    }
+    if (reasoningEffort !== undefined) {
+      next.reasoningEffort = typeof reasoningEffort === "string"
+        ? reasoningEffort.trim() || null
+        : reasoningEffort;
+    }
+    if (next.model === undefined && next.reasoningEffort === undefined) {
+      return current.model || next.reasoningEffort !== undefined ? next : null;
+    }
+    this.threadSettingsById.set(threadId, next);
+    return { ...next };
+  }
+
+  async modelTextAsync(identity) {
+    const { projectPath, activeSession } = this.requireModelSession(identity);
+    const resumed = await this.resumeDesktopThread(activeSession.id, projectPath);
+    const current = this.rememberThreadSettings(activeSession.id, resumed, activeSession)
+      ?? this.getThreadSettings(activeSession.id)
+      ?? {};
+    let models = [];
+    if (this.codexDesktop?.listModels) {
+      try {
+        models = normalizeModelOptions(await this.codexDesktop.listModels());
+      } catch (error) {
+        if (!isMethodMissingError(error)) {
+          throw error;
+        }
+      }
+    }
+    if (models.length === 0 && current.model) {
+      models = [{
+        value: current.model,
+        label: current.model,
+        reasoningEfforts: [],
+        defaultReasoningEffort: null,
+      }];
+    }
+    if (models.length === 0) {
+      throw new Error(t("cmd.model.unavailable"));
+    }
+    const items = models.map((model, index) => ({
+      label: model.label,
+      index: String(index + 1),
+    }));
+    const key = this.identityKey(identity);
+    this.pendingByIdentity.set(key, {
+      type: "choose_model",
+      projectPath,
+      threadId: activeSession.id,
+      models,
+      current,
+    });
+    const currentLine = formatCurrentModelSettings(current);
+    const text = [
+      t("cmd.model.choose"),
+      currentLine,
+      models.map((model, index) => `${index + 1}. ${model.label}`).join("\n"),
+      t("cmd.model.replyNumber"),
+    ].filter(Boolean).join("\n\n");
+    return this.picker(text, { pickKind: "model", items });
+  }
+
+  async chooseModel(identity, selector) {
+    const key = this.identityKey(identity);
+    const pending = this.pendingByIdentity.get(key);
+    if (pending?.type !== "choose_model") {
+      return this.text(t("cmd.model.expired"));
+    }
+    const model = pending.models[Number(selector) - 1];
+    if (!model || String(Number(selector)) !== String(selector)) {
+      return this.text(`${t("cmd.model.notFound")}\n${t("cmd.model.replyNumber")}`);
+    }
+    const efforts = model.reasoningEfforts.length > 0
+      ? model.reasoningEfforts
+      : normalizeReasoningOptions([
+          pending.current?.model === model.value ? pending.current.reasoningEffort : null,
+          model.defaultReasoningEffort,
+          ...DEFAULT_REASONING_EFFORTS,
+        ]);
+    const items = efforts.map((effort, index) => ({
+      label: effort.label,
+      index: String(index + 1),
+    }));
+    this.pendingByIdentity.set(key, {
+      type: "choose_reasoning",
+      projectPath: pending.projectPath,
+      threadId: pending.threadId,
+      model,
+      reasoningEfforts: efforts,
+    });
+    const text = [
+      t("cmd.model.selected", { model: model.label }),
+      t("cmd.model.chooseReasoning"),
+      efforts.map((effort, index) => `${index + 1}. ${effort.label}`).join("\n"),
+      t("cmd.model.replyNumber"),
+    ].join("\n\n");
+    return this.picker(text, { pickKind: "reasoning", items });
+  }
+
+  async chooseReasoning(identity, selector) {
+    const key = this.identityKey(identity);
+    const pending = this.pendingByIdentity.get(key);
+    if (pending?.type !== "choose_reasoning") {
+      return this.text(t("cmd.model.expired"));
+    }
+    const effort = pending.reasoningEfforts[Number(selector) - 1];
+    if (!effort || String(Number(selector)) !== String(selector)) {
+      return this.text(`${t("cmd.model.notFound")}\n${t("cmd.model.replyNumber")}`);
+    }
+    await this.resumeDesktopThread(pending.threadId, pending.projectPath);
+    await this.codexDesktop.updateThreadSettings({
+      threadId: pending.threadId,
+      model: pending.model.value,
+      reasoningEffort: effort.value,
+    });
+    this.rememberThreadSettings(pending.threadId, {
+      model: pending.model.value,
+      reasoningEffort: effort.value,
+    });
+    void Promise.resolve(this.persist?.()).catch(() => {});
+    this.pendingByIdentity.delete(key);
+    return t("cmd.model.changed", {
+      model: pending.model.label,
+      reasoningEffort: effort.label,
+    });
+  }
+
+  requireModelSession(identity) {
+    const projectPath = this.requireCurrentProject(identity);
+    const activeSession = this.sessions.getActiveSession(projectPath, this.identityKey(identity));
+    if (!activeSession) {
+      throw new Error(t("cmd.session.needActive"));
+    }
+    const connector = activeSession.connector
+      ?? (String(activeSession.id).startsWith("cli_") ? "cli" : "desktop");
+    if (connector !== "desktop") {
+      throw new Error(t("cmd.model.desktopOnly"));
+    }
+    const desktopStatus = this.codexDesktop?.getStatus?.();
+    if (desktopStatus && desktopStatus.state !== "connected") {
+      throw new Error(t("cmd.desktop.notConnected"));
+    }
+    if (!this.codexDesktop?.updateThreadSettings) {
+      throw new Error(t("cmd.model.unavailable"));
+    }
+    return { projectPath, activeSession };
   }
 
   projectsText() {
@@ -550,7 +823,12 @@ export class CommandRouter {
 
   useSession(identity, selector) {
     const projectPath = this.requireCurrentProject(identity);
-    const session = this.sessions.useSession(projectPath, selector, this.identityKey(identity));
+    const session = this.sessions.useSession(
+      projectPath,
+      selector,
+      this.identityKey(identity),
+      this.connectorForNextSession(),
+    );
     return t("cmd.use.switched", { title: session.title, id: session.id });
   }
 
@@ -607,12 +885,22 @@ export class CommandRouter {
       const threads = response.data ?? response.threads ?? [];
       const thread = threads[Number(selector) - 1] ?? threads.find((candidate) => candidate.id === selector);
       if (thread) {
-        const resumed = await this.resumeDesktopThread(thread.id, projectPath);
+        this.rememberThreadSettings(thread.id, thread);
+        const connector = this.connectorForNextSession();
+        const resumed = connector === "desktop"
+          ? await this.resumeDesktopThread(thread.id, projectPath)
+          : null;
         const activeThread = resumed?.thread ?? thread;
         const title = this.threadTitle(activeThread, thread);
         const threadId = activeThread.id ?? thread.id;
         this.bindThreadForIdentity(identity, threadId, projectPath);
-        this.sessions.upsertExternalSession({ projectPath, id: threadId, title, identityKey: key });
+        this.sessions.upsertExternalSession({
+          projectPath,
+          id: threadId,
+          title,
+          identityKey: key,
+          connector,
+        });
         this.pendingByIdentity.delete(key);
         const recent = await this.recentDesktopThreadLines(threadId, 3);
         const recentBlock = recent.length > 0
@@ -633,6 +921,7 @@ export class CommandRouter {
       title: message || "New Comote session",
       firstMessage: message,
       identityKey: this.identityKey(identity),
+      connector: this.connectorForNextSession(),
     });
     return t("cmd.new.created", { title: session.title, id: session.id });
   }
@@ -648,10 +937,12 @@ export class CommandRouter {
     // failed hand-off to Codex does not count against the user's hourly budget.
     const reservation = this.enforceTurnRate(identity);
     const images = this.collectImagePaths(attachments, projectPath);
+    const connector = this.connectorForNextSession();
     try {
-      if (this.codexDesktop?.getStatus?.().state === "connected") {
+      if (connector === "desktop") {
         const started = await this.codexDesktop.startThread({ cwd: projectPath });
         const threadId = started.thread.id;
+        this.rememberThreadSettings(threadId, started);
         this.bindThreadForIdentity(identity, threadId, projectPath);
         this.transcript?.record(threadId, "user", message);
         await this.codexDesktop.startTurn({ threadId, text: message, cwd: projectPath, images });
@@ -661,18 +952,25 @@ export class CommandRouter {
           title: message || threadId,
           messages: message ? [{ role: "user", text: message }] : [],
           identityKey: key,
+          connector: "desktop",
         });
         this.pendingByIdentity.delete(key);
         return t("cmd.new.sentDesktop", { id: threadId });
       }
-      if (this.codexCli?.runPrompt) {
+      if (connector === "cli") {
         const result = await this.codexCli.runPrompt({ cwd: projectPath, text: message, images });
+        this.bindThreadForIdentity(identity, result.id, projectPath);
+        this.transcript?.record(result.id, "user", message);
+        if (result.output) {
+          this.transcript?.record(result.id, "assistant", result.output);
+        }
         this.sessions.upsertExternalSession({
           projectPath,
           id: result.id,
           title: message || result.id,
           messages: message ? [{ role: "user", text: message }] : [],
           identityKey: key,
+          connector: "cli",
         });
         this.pendingByIdentity.delete(key);
         return t("cmd.new.startedCli", { name: message || result.id, output: result.output });
@@ -690,12 +988,20 @@ export class CommandRouter {
     const trimmed = text.trim();
     const pending = this.pendingByIdentity.get(key);
 
-    if (pending?.type === "choose_project" || pending?.type === "choose_session") {
+    if (pending?.type === "choose_project"
+      || pending?.type === "choose_session"
+      || MODEL_PICKER_TYPES.has(pending?.type)) {
       if (/^\d+$/.test(trimmed)) {
         if (pending.type === "choose_project") {
           return this.chooseProject(identity, trimmed);
         }
-        return this.text(await this.useSessionAsync(identity, trimmed));
+        if (pending.type === "choose_session") {
+          return this.text(await this.useSessionAsync(identity, trimmed));
+        }
+        if (pending.type === "choose_model") {
+          return await this.chooseModel(identity, trimmed);
+        }
+        return this.text(await this.chooseReasoning(identity, trimmed));
       }
       // Non-numeric input while a picker is open (B-10): hint once (with the
       // /cancel escape), then on the second consecutive miss give up on the
@@ -705,7 +1011,9 @@ export class CommandRouter {
         this.pendingByIdentity.set(key, { ...pending, pickerMisses: 1 });
         const base = pending.type === "choose_project"
           ? t("cmd.projects.replyNumber")
-          : t("cmd.session.replyNumberOrNew");
+          : pending.type === "choose_session"
+            ? t("cmd.session.replyNumberOrNew")
+            : t("cmd.model.replyNumber");
         return this.text(`${base}\n${t("cmd.picker.escapeHint")}`);
       }
       this.pendingByIdentity.delete(key);
@@ -774,13 +1082,38 @@ export class CommandRouter {
     if (!activeSession) {
       throw new Error(t("cmd.session.needActive"));
     }
-    if (this.codexDesktop?.getStatus?.().state !== "connected") {
-      // CLI fallback sessions (ids "cli_*", started by /new when only the
-      // Codex CLI was available) are one-shot: codex exec cannot resume them.
-      // Explain the way out instead of a bare "not connected" (B-7).
+    const connector = activeSession.connector
+      ?? (String(activeSession.id).startsWith("cli_") ? "cli" : "desktop");
+    if (connector === "cli") {
+      // Older Comote versions stored a synthetic cli_* id, which Codex cannot
+      // resume. New CLI sessions persist the real thread id from JSONL output.
       if (String(activeSession.id).startsWith("cli_")) {
         throw new Error(t("cmd.session.cliNoResume"));
       }
+      if (!this.isCliAvailable()) {
+        throw new Error(t("cmd.cli.notAvailable"));
+      }
+      const reservation = this.enforceTurnRate(identity);
+      const images = this.collectImagePaths(attachments, projectPath);
+      try {
+        this.bindThreadForIdentity(identity, activeSession.id, projectPath);
+        const result = await this.codexCli.runPrompt({
+          cwd: projectPath,
+          text,
+          images,
+          resumeId: activeSession.id,
+        });
+        this.transcript?.record(activeSession.id, "user", text);
+        if (result.output) {
+          this.transcript?.record(activeSession.id, "assistant", result.output);
+        }
+        return t("cmd.send.cliCompleted", { id: activeSession.id, output: result.output });
+      } catch (error) {
+        this.refundTurnStart(identity, reservation);
+        throw error;
+      }
+    }
+    if (this.codexDesktop?.getStatus?.().state !== "connected") {
       throw new Error(t("cmd.desktop.notConnected"));
     }
     // Reserve quota up front; refund it if the turn never actually starts.
@@ -810,7 +1143,9 @@ export class CommandRouter {
     if (!this.codexDesktop?.resumeThread) {
       return null;
     }
-    return this.codexDesktop.resumeThread({ threadId, cwd });
+    const result = await this.codexDesktop.resumeThread({ threadId, cwd });
+    this.rememberThreadSettings(threadId, result);
+    return result;
   }
 
   // Resolves a pending Codex approval by short code or id. `identity` is the
@@ -846,6 +1181,9 @@ export class CommandRouter {
       }
     }
     await this.codexDesktop.resolveApproval(selector, decision);
+    if (decision === "acceptForSession") {
+      return t("cmd.approve.acceptedForSession", { selector });
+    }
     return decision === "accept"
       ? t("cmd.approve.approved", { selector })
       : t("cmd.deny.rejected", { selector });
@@ -937,6 +1275,114 @@ export class CommandRouter {
       fallback?.id
     );
   }
+}
+
+function firstDefinedSetting(sources, keys) {
+  for (const source of sources) {
+    if (!source || typeof source !== "object") {
+      continue;
+    }
+    for (const key of keys) {
+      if (Object.prototype.hasOwnProperty.call(source, key) && source[key] !== undefined) {
+        return source[key];
+      }
+    }
+  }
+  return undefined;
+}
+
+function firstStringSetting(sources, keys) {
+  for (const source of sources) {
+    if (!source || typeof source !== "object") {
+      continue;
+    }
+    for (const key of keys) {
+      const value = source[key];
+      if (typeof value === "string" && value.trim()) {
+        return value;
+      }
+    }
+  }
+  return undefined;
+}
+
+function normalizeModelOptions(response) {
+  let entries = response?.data ?? response?.models ?? response;
+  if (entries && !Array.isArray(entries)) {
+    entries = entries.models ?? entries.data ?? entries.items ?? [];
+  }
+  if (!Array.isArray(entries)) {
+    return [];
+  }
+  const seen = new Set();
+  const models = [];
+  for (const entry of entries) {
+    const value = typeof entry === "string"
+      ? entry
+      : entry?.model ?? entry?.id ?? entry?.slug ?? null;
+    if (typeof value !== "string" || !value.trim() || seen.has(value)) {
+      continue;
+    }
+    seen.add(value);
+    const reasoningEfforts = normalizeReasoningOptions(
+      entry?.supportedReasoningEfforts
+        ?? entry?.supported_reasoning_efforts
+        ?? entry?.reasoningEfforts
+        ?? [],
+    );
+    const defaultReasoningEffort = normalizeReasoningOptions([
+      entry?.defaultReasoningEffort ?? entry?.default_reasoning_effort,
+    ])[0]?.value ?? null;
+    models.push({
+      value,
+      label: typeof entry === "string"
+        ? value
+        : String(entry?.displayName ?? entry?.name ?? value),
+      reasoningEfforts,
+      defaultReasoningEffort,
+    });
+  }
+  return models;
+}
+
+function normalizeReasoningOptions(values) {
+  const options = [];
+  const seen = new Set();
+  for (const entry of Array.isArray(values) ? values : [values]) {
+    const value = typeof entry === "string"
+      ? entry
+      : entry?.reasoningEffort ?? entry?.effort ?? entry?.value ?? entry?.id ?? null;
+    if (typeof value !== "string" || !value.trim() || seen.has(value)) {
+      continue;
+    }
+    seen.add(value);
+    options.push({
+      value,
+      label: typeof entry === "object" && entry?.displayName
+        ? String(entry.displayName)
+        : value,
+    });
+  }
+  return options;
+}
+
+function formatCurrentModelSettings(settings = {}) {
+  if (!settings.model && settings.reasoningEffort === undefined) {
+    return null;
+  }
+  return t("cmd.model.current", {
+    model: settings.model ?? t("card.model.unknown"),
+    reasoningEffort: settings.reasoningEffort ?? t("card.model.defaultReasoning"),
+  });
+}
+
+function isMethodMissingError(error) {
+  if (error?.code === -32601) {
+    return true;
+  }
+  return /method not found|unknown method|no such method|unsupported method|not found.*method/i.test(
+    error?.message ?? String(error),
+  );
 }
 
 function isThreadNotFoundError(error) {

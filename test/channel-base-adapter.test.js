@@ -44,6 +44,47 @@ test("routes a direct message and enqueues a semantic text reply", async () => {
   assert.equal(enqueued[0].conversationId, "c1");
 });
 
+test("inbound feedback is bound to a started desktop thread", async () => {
+  const lifecycle = [];
+  const reply = { kind: "text", text: "working" };
+  Object.defineProperty(reply, "startedThreadId", { value: "thread-1", enumerable: false });
+  const { adapter } = make({
+    commandRouter: { handleMessageAsync: async () => reply },
+    beginInboundFeedback: async (message) => {
+      lifecycle.push(["begin", message.messageId]);
+      return { reactionId: "r1" };
+    },
+    finishInboundFeedback: async ({ feedback, threadId }) => {
+      lifecycle.push(["finish", feedback.reactionId, threadId]);
+    },
+  });
+  await adapter.handleInbound({ id: "m-feedback", chat: "c1", user: "u1", text: "work" });
+  assert.deepEqual(lifecycle, [
+    ["begin", "m-feedback"],
+    ["finish", "r1", "thread-1"],
+  ]);
+});
+
+test("single-message mode suppresses redundant turn and approval confirmations", async () => {
+  const started = { kind: "text", text: "submitted" };
+  Object.defineProperty(started, "startedThreadId", { value: "thread-1", enumerable: false });
+  const first = make({
+    singleMessageTurns: true,
+    commandRouter: { handleMessageAsync: async () => started },
+  });
+  await first.adapter.handleInbound({ id: "m-turn", chat: "c1", user: "u1", text: "work" });
+  assert.equal(first.enqueued.length, 0);
+
+  const resolved = { kind: "text", text: "approved" };
+  Object.defineProperty(resolved, "approvalResolution", { value: true, enumerable: false });
+  const second = make({
+    singleMessageTurns: true,
+    commandRouter: { handleMessageAsync: async () => resolved },
+  });
+  await second.adapter.handleInbound({ id: "m-approval", chat: "c1", user: "u1", text: "/approve a1" });
+  assert.equal(second.enqueued.length, 0);
+});
+
 test("ignores group messages when allowGroups is false, with ONE direct-only notice per group (B-12a)", async () => {
   const { adapter, enqueued } = make();
   const out = await adapter.handleInbound({ id: "m2", chat: "g1", user: "u1", text: "hi", group: true });

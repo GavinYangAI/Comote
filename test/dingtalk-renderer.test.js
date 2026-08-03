@@ -33,6 +33,21 @@ test("approval with a template id sends an interactive card", async () => {
   assert.equal(arg.receiveId, "s");
   assert.ok(arg.outTrackId, "an outTrackId was generated");
   assert.equal(typeof arg.cardParamMap.title, "string");
+  assert.match(arg.cardParamMap.sessionParams, /approve_session/);
+});
+
+test("auto-approved notification bypasses the interactive template", async () => {
+  const r = createDingTalkRenderer({ templates: { approval: "appr.schema" } });
+  const d = fakeDriver();
+  await r.render({
+    kind: "approval",
+    conversationId: "s",
+    code: "a1",
+    autoApproved: true,
+    approval: { shortCode: "a1", method: "run", params: { command: "npm test" } },
+  }, { driver: d });
+  assert.equal(d.calls[0][0], "sendMarkdown");
+  assert.doesNotMatch(d.calls[0][1].text, /\/approve|\/deny/);
 });
 
 test("approval without a template id degrades to markdown text", async () => {
@@ -55,11 +70,16 @@ test("picker with a template id sends a card carrying the options param", async 
   assert.equal(options[0].params.conv, "s");
 });
 
-test("approvalResolved is silent (resolution surfaces via next reply / card PUT)", async () => {
+test("approvalResolved updates through the runtime and sends no second message", async () => {
   const r = createDingTalkRenderer({ templates: { approval: "appr.schema" } });
   const d = fakeDriver();
-  await r.render({ kind: "approvalResolved", conversationId: "s", code: "a1", decision: "accept" }, { driver: d });
+  const resolved = [];
+  await r.render({ kind: "approvalResolved", conversationId: "s", code: "a1", decision: "accept" }, {
+    driver: d,
+    runtime: { resolveApprovalMessage: async (reply) => resolved.push(reply) },
+  });
   assert.equal(d.calls.length, 0);
+  assert.equal(resolved[0].code, "a1");
 });
 
 test("media uploads then sends as file", async () => {

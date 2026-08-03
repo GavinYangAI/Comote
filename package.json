@@ -1,6 +1,6 @@
 {
   "name": "comote",
-  "version": "0.7.1",
+  "version": "0.8.0",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/GavinYangAI/Comote.git"
@@ -23,7 +23,7 @@
   "scripts": {
     "app:build": "node scripts/build-macos-app.mjs",
     "desktop:icons": "node scripts/generate-desktop-assets.mjs",
-    "desktop:dev": "npm run desktop:icons && npm run sidecar:build && tauri dev",
+    "desktop:dev": "npm run desktop:icons && node scripts/prepare-desktop-dev.mjs && npm run sidecar:build && tauri dev --config src-tauri/tauri.dev.conf.json",
     "dist:mac": "npm run desktop:icons && npm run sidecar:build:mac && node scripts/install-prod-deps.mjs && tauri build --bundles app --target aarch64-apple-darwin && node scripts/sign-macos-app.mjs && node scripts/create-mac-dmg.mjs",
     "dist:win": "npm run desktop:icons && npm run sidecar:build:win && node scripts/install-prod-deps.mjs && tauri build --bundles nsis --target x86_64-pc-windows-msvc && node scripts/collect-tauri-artifacts.mjs win",
     "sidecar:build": "node scripts/build-sidecar.mjs current",

@@ -111,9 +111,9 @@ async function wireDingtalk(state, root) {
   return calls;
 }
 
-// --- M4: changed files not delivered twice on a multi-agentMessage turn ----
+// --- M4: a multi-agentMessage turn finalizes and delivers files once --------
 
-test("M4: a second agentMessage in the same turn does not re-deliver changed files", async () => {
+test("M4: multiple agent messages stay in one card and deliver changed files once", async () => {
   const { transport, desktop, state } = buildState();
   await desktop.client.connect();
   const { root, mdPath, pngPath } = await makeProject();
@@ -124,12 +124,18 @@ test("M4: a second agentMessage in the same turn does not re-deliver changed fil
 
   fireFileChange(transport, "thread_d", [mdPath, pngPath]);
   fireAgentMessage(transport, "thread_d", "m:1", "first message");
-  await waitFor(() => calls.updated.length >= 1);
+  assert.equal(calls.created.length, 1, "the first agent message keeps the original card");
 
   // Second agentMessage for the SAME thread, same turn (no turn/completed yet).
   fireAgentMessage(transport, "thread_d", "m:2", "second message");
-  // Give the fire-and-forget path time to (incorrectly) re-run if unguarded.
-  await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.equal(calls.media.length, 0, "changed files wait for the turn completion boundary");
+
+  transport.receive({
+    jsonrpc: "2.0",
+    method: "turn/completed",
+    params: { threadId: "thread_d" },
+  });
+  await waitFor(() => calls.media.length >= 1 && calls.updated.length >= 1);
 
   const replies = state.outboundReplies.list({ channel: "dingtalk", pendingOnly: false });
   const mediaReplies = replies.filter((r) => r.kind === "media");
@@ -141,12 +147,14 @@ test("M4: a second agentMessage in the same turn does not re-deliver changed fil
   const inlineMd = replies.filter((r) => r.kind === "text" && r.text.includes("notes.md"));
   assert.equal(inlineMd.length, 1, "the inline md text is delivered exactly once");
 
-  // The second message's own text still goes out (it is not dropped).
-  const secondText = replies.filter((r) => r.kind === "text" && r.text.includes("second message"));
-  assert.equal(secondText.length, 1, "the second agentMessage's text is still enqueued");
+  assert.match(
+    JSON.stringify(calls.updated.at(-1).cardParamMap),
+    /second message/,
+    "the final card uses the latest agent message",
+  );
 });
 
-test("M4: a NEW turn re-arms delivery (guard is cleared on turn/started)", async () => {
+test("M4: a new turn delivers its own changed files", async () => {
   const { transport, desktop, state } = buildState();
   await desktop.client.connect();
   const { root, mdPath, pngPath } = await makeProject();
@@ -157,14 +165,15 @@ test("M4: a NEW turn re-arms delivery (guard is cleared on turn/started)", async
   await waitFor(() => calls.created.length === 1);
   fireFileChange(transport, "thread_d", [mdPath, pngPath]);
   fireAgentMessage(transport, "thread_d", "m:1", "turn one");
-  await waitFor(() => calls.updated.length >= 1);
   transport.receive({ jsonrpc: "2.0", method: "turn/completed", params: { threadId: "thread_d" } });
+  await waitFor(() => calls.media.length >= 1);
 
   // Turn 2: changed files again → must deliver again (guard was cleared).
   transport.receive({ jsonrpc: "2.0", method: "turn/started", params: { threadId: "thread_d" } });
   await waitFor(() => calls.created.length === 2);
   fireFileChange(transport, "thread_d", [pngPath]);
   fireAgentMessage(transport, "thread_d", "m:2", "turn two");
+  transport.receive({ jsonrpc: "2.0", method: "turn/completed", params: { threadId: "thread_d" } });
   await waitFor(
     () => state.outboundReplies.list({ channel: "dingtalk", pendingOnly: false }).filter((r) => r.kind === "media").length >= 2,
   );
@@ -175,9 +184,9 @@ test("M4: a NEW turn re-arms delivery (guard is cleared on turn/started)", async
   assert.equal(mediaReplies.length, 2, "each turn delivers its png once → two total across two turns");
 });
 
-// --- LOW-cardleak: connectionLost / connectionGaveUp finish open cards ------
+// --- LOW-cardleak: connectionGaveUp finishes open cards ---------------------
 
-test("LOW-cardleak: connectionLost finishes any open live card", async () => {
+test("LOW-cardleak: connectionLost keeps a live card attached for a reconnect", async () => {
   const { transport, desktop, state } = buildState();
   await desktop.client.connect();
   const { root } = await makeProject();
@@ -190,12 +199,14 @@ test("LOW-cardleak: connectionLost finishes any open live card", async () => {
   // Sanity: the live card session is open after turn/started.
   assert.ok(dingRuntime.getStatus, "dingtalk runtime exposed");
 
-  // Drive the connectionLost path directly through routeDesktopEvent.
+  // A temporary drop must preserve the same card session. Codex can reconnect
+  // and continue this thread, so detaching here would make later output fan out.
   desktop.onEvent({ type: "connectionLost" });
   await waitFor(() => calls.updated.length >= 1);
 
-  // The open card was finished (an update was sent) and no session leaks behind.
-  assert.ok(calls.updated.length >= 1, "the open live card was finished on connectionLost");
+  fireAgentMessage(transport, "thread_d", "after-reconnect", "continued after reconnect");
+  await waitFor(() => calls.updated.some((call) => call.cardParamMap.body.includes("continued after reconnect")));
+  assert.equal(calls.created.length, 1, "the continued output updates the original card");
 });
 
 test("LOW-cardleak: connectionGaveUp also finishes open live cards", async () => {

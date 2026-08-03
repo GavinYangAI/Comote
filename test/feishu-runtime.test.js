@@ -343,6 +343,198 @@ test("runtime opens, updates, and finishes a thread card", async () => {
   assert.equal(runtime.hasThreadCard("t1"), false);
 });
 
+test("live approval pauses updates and resumes the same card message", async () => {
+  const driver = cardDriver();
+  const runtime = makeRuntime({
+    adapter: { handleInbound: async () => ({ kind: "text" }) },
+    outboundQueue: new OutboundQueue(),
+    driver,
+    cardUpdateIntervalMs: 0,
+  });
+  await runtime.openThreadCard({
+    threadId: "t-live-approval",
+    conversationId: "oc_chat",
+    card: runtime.buildStatusCard({ phase: "started", threadId: "t-live-approval" }),
+  });
+  await runtime.showThreadApproval({
+    threadId: "t-live-approval",
+    code: "a1",
+    approval: { shortCode: "a1", params: { command: "npm test" } },
+  });
+  assert.equal(driver.calls.sent.length, 1, "approval does not send a second card");
+  assert.equal(driver.calls.updated.at(-1).messageId, "om_live_1");
+  assert.match(JSON.stringify(driver.calls.updated.at(-1).card), /npm test/);
+
+  const updatesBeforeProgress = driver.calls.updated.length;
+  runtime.updateThreadCard("t-live-approval", { elements: ["new progress"] });
+  await runtime.flushThreadCard("t-live-approval");
+  assert.equal(driver.calls.updated.length, updatesBeforeProgress, "progress cannot overwrite approval buttons");
+
+  const updateCard = driver.updateCard.bind(driver);
+  let failResume = true;
+  driver.updateCard = async (message) => {
+    if (failResume) {
+      failResume = false;
+      throw new Error("temporary update failure");
+    }
+    return updateCard(message);
+  };
+  await assert.rejects(
+    () => runtime.resolveApprovalMessage({ code: "a1", decision: "accept" }),
+    /temporary update failure/,
+  );
+  const pausedSession = runtime.cardSessions.get("t-live-approval");
+  assert.equal(pausedSession.paused, true, "failed resume keeps the approval protected");
+  assert.deepEqual(pausedSession.pendingCard, { elements: ["new progress"] });
+
+  await runtime.resolveApprovalMessage({ code: "a1", decision: "accept" });
+  assert.deepEqual(driver.calls.updated.at(-1).card, { elements: ["new progress"] });
+  assert.equal(runtime.hasThreadCard("t-live-approval"), true);
+});
+
+test("failed live approval display restores queued progress", async () => {
+  const driver = cardDriver();
+  const runtime = makeRuntime({
+    adapter: { handleInbound: async () => ({ kind: "text" }) },
+    outboundQueue: new OutboundQueue(),
+    driver,
+    cardUpdateIntervalMs: 60_000,
+  });
+  await runtime.openThreadCard({
+    threadId: "t-failed-approval",
+    conversationId: "oc_chat",
+    card: { elements: ["started"] },
+  });
+  const queued = { elements: ["queued progress"] };
+  runtime.updateThreadCard("t-failed-approval", queued);
+  driver.updateCard = async () => { throw new Error("approval update failed"); };
+
+  await assert.rejects(
+    () => runtime.showThreadApproval({
+      threadId: "t-failed-approval",
+      code: "a-fail",
+      approval: { shortCode: "a-fail", params: { command: "npm test" } },
+    }),
+    /approval update failed/,
+  );
+  const session = runtime.cardSessions.get("t-failed-approval");
+  assert.equal(session.paused, false);
+  assert.equal(session.pendingCard, queued);
+  assert.equal(session.resumeCard, null);
+});
+
+test("multiple live approvals restore the underlying status card, not an older approval", async () => {
+  const driver = cardDriver();
+  const runtime = makeRuntime({
+    adapter: { handleInbound: async () => ({ kind: "text" }) },
+    outboundQueue: new OutboundQueue(),
+    driver,
+    cardUpdateIntervalMs: 0,
+  });
+  const status = { elements: ["streaming status"] };
+  await runtime.openThreadCard({
+    threadId: "t-multiple-approvals",
+    conversationId: "oc_chat",
+    card: status,
+  });
+  await runtime.showThreadApproval({
+    threadId: "t-multiple-approvals",
+    code: "a1",
+    approval: { shortCode: "a1", params: { command: "first command" } },
+  });
+  await runtime.showThreadApproval({
+    threadId: "t-multiple-approvals",
+    code: "a2",
+    approval: { shortCode: "a2", params: { command: "second command" } },
+  });
+
+  await runtime.resolveApprovalMessage({ code: "a1", decision: "accept" });
+  assert.match(JSON.stringify(driver.calls.updated.at(-1).card), /second command/);
+  assert.equal(runtime.cardSessions.get("t-multiple-approvals").paused, true);
+
+  await runtime.resolveApprovalMessage({ code: "a2", decision: "accept" });
+  assert.deepEqual(driver.calls.updated.at(-1).card, status);
+  assert.equal(runtime.cardSessions.get("t-multiple-approvals").paused, false);
+});
+
+test("live approval is ordered after an in-flight progress update", async () => {
+  const driver = cardDriver();
+  let releaseProgress;
+  const progressBlocked = new Promise((resolve) => { releaseProgress = resolve; });
+  let updateCount = 0;
+  driver.updateCard = async (message) => {
+    driver.calls.updated.push(message);
+    updateCount += 1;
+    if (updateCount === 1) await progressBlocked;
+    return { code: 0 };
+  };
+  const runtime = makeRuntime({
+    adapter: { handleInbound: async () => ({ kind: "text" }) },
+    outboundQueue: new OutboundQueue(),
+    driver,
+    cardUpdateIntervalMs: 60_000,
+  });
+  await runtime.openThreadCard({
+    threadId: "t-ordered-approval",
+    conversationId: "oc_chat",
+    card: { elements: ["started"] },
+  });
+  const progress = { elements: ["progress"] };
+  runtime.updateThreadCard("t-ordered-approval", progress);
+  const flush = runtime.flushThreadCard("t-ordered-approval");
+  await waitFor(() => driver.calls.updated.length === 1);
+
+  const approval = runtime.showThreadApproval({
+    threadId: "t-ordered-approval",
+    code: "a-ordered",
+    approval: { shortCode: "a-ordered", params: { command: "npm test" } },
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(driver.calls.updated.length, 1, "approval waits for the in-flight progress write");
+
+  releaseProgress();
+  await Promise.all([flush, approval]);
+  assert.deepEqual(driver.calls.updated[0].card, progress);
+  assert.match(JSON.stringify(driver.calls.updated[1].card), /npm test/);
+  assert.equal(runtime.cardSessions.get("t-ordered-approval").paused, true);
+});
+
+test("live approval registers before its card update can be resolved", async () => {
+  const driver = cardDriver();
+  let releaseApproval;
+  const approvalBlocked = new Promise((resolve) => { releaseApproval = resolve; });
+  driver.updateCard = async (message) => {
+    driver.calls.updated.push(message);
+    if (driver.calls.updated.length === 1) await approvalBlocked;
+    return { code: 0 };
+  };
+  const runtime = makeRuntime({
+    adapter: { handleInbound: async () => ({ kind: "text" }) },
+    outboundQueue: new OutboundQueue(),
+    driver,
+    cardUpdateIntervalMs: 60_000,
+  });
+  await runtime.openThreadCard({
+    threadId: "t-approval-race",
+    conversationId: "oc_chat",
+    card: { elements: ["started"] },
+  });
+
+  const showing = runtime.showThreadApproval({
+    threadId: "t-approval-race",
+    code: "a-race",
+    approval: { shortCode: "a-race", params: { command: "npm test" } },
+  });
+  await waitFor(() => driver.calls.updated.length === 1);
+  const resolving = runtime.resolveApprovalMessage({ code: "a-race", decision: "accept" });
+  releaseApproval();
+  await Promise.all([showing, resolving]);
+
+  assert.match(JSON.stringify(driver.calls.updated[0].card), /npm test/);
+  assert.doesNotMatch(JSON.stringify(driver.calls.updated.at(-1).card), /npm test/);
+  assert.equal(runtime.cardSessions.get("t-approval-race").paused, false);
+});
+
 test("updateThreadCard and finishThreadCard no-op when no card session exists", async () => {
   const runtime = makeRuntime({
     adapter: { handleInbound: async () => ({ kind: "text" }) },
@@ -388,6 +580,40 @@ test("handleCardAction resolves an approval and refreshes the card", async () =>
   assert.equal(resolved[0][2]?.channel, "feishu");
   assert.ok(resolved[0][2]?.stableId, "clicker stableId forwarded");
   assert.equal(updated[0].messageId, "om_approval");
+  assert.match(result.toast.content, /已批准/);
+});
+
+test("handleCardAction treats a session approval as accepted", async () => {
+  const resolved = [];
+  const updated = [];
+  const runtime = makeRuntime({
+    adapter: {
+      handleInbound: async () => ({ kind: "text" }),
+      commandRouter: {
+        authorization: { isAuthorized: () => true },
+        resolveApproval: async (code, decision) => resolved.push([code, decision]),
+      },
+    },
+    outboundQueue: new OutboundQueue(),
+    driver: {
+      getStatus: () => ({ state: "configured" }),
+      verifyEvent: () => true,
+      async updateCard(message) { updated.push(message); },
+    },
+  });
+  runtime.rememberApprovalMessage("a1", {
+    messageId: "om_remembered",
+    conversationId: "oc_chat",
+    approval: { shortCode: "a1" },
+  });
+
+  const result = await runtime.handleCardAction({
+    open_id: "ou_owner",
+    action: { value: { kind: "approval", code: "a1", decision: "acceptForSession" } },
+  });
+
+  assert.deepEqual(resolved, [["a1", "acceptForSession"]]);
+  assert.equal(updated[0].messageId, "om_remembered", "remembered cards update without callback message ids");
   assert.match(result.toast.content, /已批准/);
 });
 

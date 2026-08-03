@@ -61,9 +61,20 @@ test("editMessageText + answerCallbackQuery hit the right methods", async () => 
   await d.editMessageText({ chatId: "1", messageId: 5, text: "z" });
   assert.match(fetchImpl.calls[0].url, /editMessageText$/);
   assert.equal(fetchImpl.calls[0].body.message_id, 5);
+  assert.deepEqual(fetchImpl.calls[0].body.reply_markup, { inline_keyboard: [] });
   await d.answerCallbackQuery({ callbackQueryId: "cq1" });
   assert.match(fetchImpl.calls[1].url, /answerCallbackQuery$/);
   assert.equal(fetchImpl.calls[1].body.callback_query_id, "cq1");
+});
+
+test("setMessageReaction adds and clears the processing reaction", async () => {
+  const fetchImpl = fakeFetch(() => okJson(true));
+  const d = new TelegramDriver({ botToken: "T", fetchImpl });
+  await d.setMessageReaction({ chatId: "9", messageId: 7, emoji: "👀" });
+  await d.setMessageReaction({ chatId: "9", messageId: 7, emoji: null });
+  assert.match(fetchImpl.calls[0].url, /setMessageReaction$/);
+  assert.deepEqual(fetchImpl.calls[0].body.reaction, [{ type: "emoji", emoji: "👀" }]);
+  assert.deepEqual(fetchImpl.calls[1].body.reaction, []);
 });
 
 test("getUpdates loop dispatches messages to onEvent + callback_query to onAction, advancing offset", async () => {

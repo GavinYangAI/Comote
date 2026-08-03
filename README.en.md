@@ -1,10 +1,15 @@
 <div align="center">
 
+<img src=".idea/icon.png" width="256" height="256" alt="Icon" />
+
 # Comote
 
 **A remote control for Codex, in your pocket · Runs locally · No Comote servers in the loop**
 
-Connect the [Codex](https://openai.com/codex) on your computer (the ChatGPT desktop app, formerly Codex Desktop; or the Codex CLI) to Feishu / WeChat / DingTalk / Telegram, so you can keep directing your Codex agent from the subway, from a client's office, from bed at midnight — without exposing your machine to the public internet, renting a server, or installing a pile of middleware.
+Connect the [Codex](https://openai.com/codex) on your computer (the ChatGPT desktop app, formerly Codex Desktop; or the
+Codex CLI) to Feishu / WeChat / DingTalk / Telegram, so you can keep directing your Codex agent from the subway, from a
+client's office, from bed at midnight — without exposing your machine to the public internet, renting a server, or
+installing a pile of middleware.
 
 [中文](./README.md) · [Quick Start](#quick-start) · [FAQ](#faq) · [Repo](https://github.com/GavinYangAI/comote)
 
@@ -14,52 +19,85 @@ Connect the [Codex](https://openai.com/codex) on your computer (the ChatGPT desk
 
 ## What is Comote
 
-Whether you use Codex to write code or to crunch data, organize documents, run research, and draft — Comote is the same phone remote for all of it. It's built for **anyone running Codex locally** (whether via the ChatGPT desktop app or the Codex CLI), not just programmers.
+Whether you use Codex to write code or to crunch data, organize documents, run research, and draft — Comote is the same
+phone remote for all of it. It's built for **anyone running Codex locally** (whether via the ChatGPT desktop app or the
+Codex CLI), not just programmers.
 
 **Out for lunch**, you remember how to fix that morning's bug. You pull out your phone and message in Feishu:
 
 > `Continue this morning's thread — change RetryPolicy.maxAttempts from 3 to 5 and run the tests`
 
-The Mac at the office receives it, Codex gets to work, and before you're back at your desk the Feishu card has updated: "Tests pass — want me to commit?" You tap "Approve".
+The Mac at the office receives it, Codex gets to work, and before you're back at your desk the Feishu card has updated:
+"Tests pass — want me to commit?" You tap "Approve".
 
-**In a meeting / on your commute**, a batch of chores comes to mind and you'd rather not wait until you're back at the computer:
+**In a meeting / on your commute**, a batch of chores comes to mind and you'd rather not wait until you're back at the
+computer:
 
-> `Start a new thread — transcribe that batch of client-interview recordings in downloads and turn them into a timestamped minutes table`
+>
+`Start a new thread — transcribe that batch of client-interview recordings in downloads and turn them into a timestamped minutes table`
 
 By the time you're done and back at your desk, that tidy minutes table is already waiting for you in the desktop Comote.
 
 ### Why Comote
 
-| Scenario | The usual way | Comote |
-|---|---|---|
-| Remotely drive your local Codex | SSH + tmux + typing commands | Send one message in Feishu |
-| Approve Codex's risky operations from your IM | Not possible | Tap a button on a card |
-| Avoid exposing your machine to the internet | Set up frp / ngrok | None needed — the daemon only listens locally |
-| Use a different IM | Write your own bot | Implement one channel adapter (~200–400 lines) |
+| Scenario                                      | The usual way                | Comote                                         |
+|-----------------------------------------------|------------------------------|------------------------------------------------|
+| Remotely drive your local Codex               | SSH + tmux + typing commands | Send one message in Feishu                     |
+| Approve Codex's risky operations from your IM | Not possible                 | Tap a button on a card                         |
+| Avoid exposing your machine to the internet   | Set up frp / ngrok           | None needed — the daemon only listens locally  |
+| Use a different IM                            | Write your own bot           | Implement one channel adapter (~200–400 lines) |
 
 ### Features
 
-- **Strong authorization model** — a chat identity that hasn't been bound / confirmed won't even get a reply to `/status`
-- **Streaming replies** — Codex talks as it thinks, and the IM card updates live (instead of dumping one giant block after it's done)
-- **Approval cards** — when Codex wants to run `rm -rf` or write a file, a card pops up in your IM for you to approve / deny
+- **Strong authorization model** — a chat identity that hasn't been bound / confirmed won't even get a reply to
+  `/status`
+- **Streaming replies** — Codex talks as it thinks, and the IM card updates live (instead of dumping one giant block
+  after it's done)
+- **Approval cards** — when Codex wants to run `rm -rf` or write a file, a card pops up in your IM for you to approve /
+  deny
 - **Session resume** — put your phone away for a few hours, come back, and `/sessions` continues an earlier thread
-- **Multiple channels in parallel** — Feishu, WeChat, DingTalk, and Telegram can all be bound at once without stepping on each other
+- **Multiple channels in parallel** — Feishu, WeChat, DingTalk, and Telegram can all be bound at once without stepping
+  on each other
 - **Extensible** — add a new IM by implementing a channel adapter; add a new agent backend by implementing a connector
 
-> **About the official Codex mobile app**: OpenAI ships its own ChatGPT/Codex mobile clients, but they only serve ChatGPT subscribers — people running local Codex (CLI or desktop app) with an API key can't use them, because the app simply can't see your local threads. Comote is for exactly those users: your Codex runs on your computer, on your own key, and the phone is just a remote. The day the official app supports API users remotely controlling local Codex, we'll retire.
+> **About the official Codex mobile app**: OpenAI ships its own ChatGPT/Codex mobile clients, but they only serve
+> ChatGPT subscribers — people running local Codex (CLI or desktop app) with an API key can't use them, because the app
+> simply can't see your local threads. Comote is for exactly those users: your Codex runs on your computer, on your own
+> key, and the phone is just a remote. The day the official app supports API users remotely controlling local Codex, we'll
+> retire.
 
 ## Supported channels
 
-| Channel | How it binds | Status |
-|---|---|---|
-| **Feishu / Lark** | Scan-to-build self-built app (feishu / lark domain selectable) | ✅ Stable |
-| **WeChat** | iLink scan-to-login | ✅ Stable |
-| **DingTalk** | AppKey / AppSecret + card templates | 🧪 Experimental |
-| **Telegram** | Bot Token + pairing code | 🧪 Experimental |
+| Channel           | How it binds                                                   | Status          |
+|-------------------|----------------------------------------------------------------|-----------------|
+| **Feishu / Lark** | Scan-to-build self-built app (feishu / lark domain selectable) | ✅ Stable       |
+| **WeChat**        | iLink scan-to-login                                            | ✅ Stable       |
+| **DingTalk**      | AppKey / AppSecret + card templates                            | 🧪 Experimental |
+| **Telegram**      | Bot Token + pairing code                                       | 🧪 Experimental |
 
-> 🧪 **Experimental**: implemented and covered by tests, but long-running real-device shakedown is still in progress — expect occasional rough edges. Try it and send feedback.
+Channel message capabilities:
 
-> **Languages**: the UI supports six languages — 中文 (default), English, 日本語, 한국어, Français, Español. Switch from the "Language" dropdown on the Web settings page; it **takes effect instantly and persists** (written to `settings.locale` in state.json) and covers all user-facing copy — each IM's chat replies and cards, and the Web settings page (server runtime logs in eventLog stay in the original language and don't follow the switch). It's also available over the API: `GET /api/settings` returns `{ locale, supported }`, `PUT /api/settings { locale }` switches.
+| Channel           | Streaming in one message | Interactive cards/messages | Processing reaction |
+|-------------------|--------------------------|----------------------------|---------------------|
+| **Feishu / Lark** | Yes                      | Yes                        | Yes (`EYES`)        |
+| **WeChat**        | No; text milestones      | No                         | No                  |
+| **DingTalk**      | Yes, with status template | Yes, with card templates  | No                  |
+| **Telegram**      | Yes                      | Yes, via inline keyboards  | Yes (`👀`)          |
+
+On streaming channels, the live message now contains tool activity, approvals, streamed output, and the final result.
+The acknowledgement reaction is removed when the turn finishes. DingTalk's combined live approval uses the status
+template fields `approvalVisible`, `detail`, `approveLabel`, `sessionLabel`, `rejectLabel`, `approveParams`,
+`sessionParams`, and `rejectParams`; without those fields the same card still shows the `/approve` and `/deny` text
+fallback in its body.
+
+> 🧪 **Experimental**: implemented and covered by tests, but long-running real-device shakedown is still in progress —
+> expect occasional rough edges. Try it and send feedback.
+
+> **Languages**: the UI supports six languages — 中文 (default), English, 日本語, 한국어, Français, Español. Switch from
+> the "Language" dropdown on the Web settings page; it **takes effect instantly and persists** (written to
+> `settings.locale` in state.json) and covers all user-facing copy — each IM's chat replies and cards, and the Web
+> settings page (server runtime logs in eventLog stay in the original language and don't follow the switch). It's also
+> available over the API: `GET /api/settings` returns `{ locale, supported }`, `PUT /api/settings { locale }` switches.
 
 ## Quick Start
 
@@ -67,12 +105,14 @@ By the time you're done and back at your desk, that tidy minutes table is alread
 
 You need Codex on this machine — either one:
 
-- the **ChatGPT desktop app** (formerly Codex Desktop) — install it from [openai.com/codex](https://openai.com/codex); it bundles the codex binary;
+- the **ChatGPT desktop app** (formerly Codex Desktop) — install it from [openai.com/codex](https://openai.com/codex);
+  it bundles the codex binary;
 - the **Codex CLI** — `npm install -g @openai/codex`.
 
 And you need to be signed in: sign in inside the desktop app, or run `codex login` once.
 
-Comote talks to Codex through `codex app-server` (stdio JSON-RPC) and launches it as a child process automatically — **no Codex window needs to stay open**.
+Comote talks to Codex through `codex app-server` (stdio JSON-RPC) and launches it as a child process automatically —
+**no Codex window needs to stay open**.
 
 ### 1. Download and install
 
@@ -87,11 +127,13 @@ Comote talks to Codex through `codex app-server` (stdio JSON-RPC) and launches i
 npm i -g comote   # needs Node 22+
 ```
 
-For Linux / headless servers, see the [deployment notes below](#linux--headless-vps). You can also [build from source](#build-from-source).
+For Linux / headless servers, see the [deployment notes below](#linux--headless-vps). You can
+also [build from source](#build-from-source).
 
 ### 2. Bind an IM
 
-Open Comote and bind a channel from the Web settings page (you can bind several). The four channels fall into two binding styles:
+Open Comote and bind a channel from the Web settings page (you can bind several). The four channels fall into two
+binding styles:
 
 **Scan style (Feishu / WeChat) — confirm the identity on the desktop**
 
@@ -100,14 +142,19 @@ Open Comote and bind a channel from the Web settings page (you can bind several)
 
 **Credential / Token style (DingTalk / Telegram, experimental) — fill in config, then bind to a specific chat**
 
-- **Telegram**: create a bot via [@BotFather](https://t.me/BotFather), paste its Bot Token into the settings page → the daemon starts up and receives messages → the settings page shows a **pairing code**; send it to your bot to complete binding (bound to that chat).
-- **DingTalk**: create an internal enterprise app on the DingTalk Open Platform, fill in AppKey / AppSecret; if you want cards (approval / status / picker), build the three card templates in the console and paste their template ids into the settings page (omit them and it degrades to plain text) → send the app a message to complete binding.
+- **Telegram**: create a bot via [@BotFather](https://t.me/BotFather), paste its Bot Token into the settings page → the
+  daemon starts up and receives messages → the settings page shows a **pairing code**; send it to your bot to complete
+  binding (bound to that chat).
+- **DingTalk**: create an internal enterprise app on the DingTalk Open Platform, fill in AppKey / AppSecret; if you want
+  cards (approval / status / picker), build the three card templates in the console and paste their template ids into
+  the settings page (omit them and it degrades to plain text) → send the app a message to complete binding.
 
 ### 3. Confirm the identity
 
 **Only a bound / confirmed identity can control Codex.**
 
-- Feishu / WeChat: on your first message, Comote pops a "pending authorization" card in the desktop UI — click "Confirm".
+- Feishu / WeChat: on your first message, Comote pops a "pending authorization" card in the desktop UI — click
+  "Confirm".
 - Telegram: sending the pairing code completes the binding; no extra desktop confirmation needed.
 - DingTalk: bound as the user who sent the message.
 
@@ -144,9 +191,16 @@ WeChat / Feishu / DingTalk / Telegram bot
    codex app-server (the codex bundled with the ChatGPT desktop app, or the Codex CLI)
 ```
 
-The desktop side is wrapped with [Tauri](https://tauri.app/); the Node daemon launches as a sidecar and listens only on the loopback address.
+The desktop side is wrapped with [Tauri](https://tauri.app/); the Node daemon launches as a sidecar and listens only on
+the loopback address.
 
-**Local-first, stated honestly**: Comote runs no servers of its own — your messages never pass through any Comote-operated server, and every Codex call happens on your machine (the daemon talks directly to its local `codex app-server` child process and binds only to `127.0.0.1`; authorizations, tokens, and session history stay local — see [Where your data lives](#where-your-data-lives)). To be clear about the one hop that isn't local: messages between you and Comote **do travel through the servers of the IM platform you chose** (Feishu over a WebSocket long connection, DingTalk over a Stream long connection, WeChat over iLink getupdates polling, Telegram over getUpdates long polling), and that leg is governed by that platform's privacy policy.
+**Local-first, stated honestly**: Comote runs no servers of its own — your messages never pass through any
+Comote-operated server, and every Codex call happens on your machine (the daemon talks directly to its local
+`codex app-server` child process and binds only to `127.0.0.1`; authorizations, tokens, and session history stay local —
+see [Where your data lives](#where-your-data-lives)). To be clear about the one hop that isn't local: messages between
+you and Comote **do travel through the servers of the IM platform you chose** (Feishu over a WebSocket long connection,
+DingTalk over a Stream long connection, WeChat over iLink getupdates polling, Telegram over getUpdates long polling),
+and that leg is governed by that platform's privacy policy.
 
 ## Configuration and reference
 
@@ -154,51 +208,60 @@ The desktop side is wrapped with [Tauri](https://tauri.app/); the Node daemon la
 
 Comote's configuration splits into three layers, each with its own job:
 
-| Layer | Owns | Written by | Typical use |
-|---|---|---|---|
-| **Environment variables** | Runtime behavior: bind address / port, state file location, codex path, API token (table below) | You (shell / systemd `Environment=`) | VPS / headless deployments |
-| **state.json** | Channel configs (appKey, botToken, …), authorized identities, settings (e.g. UI language) | The Web UI and `comote config` — **don't hand-edit it** | Desktop / daily use |
-| **CLI flags** | Per-invocation overrides (e.g. `--state-path`, `--json`) | You (command line) | Troubleshooting, scripts |
+| Layer                     | Owns                                                                                            | Written by                                              | Typical use                |
+|---------------------------|-------------------------------------------------------------------------------------------------|---------------------------------------------------------|----------------------------|
+| **Environment variables** | Runtime behavior: bind address / port, state file location, codex path, API token (table below) | You (shell / systemd `Environment=`)                    | VPS / headless deployments |
+| **state.json**            | Channel configs (appKey, botToken, …), authorized identities, settings (e.g. UI language)       | The Web UI and `comote config` — **don't hand-edit it** | Desktop / daily use        |
+| **CLI flags**             | Per-invocation overrides (e.g. `--state-path`, `--json`)                                        | You (command line)                                      | Troubleshooting, scripts   |
 
-Precedence: CLI flag > environment variable > default. Channel configuration lives in state.json (the UI and `comote config` are two doors into the same data). Rule of thumb: **env vars + `comote config` on a VPS, the UI on the desktop**.
+Precedence: CLI flag > environment variable > default. Channel configuration lives in state.json (the UI and
+`comote config` are two doors into the same data). Rule of thumb: **env vars + `comote config` on a VPS, the UI on the
+desktop**.
 
 ### Where your data lives
 
-- **CLI / daemon (npm install)**: `~/.comote/state.json` by default (absolute path). If that new default doesn't exist but the older **CWD-relative** `.comote/state.json` does, the daemon keeps using the old file and logs a line about it (backward compatibility — no file migration).
-- **Desktop App**: state lives in the OS app-data directory — macOS `~/Library/Application Support/dev.comote.desktop/state.json`, Windows `%APPDATA%\dev.comote.desktop\state.json` (the App passes `COMOTE_STATE_PATH` when starting the daemon).
+- **CLI / daemon (npm install)**: `~/.comote/state.json` by default (absolute path). If that new default doesn't exist
+  but the older **CWD-relative** `.comote/state.json` does, the daemon keeps using the old file and logs a line about it
+  (backward compatibility — no file migration).
+- **Desktop App**: state lives in the OS app-data directory — macOS
+  `~/Library/Application Support/dev.comote.desktop/state.json`, Windows `%APPDATA%\dev.comote.desktop\state.json` (the
+  App passes `COMOTE_STATE_PATH` when starting the daemon).
 - An explicit setting always wins: the `COMOTE_STATE_PATH` env var or the `--state-path` flag.
-- `comote doctor` prints the resolved state path **and where it came from** (flag / env / legacy / default) — run it first whenever you're unsure which file you're looking at.
+- `comote doctor` prints the resolved state path **and where it came from** (flag / env / legacy / default) — run it
+  first whenever you're unsure which file you're looking at.
 
 Per-IM details:
 
 - **Feishu / Lark** — see [`src/channels/feishu/README.md`](src/channels/feishu/README.md)
 - **WeChat** — see [`src/channels/wechat/README.md`](src/channels/wechat/README.md)
-- **DingTalk** — config fields: `appKey` / `appSecret` + optional `approvalTemplateId` / `statusTemplateId` / `pickerTemplateId` (card templates; absent → plain-text fallback)
-- **Telegram** — config field: `botToken`; after the first connection the settings page shows a `pairingCode` — send it to the bot to finish binding
+- **DingTalk** — config fields: `appKey` / `appSecret` + optional `approvalTemplateId` / `statusTemplateId` /
+  `pickerTemplateId` (card templates; absent → plain-text fallback)
+- **Telegram** — config field: `botToken`; after the first connection the settings page shows a `pairingCode` — send it
+  to the bot to finish binding
 
 Common environment variables:
 
-| Variable | What it does |
-|---|---|
-| `HOST` | daemon bind address (default `127.0.0.1`; a non-loopback value REQUIRES `COMOTE_LOCAL_API_TOKEN`, or the daemon refuses to start) |
-| `PORT` | daemon listen port (unset → built-in default; you normally don't touch it) |
-| `COMOTE_STATE_PATH` | path to the persisted state file (default `~/.comote/state.json`; the desktop App points it at the app-data directory — see [Where your data lives](#where-your-data-lives)) |
-| `COMOTE_CODEX_PATH` | explicit full path to the codex executable — takes highest priority (for custom install locations) |
-| `COMOTE_LOCAL_API_TOKEN` | if set, every `/api/*` call must carry this token |
-| `COMOTE_WECHAT_ACCOUNT_ID` | distinguishes multiple WeChat accounts bound on one machine (default `default`) |
+| Variable                   | What it does                                                                                                                                                                 |
+|----------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `HOST`                     | daemon bind address (default `127.0.0.1`; a non-loopback value REQUIRES `COMOTE_LOCAL_API_TOKEN`, or the daemon refuses to start)                                            |
+| `PORT`                     | daemon listen port (unset → built-in default; you normally don't touch it)                                                                                                   |
+| `COMOTE_STATE_PATH`        | path to the persisted state file (default `~/.comote/state.json`; the desktop App points it at the app-data directory — see [Where your data lives](#where-your-data-lives)) |
+| `COMOTE_CODEX_PATH`        | explicit full path to the codex executable — takes highest priority (for custom install locations)                                                                           |
+| `COMOTE_LOCAL_API_TOKEN`   | if set, every `/api/*` call must carry this token                                                                                                                            |
+| `COMOTE_WECHAT_ACCOUNT_ID` | distinguishes multiple WeChat accounts bound on one machine (default `default`)                                                                                              |
 
 Command cheat sheet:
 
-| Command | What it does |
-|---|---|
-| `/projects` | list all projects Codex knows about |
-| `/open <index \| absolute path>` | enter a project |
-| `/sessions` | list recent threads in that project |
-| `/new <title>` | start a new thread |
-| `/status` | current bound identity / project / session |
-| `/approve <code>` | approve a pending operation |
-| `/deny <code>` | deny a pending operation |
-| plain text | forwarded to the current thread for Codex |
+| Command                          | What it does                               |
+|----------------------------------|--------------------------------------------|
+| `/projects`                      | list all projects Codex knows about        |
+| `/open <index \| absolute path>` | enter a project                            |
+| `/sessions`                      | list recent threads in that project        |
+| `/new <title>`                   | start a new thread                         |
+| `/status`                        | current bound identity / project / session |
+| `/approve <code>`                | approve a pending operation                |
+| `/deny <code>`                   | deny a pending operation                   |
+| plain text                       | forwarded to the current thread for Codex  |
 
 ## Troubleshooting and log locations
 
@@ -211,25 +274,32 @@ comote logs          # the daemon's in-memory event log (needs a live daemon; --
 
 Logs live in two places:
 
-- **Daemon event log**: an in-memory ring buffer, read with `comote logs` (also shown in the Web settings page's runtime-log panel). It's gone when the daemon dies — that's when you want the files below.
+- **Daemon event log**: an in-memory ring buffer, read with `comote logs` (also shown in the Web settings page's
+  runtime-log panel). It's gone when the daemon dies — that's when you want the files below.
 - **Desktop-App launch logs (files, written only in desktop App mode)**:
-  - macOS: `~/Library/Application Support/dev.comote.desktop/comote-launch.log`
-  - Windows: `comote-launch.log`, `comote-node.stdout.log`, and `comote-node.stderr.log` under `%APPDATA%\dev.comote.desktop\`
-  - Read the tail with `comote logs --file` (default 200 lines, `--lines N` to adjust) — no daemon required. When Comote runs via npm/CLI these files simply don't exist; that's normal.
+    - macOS: `~/Library/Application Support/dev.comote.desktop/comote-launch.log`
+    - Windows: `comote-launch.log`, `comote-node.stdout.log`, and `comote-node.stderr.log` under
+      `%APPDATA%\dev.comote.desktop\`
+    - Read the tail with `comote logs --file` (default 200 lines, `--lines N` to adjust) — no daemon required. When
+      Comote runs via npm/CLI these files simply don't exist; that's normal.
 
-To upgrade: `comote update` checks and prints the right upgrade path (npm install → `npm install -g comote@latest`, on every platform; desktop App → a download link) — it never runs the upgrade for you.
+To upgrade: `comote update` checks and prints the right upgrade path (npm install → `npm install -g comote@latest`, on
+every platform; desktop App → a download link) — it never runs the upgrade for you.
 
 ## Linux / headless VPS
 
 <details>
 <summary>Want to run Comote on a headless Linux VPS with no monitor and no desktop environment? You can — there's a pure command-line headless daemon that needs no GUI / webkit.</summary>
 
-**What it is** — the full app-server connector (threads, streaming, exec / applyPatch approvals) works exactly the same, because Comote talks to `codex app-server` (a subcommand of codex), **not** to any GUI (such as the ChatGPT desktop app). So no desktop environment is required.
+**What it is** — the full app-server connector (threads, streaming, exec / applyPatch approvals) works exactly the same,
+because Comote talks to `codex app-server` (a subcommand of codex), **not** to any GUI (such as the ChatGPT desktop
+app). So no desktop environment is required.
 
 **Prerequisites**
 
 - Install the **Codex CLI** and make sure `codex` is on PATH.
-- ⚠️ **Run `codex login` first** — this is the #1 first-run gotcha. On a no-browser VPS, complete login with **device-auth or an API key**. **Without it the app-server won't start, and Comote can't reach Codex.**
+- ⚠️ **Run `codex login` first** — this is the #1 first-run gotcha. On a no-browser VPS, complete login with
+  **device-auth or an API key**. **Without it the app-server won't start, and Comote can't reach Codex.**
 
 **Install**
 
@@ -239,7 +309,9 @@ npm i -g comote   # needs Node 22+
 
 **Run**
 
-Use **systemd** — that's what makes it **start on boot, restart on crash, and keep running across a reboot**. (`comote &` / `nohup comote &` survives an SSH disconnect but **not** a reboot — the process is gone after a restart, so don't use it for a long-lived deployment.)
+Use **systemd** — that's what makes it **start on boot, restart on crash, and keep running across a reboot**.
+(`comote &` / `nohup comote &` survives an SSH disconnect but **not** a reboot — the process is gone after a restart, so
+don't use it for a long-lived deployment.)
 
 ```bash
 # Use the deploy/comote.service template; edit User / paths per its comments
@@ -250,9 +322,13 @@ systemctl status comote                # check it's active (running)
 journalctl -u comote -f                # follow the logs
 ```
 
-> ⚠️ **Run the daemon as the user that ran `codex login`.** Codex's sign-in lives in that user's `~/.codex`; if systemd runs it as a dedicated `comote` user, log in as that user first (`sudo -u comote codex login`), or the app-server can't read the credentials and won't connect.
+> ⚠️ **Run the daemon as the user that ran `codex login`.** Codex's sign-in lives in that user's `~/.codex`; if systemd
+> runs it as a dedicated `comote` user, log in as that user first (`sudo -u comote codex login`), or the app-server can't
+> read the credentials and won't connect.
 
-Comote **launches `codex app-server` as a child process and connects automatically** on startup — there's no separate Codex app to open or keep running on Linux. For a quick try you can also run `comote` in the foreground (but it stops when you close the terminal / reboot).
+Comote **launches `codex app-server` as a child process and connects automatically** on startup — there's no separate
+Codex app to open or keep running on Linux. For a quick try you can also run `comote` in the foreground (but it stops
+when you close the terminal / reboot).
 
 **Access the web console**
 
@@ -267,11 +343,16 @@ ssh -L 16208:localhost:16208 your-vps
 
 The default loopback bind (`127.0.0.1`) is safe — prefer the SSH tunnel.
 
-If you do set `HOST` to a non-loopback address (e.g. `0.0.0.0`), you **must** also set `COMOTE_LOCAL_API_TOKEN` — otherwise the daemon **refuses to start** (anyone able to reach the address could otherwise approve Codex command execution unauthenticated). Once set, every `/api/*` request must carry the token in the `x-comote-token` header. Even then, prefer the SSH tunnel.
+If you do set `HOST` to a non-loopback address (e.g. `0.0.0.0`), you **must** also set `COMOTE_LOCAL_API_TOKEN` —
+otherwise the daemon **refuses to start** (anyone able to reach the address could otherwise approve Codex command
+execution unauthenticated). Once set, every `/api/*` request must carry the token in the `x-comote-token` header. Even
+then, prefer the SSH tunnel.
 
 **Approvals**
 
-Codex permission approvals are pushed to your IM chat — approve / deny them there with `/approve <code>` · `/deny <code>` (or the card buttons on channels that support them). Note codex's default workspace-write sandbox **auto-allows** in-workspace edits; only sandbox-escaping actions prompt.
+Codex permission approvals are pushed to your IM chat — approve / deny them there with `/approve <code>` ·
+`/deny <code>` (or the card buttons on channels that support them). Note codex's default workspace-write sandbox
+**auto-allows** in-workspace edits; only sandbox-escaping actions prompt.
 
 **Updating**
 
@@ -281,7 +362,8 @@ npm i -g comote@latest   # then restart the service: systemctl restart comote
 
 There's no in-app auto-download on Linux — upgrade manually.
 
-**A note** — Comote is certified against a recent codex version. The app-server protocol has changed before, so if something breaks after an upgrade, pin codex back to a known-good version first and then debug.
+**A note** — Comote is certified against a recent codex version. The app-server protocol has changed before, so if
+something breaks after an upgrade, pin codex back to a known-good version first and then debug.
 
 </details>
 
@@ -322,30 +404,39 @@ You can also let GitHub Actions do it (the `windows-latest` runner) — see `.gi
 
 **Q: Does any data get uploaded to a server?**
 
-Not to any Comote server — Comote doesn't operate one, and every Codex call happens on your machine. But the **messages themselves travel through the IM platform you chose** (Feishu / WeChat / DingTalk / Telegram run their own servers), governed by that platform's privacy policy. See [How it works](#how-it-works) above for the chain details.
+Not to any Comote server — Comote doesn't operate one, and every Codex call happens on your machine. But the **messages
+themselves travel through the IM platform you chose** (Feishu / WeChat / DingTalk / Telegram run their own servers),
+governed by that platform's privacy policy. See [How it works](#how-it-works) above for the chain details.
 
 **Q: Can several people share one daemon?**
 
-Yes. Each chat identity must be bound / confirmed individually — authorization is per-identity. Note, though: all authorized identities share the same local Codex and can see each other's thread lists.
+Yes. Each chat identity must be bound / confirmed individually — authorization is per-identity. Note, though: all
+authorized identities share the same local Codex and can see each other's thread lists.
 
 **Q: Is the WeChat integration compliant?**
 
-We use Tencent's public iLink bot interface (`ilinkai.weixin.qq.com`) — not reverse engineering, not desktop UI automation, and it bypasses no account verification. But Tencent's terms of service can change; you need to assess the current compliance risk yourself, and **the author takes no responsibility for it**.
+We use Tencent's public iLink bot interface (`ilinkai.weixin.qq.com`) — not reverse engineering, not desktop UI
+automation, and it bypasses no account verification. But Tencent's terms of service can change; you need to assess the
+current compliance risk yourself, and **the author takes no responsibility for it**.
 
 **Q: Which IMs are supported? Can I add others (Discord / Slack)?**
 
-Four are built in today: **Feishu** and **WeChat** (stable), **DingTalk** and **Telegram** (experimental) — see the [Supported channels](#supported-channels) table above. Adding a new IM means implementing a `ChannelAdapter` — roughly 200–400 lines of code; a Discord adapter is already on the roadmap. PRs welcome.
+Four are built in today: **Feishu** and **WeChat** (stable), **DingTalk** and **Telegram** (experimental) — see
+the [Supported channels](#supported-channels) table above. Adding a new IM means implementing a `ChannelAdapter` —
+roughly 200–400 lines of code; a Discord adapter is already on the roadmap. PRs welcome.
 
 <details>
 <summary>More ops-related Q&A (cross-device sync, behavior when the connection drops)</summary>
 
 **Q: Can it sync across devices?**
 
-The daemon is single-machine for now. If you have several computers, run a separate Comote instance on each and bind different IM accounts to tell them apart.
+The daemon is single-machine for now. If you have several computers, run a separate Comote instance on each and bind
+different IM accounts to tell them apart.
 
 **Q: What happens if the connection drops?**
 
-- IM push service goes down: your messages can't come in for a while; once it recovers, Comote remembers where it last read and picks up from there, backfilling whatever piled up in the meantime.
+- IM push service goes down: your messages can't come in for a while; once it recovers, Comote remembers where it last
+  read and picks up from there, backfilling whatever piled up in the meantime.
 - Codex (the app-server child process) crashes: the daemon reconnects automatically and messages queue in the meantime.
 - The daemon goes down: your messages stay on the IM server side and the daemon picks them up once it's back.
 
@@ -375,13 +466,15 @@ npm test
 
 When adding a channel / connector, include a README + tests.
 
-Not sure where to start? Look for the `good first issue` label on [Issues](https://github.com/GavinYangAI/comote/issues).
+Not sure where to start? Look for the `good first issue` label
+on [Issues](https://github.com/GavinYangAI/comote/issues).
 
 ## License
 
 [MIT License](./LICENSE) © 2026 Gavin Yang
 
-This project is provided under the MIT License **with no warranty of any kind**. Assess the compliance risk of IM integrations yourself.
+This project is provided under the MIT License **with no warranty of any kind**. Assess the compliance risk of IM
+integrations yourself.
 
 ## About
 
@@ -389,7 +482,8 @@ This project is provided under the MIT License **with no warranty of any kind**.
 - **Author**: [@GavinYangAI](https://github.com/GavinYangAI)
 - **Bugs / requests**: <https://github.com/GavinYangAI/comote/issues>
 
-Comote's goal is to make "remotely driving your local Codex" **so simple it isn't worth renting a server for**. If it helps you, a Star, an Issue, or a PR is always welcome.
+Comote's goal is to make "remotely driving your local Codex" **so simple it isn't worth renting a server for**. If it
+helps you, a Star, an Issue, or a PR is always welcome.
 
 ---
 

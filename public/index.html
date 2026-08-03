@@ -10,7 +10,7 @@
     <div class="app-frame">
       <aside class="side-nav" aria-label="主导航" data-i18n-attr="aria-label:web.nav.ariaLabel">
         <div class="side-brand">
-          <img class="brand-logo" src="/logo.svg" alt="Comote">
+          <img class="brand-logo" src="/icon.png" alt="Comote">
           <div>
             <h1>Comote</h1>
             <p data-i18n="web.brand.tagline">手机上的 Codex</p>
@@ -19,7 +19,7 @@
 
         <nav class="nav-list">
           <div class="nav-group-label" data-i18n="web.nav.groupChannel">通道</div>
-          <a class="nav-item active" href="#connectPhone">
+          <a class="nav-item active" href="#connectPhone" aria-current="page">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="7" y="2" width="10" height="20" rx="2.5"/><path d="M11 18h2"/></svg>
             <span data-i18n="web.nav.connectPhone">连接手机</span>
           </a>
@@ -31,11 +31,11 @@
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 17V7a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v10"/><path d="M2 21h20"/></svg>
             <span data-i18n="web.nav.phoneCommands">从手机使用</span>
           </a>
+          <div class="nav-group-label" data-i18n="web.nav.groupRecords">记录</div>
           <a class="nav-item" href="#approvals">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 11l3 3 8-8"/><path d="M20 12v6a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h9"/></svg>
             <span data-i18n="web.nav.approvals">待审批</span><span id="approvalsNavCount" class="nav-count" hidden>0</span>
           </a>
-          <div class="nav-group-label" data-i18n="web.nav.groupRecords">记录</div>
           <a class="nav-item" href="#conversation">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
             <span data-i18n="web.nav.conversation">对话记录</span>
@@ -44,7 +44,7 @@
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 4h16v16H4z"/><path d="M8 9h8M8 13h5"/></svg>
             <span data-i18n="web.nav.logs">运行日志</span>
           </a>
-          <a class="nav-item" href="#advanced">
+          <a class="nav-item nav-item-system" href="#advanced">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.6 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
             <span data-i18n="web.nav.advanced">高级设置</span>
           </a>
@@ -98,48 +98,54 @@
           <button id="retryLoad" class="secondary-button" type="button" data-i18n="web.button.retry">重试</button>
         </section>
 
-        <section id="readiness" class="section-block" hidden>
-          <div class="section-heading">
-            <h2 data-i18n="web.readiness.title">开始使用</h2>
-            <p data-i18n="web.readiness.subtitle">完成下面几步，就能从手机控制本机 Codex。</p>
-          </div>
-          <ul id="readinessList" class="readiness-list"></ul>
-        </section>
-
-        <section id="connectPhone" class="section-block">
+        <section id="connectPhone" class="section-block app-page active">
           <div class="section-heading inline-heading">
             <div>
               <h2 data-i18n="web.connect.title">连接手机</h2>
               <p><span data-i18n="web.connect.subtitlePrefix">选择一个手机通道，绑定后即可从手机控制本机 Codex。</span><strong data-i18n="web.connect.recommendFeishu">推荐用飞书</strong><span data-i18n="web.connect.subtitleSuffix"> —— 接口稳定、支持卡片交互，体验更好。</span></p>
             </div>
-            <button id="refreshConnect" class="secondary-button" type="button" data-i18n="web.button.refresh">刷新</button>
+            <button id="refreshConnect" class="secondary-button refresh-button" type="button" data-i18n-attr="aria-label:web.button.refresh; title:web.button.refresh">
+              <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 11a8.1 8.1 0 0 0-15.5-2M4 4v5h5"/><path d="M4 13a8.1 8.1 0 0 0 15.5 2M20 20v-5h-5"/></svg>
+              <span class="visually-hidden" data-i18n="web.button.refresh">刷新</span>
+            </button>
+          </div>
+
+          <div id="readiness" class="readiness-block" hidden>
+            <div class="subsection-heading">
+              <h3 data-i18n="web.readiness.title">开始使用</h3>
+              <p data-i18n="web.readiness.subtitle">完成下面几步，就能从手机控制本机 Codex。</p>
+            </div>
+            <ul id="readinessList" class="readiness-list"></ul>
           </div>
 
           <div id="channelCards"></div>
         </section>
 
-        <section id="users" class="section-block">
+        <section id="users" class="section-block app-page">
           <div class="section-heading inline-heading">
             <div>
               <h2 data-i18n="web.users.title">授权用户</h2>
               <p data-i18n="web.users.subtitle">只有在本机确认过的微信或飞书用户可以控制 Comote。</p>
             </div>
-            <button id="refreshUsers" class="secondary-button" type="button" data-i18n="web.button.refresh">刷新</button>
+            <button id="refreshUsers" class="secondary-button refresh-button" type="button" data-i18n-attr="aria-label:web.button.refresh; title:web.button.refresh">
+              <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 11a8.1 8.1 0 0 0-15.5-2M4 4v5h5"/><path d="M4 13a8.1 8.1 0 0 0 15.5 2M20 20v-5h-5"/></svg>
+              <span class="visually-hidden" data-i18n="web.button.refresh">刷新</span>
+            </button>
           </div>
 
           <div class="user-grid">
-            <article class="panel">
+            <article class="panel list-panel">
               <h3 data-i18n="web.users.authorized">已授权用户</h3>
               <ul id="identities" class="list"></ul>
             </article>
-            <article class="panel">
+            <article class="panel list-panel">
               <h3 data-i18n="web.users.pending">待确认用户</h3>
               <ul id="identityCandidates" class="list compact-list"></ul>
             </article>
           </div>
         </section>
 
-        <section id="phoneCommands" class="section-block">
+        <section id="phoneCommands" class="section-block app-page">
           <div class="section-heading inline-heading">
             <div>
               <h2 data-i18n="web.commands.title">从手机使用</h2>
@@ -149,16 +155,38 @@
           </div>
 
           <div class="command-grid">
-            <code>/projects</code>
-            <code>/open 1</code>
-            <code>/sessions</code>
-            <code>/new fix tests</code>
-            <code>/approve &lt;id&gt;</code>
-            <code>/cancel</code>
+            <div class="command-chip">
+              <code tabindex="0" aria-describedby="command-projects-tooltip">/projects</code>
+              <span id="command-projects-tooltip" class="command-tooltip" role="tooltip" data-i18n="web.commands.tooltip.projects">作用：列出可操作的项目。&#10;用法：/projects</span>
+            </div>
+            <div class="command-chip">
+              <code tabindex="0" aria-describedby="command-open-tooltip">/open 1</code>
+              <span id="command-open-tooltip" class="command-tooltip" role="tooltip" data-i18n="web.commands.tooltip.open">作用：选择要操作的项目。&#10;用法：/open &lt;编号|绝对路径&gt;</span>
+            </div>
+            <div class="command-chip">
+              <code tabindex="0" aria-describedby="command-sessions-tooltip">/sessions</code>
+              <span id="command-sessions-tooltip" class="command-tooltip" role="tooltip" data-i18n="web.commands.tooltip.sessions">作用：列出当前项目的 Codex 对话。&#10;用法：/sessions</span>
+            </div>
+            <div class="command-chip">
+              <code tabindex="0" aria-describedby="command-new-tooltip">/new fix tests</code>
+              <span id="command-new-tooltip" class="command-tooltip" role="tooltip" data-i18n="web.commands.tooltip.new">作用：新建对话并发送第一条任务。&#10;用法：/new &lt;消息&gt;</span>
+            </div>
+            <div class="command-chip">
+              <code tabindex="0" aria-describedby="command-approve-tooltip">/approve &lt;id&gt;</code>
+              <span id="command-approve-tooltip" class="command-tooltip" role="tooltip" data-i18n="web.commands.tooltip.approve">作用：批准一次待处理的 Codex 请求。&#10;用法：/approve &lt;审批编号&gt;</span>
+            </div>
+            <div class="command-chip">
+              <code tabindex="0" aria-describedby="command-automode-tooltip">/automode true</code>
+              <span id="command-automode-tooltip" class="command-tooltip" role="tooltip" data-i18n="web.commands.tooltip.automode">作用：切换 Approve for me。&#10;用法：/automode &lt;true|false&gt;</span>
+            </div>
+            <div class="command-chip">
+              <code tabindex="0" aria-describedby="command-cancel-tooltip">/cancel</code>
+              <span id="command-cancel-tooltip" class="command-tooltip" role="tooltip" data-i18n="web.commands.tooltip.cancel">作用：取消当前 Codex 任务或退出选择。&#10;用法：/cancel</span>
+            </div>
           </div>
         </section>
 
-        <section id="approvals" class="section-block">
+        <section id="approvals" class="section-block app-page">
           <div class="section-heading inline-heading">
             <div>
               <h2 data-i18n="web.approvals.title">待审批操作</h2>
@@ -169,7 +197,7 @@
           <ul id="approvalsList" class="list"></ul>
         </section>
 
-        <section id="conversation" class="section-block">
+        <section id="conversation" class="section-block app-page">
           <div class="section-heading">
             <h2 data-i18n="web.conversation.title">对话记录</h2>
             <p data-i18n="web.conversation.subtitle">手机上与 Codex 的最近往来，daemon 重启后保留。</p>
@@ -177,20 +205,48 @@
           <div id="conversationList"></div>
         </section>
 
-        <section id="logs" class="section-block">
+        <section id="logs" class="section-block app-page">
           <div class="section-heading inline-heading">
             <div>
               <h2 data-i18n="web.logs.title">运行日志</h2>
               <p data-i18n="web.logs.subtitle">本次运行的诊断事件。重启 daemon 后清空。</p>
             </div>
-            <button id="refreshLogs" class="secondary-button" type="button" data-i18n="web.button.refresh">刷新</button>
+            <button id="refreshLogs" class="secondary-button refresh-button" type="button" data-i18n-attr="aria-label:web.button.refresh; title:web.button.refresh">
+              <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 11a8.1 8.1 0 0 0-15.5-2M4 4v5h5"/><path d="M4 13a8.1 8.1 0 0 0 15.5 2M20 20v-5h-5"/></svg>
+              <span class="visually-hidden" data-i18n="web.button.refresh">刷新</span>
+            </button>
           </div>
           <ul id="logList" class="list log-list"></ul>
         </section>
 
-        <details id="advanced" class="advanced">
-          <summary data-i18n="web.advanced.title">高级设置</summary>
+        <section id="advanced" class="section-block app-page advanced">
+          <div class="section-heading">
+            <h2 data-i18n="web.advanced.title">高级设置</h2>
+          </div>
           <section class="advanced-grid">
+            <article class="panel connector-preference-panel">
+              <h3 data-i18n="web.advanced.connectorTitle">会话后端</h3>
+              <p class="setting-note" data-i18n="web.advanced.connectorHint">选择新建或打开会话时优先使用的 Codex 接口。当前会话不会切换。</p>
+              <fieldset id="preferredConnector" class="segmented-selector">
+                <legend class="visually-hidden" data-i18n="web.advanced.connectorLabel">优先使用</legend>
+                <label class="segment-option">
+                  <input type="radio" name="preferredConnector" value="desktop">
+                  <span>
+                    <strong>Codex Desktop</strong>
+                    <small data-i18n="web.advanced.connectorDesktopHint">支持实时进度和审批</small>
+                  </span>
+                </label>
+                <label class="segment-option">
+                  <input type="radio" name="preferredConnector" value="cli">
+                  <span>
+                    <strong>Codex CLI</strong>
+                    <small data-i18n="web.advanced.connectorCliHint">通过本机命令行运行</small>
+                  </span>
+                </label>
+              </fieldset>
+              <p id="preferredConnectorStatus" class="setting-save-status" aria-live="polite" data-i18n="web.advanced.connectorEffective">将在下一次新建或打开会话时生效。</p>
+            </article>
+
             <article class="panel">
               <h3 data-i18n="web.advanced.projects">Codex 项目</h3>
               <div class="actions">
@@ -211,11 +267,11 @@
               <h3 data-i18n="web.advanced.keepAliveTitle">后台运行</h3>
               <label class="setting-toggle" for="keepDaemonAlive">
                 <span class="setting-copy">
-                  <strong data-i18n="web.advanced.keepAliveLabel">关闭窗口后保持后台运行</strong>
-                  <span id="keepDaemonAliveStatus" class="setting-note" data-i18n="web.advanced.keepAliveHint">开启后，退出 Comote 仍保持本地服务在线，手机可继续连接 Codex。</span>
+                  <strong data-i18n="web.advanced.keepAliveLabel">从托盘退出后保持后台运行</strong>
+                  <span id="keepDaemonAliveStatus" class="setting-note" data-i18n="web.advanced.keepAliveHint">开启后，从托盘退出 Comote 仍保持本地服务在线，手机可继续连接 Codex。</span>
                 </span>
                 <span class="switch-control">
-                  <input id="keepDaemonAlive" type="checkbox" role="switch" data-i18n-attr="aria-label:web.advanced.keepAliveLabel" aria-label="关闭窗口后保持后台运行">
+                  <input id="keepDaemonAlive" type="checkbox" role="switch" data-i18n-attr="aria-label:web.advanced.keepAliveLabel" aria-label="从托盘退出后保持后台运行">
                   <span class="switch-track" aria-hidden="true"></span>
                 </span>
               </label>
@@ -243,9 +299,9 @@
               </form>
             </article>
           </section>
-        </details>
+        </section>
 
-        <section id="about" class="section-block">
+        <section id="about" class="section-block app-page">
           <div class="section-heading">
             <h2 data-i18n="web.about.title">关于 Comote</h2>
             <p data-i18n="web.about.subtitle">手机上的 Codex 遥控器。本地运行，端到端私密，开源 MIT。</p>

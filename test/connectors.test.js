@@ -184,7 +184,6 @@ test("desktop connector lists and starts Codex threads", async () => {
   assert.equal(transport.sent[1].method, "thread/start");
   assert.deepEqual(transport.sent[1].params, {
     cwd: "/repo",
-    approvalsReviewer: "user",
   });
   transport.receive({
     jsonrpc: "2.0",
@@ -309,7 +308,6 @@ test("desktop connector starts turns and records approval requests", async () =>
       threadId: "thread_1",
       input: [{ type: "text", text: "fix tests", text_elements: [] }],
       cwd: "/repo",
-      approvalsReviewer: "user",
     },
   });
 
@@ -341,6 +339,64 @@ test("desktop connector starts turns and records approval requests", async () =>
       },
     },
   ]);
+});
+
+test("desktop connector switches the approval reviewer for subsequent turns", async () => {
+  const transport = new MemoryTransport();
+  const connector = new CodexDesktopConnector({ transport });
+
+  const updatePromise = connector.updateThreadSettings({
+    threadId: "thread_1",
+    approvalsReviewer: "auto_review",
+  });
+  await flushAsyncWork();
+
+  assert.deepEqual(transport.sent[0], {
+    jsonrpc: "2.0",
+    id: 1,
+    method: "thread/settings/update",
+    params: {
+      threadId: "thread_1",
+      approvalsReviewer: "auto_review",
+    },
+  });
+  transport.receive({ jsonrpc: "2.0", id: 1, result: {} });
+  await updatePromise;
+});
+
+test("desktop connector lists models and updates model reasoning settings", async () => {
+  const transport = new MemoryTransport();
+  const connector = new CodexDesktopConnector({ transport });
+
+  const modelsPromise = connector.listModels();
+  await flushAsyncWork();
+  assert.deepEqual(transport.sent[0], {
+    jsonrpc: "2.0",
+    id: 1,
+    method: "model/list",
+    params: {},
+  });
+  transport.receive({ jsonrpc: "2.0", id: 1, result: { data: [] } });
+  assert.deepEqual(await modelsPromise, { data: [] });
+
+  const updatePromise = connector.updateThreadSettings({
+    threadId: "thread_1",
+    model: "gpt-5.2-codex",
+    reasoningEffort: "high",
+  });
+  await flushAsyncWork();
+  assert.deepEqual(transport.sent[1], {
+    jsonrpc: "2.0",
+    id: 2,
+    method: "thread/settings/update",
+    params: {
+      threadId: "thread_1",
+      model: "gpt-5.2-codex",
+      reasoningEffort: "high",
+    },
+  });
+  transport.receive({ jsonrpc: "2.0", id: 2, result: {} });
+  await updatePromise;
 });
 
 test("desktop connector forwards images as localImage input items", async () => {
@@ -396,6 +452,65 @@ test("cli connector omits --image when there are no images", async () => {
   await connector.runPrompt({ cwd: "/repo", text: "hi" });
 
   assert.ok(!calls[0].args.includes("--image"));
+});
+
+test("cli connector captures the real Codex thread id and final message from JSONL", async () => {
+  const calls = [];
+  const connector = new CodexCliConnector({
+    command: "codex",
+    execFileAsync: async (file, args) => {
+      calls.push({ file, args });
+      return {
+        stdout: [
+          JSON.stringify({ type: "thread.started", thread_id: "019abcde-1234" }),
+          JSON.stringify({ type: "item.completed", item: { type: "agent_message", text: "done" } }),
+        ].join("\n"),
+        stderr: "",
+      };
+    },
+  });
+
+  const result = await connector.runPrompt({ cwd: "/repo", text: "fix it" });
+
+  assert.equal(result.id, "019abcde-1234");
+  assert.equal(result.output, "done");
+  assert.ok(calls[0].args.includes("--json"));
+});
+
+test("cli connector resumes a selected Codex thread", async () => {
+  const calls = [];
+  const connector = new CodexCliConnector({
+    command: "codex",
+    execFileAsync: async (file, args) => {
+      calls.push({ file, args });
+      return {
+        stdout: JSON.stringify({
+          type: "item.completed",
+          item: { type: "agent_message", text: "continued" },
+        }),
+        stderr: "",
+      };
+    },
+  });
+
+  const result = await connector.runPrompt({
+    cwd: "/repo",
+    text: "continue",
+    resumeId: "019abcde-1234",
+  });
+
+  assert.deepEqual(calls[0].args, [
+    "exec",
+    "--skip-git-repo-check",
+    "-C",
+    "/repo",
+    "resume",
+    "--json",
+    "019abcde-1234",
+    "continue",
+  ]);
+  assert.equal(result.id, "019abcde-1234");
+  assert.equal(result.output, "continued");
 });
 
 test("desktop connector emits thread events and routes approvals by short code", async () => {
@@ -646,6 +761,26 @@ test("desktop connector resolves command approval requests", async () => {
   assert.deepEqual(connector.listPendingApprovals(), []);
 });
 
+test("desktop connector allows an approval for the current Codex session", async () => {
+  const transport = new MemoryTransport();
+  const connector = new CodexDesktopConnector({ transport });
+
+  connector.client.handleMessage({
+    jsonrpc: "2.0",
+    method: "item/fileChange/requestApproval",
+    id: "approval_session",
+    params: { threadId: "thread_1", turnId: "turn_1", itemId: "item_1" },
+  });
+
+  await connector.resolveApproval("approval_session", "acceptForSession");
+
+  assert.deepEqual(transport.sent[0], {
+    jsonrpc: "2.0",
+    id: "approval_session",
+    result: { decision: "acceptForSession" },
+  });
+});
+
 test("desktop connector resolves legacy exec approvals", async () => {
   const transport = new MemoryTransport();
   const connector = new CodexDesktopConnector({ transport });
@@ -663,6 +798,26 @@ test("desktop connector resolves legacy exec approvals", async () => {
     jsonrpc: "2.0",
     id: "approval_legacy",
     result: { decision: "denied" },
+  });
+});
+
+test("desktop connector maps session approval to the legacy decision", async () => {
+  const transport = new MemoryTransport();
+  const connector = new CodexDesktopConnector({ transport });
+
+  connector.client.handleMessage({
+    jsonrpc: "2.0",
+    method: "applyPatchApproval",
+    id: "approval_legacy_session",
+    params: { path: "src/app.js" },
+  });
+
+  await connector.resolveApproval("approval_legacy_session", "acceptForSession");
+
+  assert.deepEqual(transport.sent[0], {
+    jsonrpc: "2.0",
+    id: "approval_legacy_session",
+    result: { decision: "approved_for_session" },
   });
 });
 
@@ -885,12 +1040,14 @@ test("desktop connector accumulates Codex 0.136 agentMessage deltas", async () =
       threadId: "thread_7",
       itemId: "item_9",
       text: "partial ",
+      turnId: "turn_1",
     },
     {
       type: "agentMessageDelta",
       threadId: "thread_7",
       itemId: "item_9",
       text: "partial answer",
+      turnId: "turn_1",
     },
   ]);
 });

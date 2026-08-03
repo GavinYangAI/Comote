@@ -1,7 +1,7 @@
 import { stat } from "node:fs/promises";
 import { basename } from "node:path";
 import { t } from "../../core/i18n/index.js";
-import { textCard, statusCard, approvalCard, approvalResolvedCard, pickerCard } from "./cards.js";
+import { textCard, statusCard, approvalCard, pickerCard } from "./cards.js";
 import { approvalDetail } from "../base/approval-format.js";
 
 // Mirror of the runtime's media size guard (FeishuRuntimeService.MAX_MEDIA_BYTES);
@@ -17,24 +17,63 @@ export function createFeishuRenderer() {
     buildStatusCard(status) {
       return statusCard(status);
     },
+    buildApprovalCard({ code, approval, autoApproved = false }) {
+      return approvalCard({
+        shortCode: code,
+        detail: approvalDetail(approval),
+        autoApproved,
+      });
+    },
     pickerTitle(pickKind) {
+      if (pickKind === "model") return t("card.picker.model");
+      if (pickKind === "reasoning") return t("card.picker.reasoning");
       return t(pickKind === "project" ? "card.picker.project" : "card.picker.conversation");
     },
-    async render(reply, { driver }) {
+    async render(reply, { driver, runtime = null }) {
       if (reply.kind === "media") {
         return this._renderMedia(reply, driver);
       }
+      if (reply.kind === "approvalResolved") {
+        return runtime?.resolveApprovalMessage?.({
+          code: reply.code,
+          decision: reply.decision,
+          approval: reply.approval,
+        });
+      }
+      if (reply.kind === "approval"
+        && !reply.liveCardAttempted
+        && reply.approval?.threadId
+        && runtime?.hasThreadCard?.(reply.approval.threadId)
+        && typeof runtime.showThreadApproval === "function") {
+        const shown = await runtime.showThreadApproval({
+          threadId: reply.approval.threadId,
+          code: reply.code,
+          approval: reply.approval,
+          autoApproved: reply.autoApproved,
+        });
+        if (shown) return shown;
+      }
       const card = this._cardFor(reply);
-      await driver.sendCard({ receiveId: reply.conversationId, receiveIdType: "chat_id", card });
+      const result = await driver.sendCard({ receiveId: reply.conversationId, receiveIdType: "chat_id", card });
+      if (reply.kind === "approval" && result?.messageId) {
+        runtime?.rememberApprovalMessage?.(reply.code, {
+          messageId: result.messageId,
+          conversationId: reply.conversationId,
+          approval: reply.approval,
+        });
+      }
+      return result;
     },
     _cardFor(reply) {
       switch (reply.kind) {
         case "status":
           return statusCard(reply);
         case "approval":
-          return approvalCard({ shortCode: reply.code, detail: approvalDetail(reply.approval) });
-        case "approvalResolved":
-          return approvalResolvedCard({ code: reply.code, decision: reply.decision });
+          return approvalCard({
+            shortCode: reply.code,
+            detail: approvalDetail(reply.approval),
+            autoApproved: reply.autoApproved,
+          });
         case "picker":
           return pickerCard({
             kind: reply.pickKind,

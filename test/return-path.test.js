@@ -93,6 +93,32 @@ test("Codex approval requests are pushed to the phone with a short code", async 
   assert.equal(queued[0].code, "a1");
 });
 
+test("approval requests remain pending for manual review instead of being accepted by Comote", async () => {
+  const { transport, desktop, state } = buildState();
+  await desktop.client.connect();
+
+  state.commandRouter.conversationByIdentity.set("wechat:acct:peer", {
+    channel: "wechat",
+    conversationId: "dm_peer",
+    accountId: "acct",
+  });
+  state.commandRouter.bindThreadForIdentity({ channel: "wechat", stableId: "acct:peer" }, "thread_auto");
+  transport.receive({
+    jsonrpc: "2.0",
+    method: "item/commandExecution/requestApproval",
+    id: "rpc_auto",
+    params: { threadId: "thread_auto", command: "npm test", cwd: "/repo" },
+  });
+  await tick();
+
+  const queued = state.outboundReplies.list({ channel: "wechat" });
+  assert.equal(queued.length, 1);
+  assert.equal(queued[0].kind, "approval");
+  assert.equal(queued[0].autoApproved, undefined);
+  assert.equal(desktop.listPendingApprovals().length, 1);
+  assert.equal(transport.sent.some((message) => message.id === "rpc_auto"), false);
+});
+
 test("agent output for an unbound thread is logged but not delivered", async () => {
   const { transport, desktop, state } = buildState();
   await desktop.client.connect();
@@ -145,6 +171,16 @@ test("Codex streaming for a Feishu thread drives a live card", async () => {
 
   transport.receive({
     jsonrpc: "2.0",
+    method: "item/started",
+    params: {
+      threadId: "thread_f",
+      item: { type: "commandExecution", id: "cmd1", command: "npm test" },
+    },
+  });
+  await tick();
+
+  transport.receive({
+    jsonrpc: "2.0",
     method: "item/updated",
     params: { threadId: "thread_f", item: { type: "agentMessage", id: "i1", text: "half" } },
   });
@@ -155,6 +191,9 @@ test("Codex streaming for a Feishu thread drives a live card", async () => {
     params: { threadId: "thread_f", item: { type: "agentMessage", id: "i1", text: "final answer" } },
   });
   await tick();
+  assert.equal(calls.sent.length, 1, "an agent message does not create a replacement card");
+  transport.receive({ jsonrpc: "2.0", method: "turn/completed", params: { threadId: "thread_f" } });
+  await tick();
 
   const lastUpdate = calls.updated.at(-1);
   assert.ok(lastUpdate, "the card was updated");
@@ -162,13 +201,326 @@ test("Codex streaming for a Feishu thread drives a live card", async () => {
     JSON.stringify(lastUpdate.card).includes("final answer"),
     "final card carries the completed answer",
   );
+  assert.ok(
+    JSON.stringify(lastUpdate.card).includes("npm"),
+    "final card keeps the tool summary in the same message",
+  );
   // Feishu streaming must not also enqueue chunked text.
   assert.equal(state.outboundReplies.list({ channel: "feishu" }).length, 0);
+});
+
+test("a new Codex turn opens a new Feishu card and isolates late old events", async () => {
+  const { transport, desktop, state } = buildState();
+  await desktop.client.connect();
+
+  state.commandRouter.conversationByIdentity.set("feishu:ou_owner", {
+    channel: "feishu",
+    conversationId: "oc_chat",
+  });
+  state.commandRouter.bindThreadForIdentity(
+    { channel: "feishu", stableId: "ou_owner" },
+    "thread_turns",
+  );
+
+  const calls = { sent: [], updated: [] };
+  state.runtime.feishu.__setTestDriver({
+    getStatus: () => ({ state: "configured" }),
+    verifyEvent: () => true,
+    async sendCard(message) {
+      calls.sent.push(message);
+      return { messageId: `om_turn_${calls.sent.length}` };
+    },
+    async updateCard(message) {
+      calls.updated.push(message);
+      return { code: 0 };
+    },
+  });
+
+  transport.receive({
+    jsonrpc: "2.0",
+    method: "turn/started",
+    params: { threadId: "thread_turns", turnId: "turn_1" },
+  });
+  await waitFor(() => calls.sent.length === 1);
+
+  transport.receive({
+    jsonrpc: "2.0",
+    method: "item/agentMessage/delta",
+    params: { threadId: "thread_turns", turnId: "turn_1", itemId: "old_item", delta: "old prefix" },
+  });
+  transport.receive({
+    jsonrpc: "2.0",
+    method: "turn/started",
+    params: { threadId: "thread_turns", turnId: "turn_2" },
+  });
+  await waitFor(() => calls.sent.length === 2);
+
+  // The old turn's late completion must not be rendered into turn 2's card.
+  transport.receive({
+    jsonrpc: "2.0",
+    method: "item/completed",
+    params: {
+      threadId: "thread_turns",
+      turnId: "turn_1",
+      item: { type: "agentMessage", id: "old_item", text: "old final" },
+    },
+  });
+  transport.receive({
+    jsonrpc: "2.0",
+    method: "item/completed",
+    params: {
+      threadId: "thread_turns",
+      turnId: "turn_2",
+      item: { type: "agentMessage", id: "new_item", text: "new answer" },
+    },
+  });
+  await waitFor(() => calls.updated.some((call) =>
+    call.messageId === "om_turn_2" && JSON.stringify(call.card).includes("new answer")));
+
+  assert.equal(calls.sent.length, 2, "the second turn has its own card message");
+  assert.ok(
+    calls.updated.some((call) => call.messageId === "om_turn_2"),
+    "new-turn output updates the new card",
+  );
+  assert.ok(
+    !calls.updated.some((call) =>
+      call.messageId === "om_turn_1" && JSON.stringify(call.card).includes("new answer")),
+    "new-turn output never updates the old card",
+  );
+
+  transport.receive({
+    jsonrpc: "2.0",
+    method: "turn/completed",
+    params: { threadId: "thread_turns", turnId: "turn_1" },
+  });
+  transport.receive({
+    jsonrpc: "2.0",
+    method: "turn/completed",
+    params: { threadId: "thread_turns", turnId: "turn_2" },
+  });
+  await tick();
+});
+
+for (const interruption of [
+  {
+    name: "a recoverable Codex error",
+    event: {
+      type: "error",
+      threadId: "thread_interrupted",
+      message: { message: "Reconnecting... 3/5", additionalDetails: "temporary upstream failure" },
+    },
+  },
+  {
+    name: "a temporary connection loss",
+    event: { type: "connectionLost" },
+  },
+]) {
+  test(`a Feishu live card stays attached after ${interruption.name}`, async () => {
+    const { transport, desktop, state } = buildState();
+    await desktop.client.connect();
+    state.commandRouter.conversationByIdentity.set("feishu:ou_owner", {
+      channel: "feishu",
+      conversationId: "oc_chat",
+    });
+    state.commandRouter.bindThreadForIdentity(
+      { channel: "feishu", stableId: "ou_owner" },
+      "thread_interrupted",
+    );
+
+    const calls = { sent: [], updated: [] };
+    state.runtime.feishu.__setTestDriver({
+      getStatus: () => ({ state: "configured" }),
+      verifyEvent: () => true,
+      async sendCard(message) {
+        calls.sent.push(message);
+        return { messageId: "om_interrupted" };
+      },
+      async updateCard(message) {
+        calls.updated.push(message);
+        return { code: 0 };
+      },
+    });
+
+    transport.receive({ jsonrpc: "2.0", method: "turn/started", params: { threadId: "thread_interrupted" } });
+    await tick();
+    desktop.onEvent(interruption.event);
+    await tick();
+    transport.receive({
+      jsonrpc: "2.0",
+      method: "item/completed",
+      params: {
+        threadId: "thread_interrupted",
+        item: { type: "agentMessage", id: "after_interruption", text: "continued on the original card" },
+      },
+    });
+    transport.receive({
+      jsonrpc: "2.0",
+      method: "turn/completed",
+      params: { threadId: "thread_interrupted" },
+    });
+    await waitFor(() => calls.updated.length > 0);
+
+    assert.equal(calls.sent.length, 1, "the continuation does not create a second Feishu message");
+    assert.equal(calls.updated.at(-1).messageId, "om_interrupted");
+    assert.match(JSON.stringify(calls.updated.at(-1).card), /continued on the original card/);
+    assert.equal(state.outboundReplies.list({ channel: "feishu" }).length, 0);
+  });
+}
+
+test("a live card preserves every agent message produced during one turn", async () => {
+  const { transport, desktop, state } = buildState();
+  await desktop.client.connect();
+  state.commandRouter.conversationByIdentity.set("feishu:ou_owner", {
+    channel: "feishu",
+    conversationId: "oc_chat",
+  });
+  state.commandRouter.bindThreadForIdentity(
+    { channel: "feishu", stableId: "ou_owner" },
+    "thread_multi_output",
+  );
+
+  const calls = { sent: [], updated: [] };
+  state.runtime.feishu.__setTestDriver({
+    getStatus: () => ({ state: "configured" }),
+    verifyEvent: () => true,
+    async sendCard(message) {
+      calls.sent.push(message);
+      return { messageId: "om_multi" };
+    },
+    async updateCard(message) {
+      calls.updated.push(message);
+      return { code: 0 };
+    },
+  });
+
+  transport.receive({ jsonrpc: "2.0", method: "turn/started", params: { threadId: "thread_multi_output" } });
+  await tick();
+  transport.receive({
+    jsonrpc: "2.0",
+    method: "item/updated",
+    params: {
+      threadId: "thread_multi_output",
+      item: { type: "agentMessage", id: "commentary_1", text: "First, I inspected the code." },
+    },
+  });
+  transport.receive({
+    jsonrpc: "2.0",
+    method: "item/completed",
+    params: {
+      threadId: "thread_multi_output",
+      item: { type: "agentMessage", id: "commentary_1", text: "First, I inspected the code." },
+    },
+  });
+  transport.receive({
+    jsonrpc: "2.0",
+    method: "item/completed",
+    params: {
+      threadId: "thread_multi_output",
+      item: { type: "agentMessage", id: "final_1", text: "Then, I completed the fix." },
+    },
+  });
+  transport.receive({
+    jsonrpc: "2.0",
+    method: "turn/completed",
+    params: { threadId: "thread_multi_output" },
+  });
+  await waitFor(() => calls.updated.length > 0);
+
+  const finalCard = JSON.stringify(calls.updated.at(-1).card);
+  assert.match(finalCard, /First, I inspected the code\./);
+  assert.match(finalCard, /Then, I completed the fix\./);
+  assert.ok(
+    finalCard.indexOf("First, I inspected the code.") < finalCard.indexOf("Then, I completed the fix."),
+    "agent outputs keep their original order",
+  );
+  assert.equal(finalCard.match(/First, I inspected the code\./g)?.length, 1, "delta completion does not duplicate one item");
+});
+
+test("a live card places tool summaries where the tools were used", async () => {
+  const { transport, desktop, state } = buildState();
+  await desktop.client.connect();
+  state.commandRouter.conversationByIdentity.set("feishu:ou_owner", {
+    channel: "feishu",
+    conversationId: "oc_chat",
+  });
+  state.commandRouter.bindThreadForIdentity(
+    { channel: "feishu", stableId: "ou_owner" },
+    "thread_ordered_tools",
+  );
+
+  const calls = { sent: [], updated: [] };
+  state.runtime.feishu.__setTestDriver({
+    getStatus: () => ({ state: "configured" }),
+    verifyEvent: () => true,
+    async sendCard(message) {
+      calls.sent.push(message);
+      return { messageId: "om_ordered_tools" };
+    },
+    async updateCard(message) {
+      calls.updated.push(message);
+      return { code: 0 };
+    },
+  });
+
+  transport.receive({ jsonrpc: "2.0", method: "turn/started", params: { threadId: "thread_ordered_tools" } });
+  await tick();
+  transport.receive({
+    jsonrpc: "2.0",
+    method: "item/completed",
+    params: {
+      threadId: "thread_ordered_tools",
+      item: { type: "agentMessage", id: "commentary_before", text: "I will inspect the code." },
+    },
+  });
+  transport.receive({
+    jsonrpc: "2.0",
+    method: "item/started",
+    params: {
+      threadId: "thread_ordered_tools",
+      item: { type: "commandExecution", id: "command_1", command: "npm test" },
+    },
+  });
+  transport.receive({
+    jsonrpc: "2.0",
+    method: "item/completed",
+    params: {
+      threadId: "thread_ordered_tools",
+      item: { type: "agentMessage", id: "commentary_after", text: "The tests passed." },
+    },
+  });
+  transport.receive({
+    jsonrpc: "2.0",
+    method: "item/started",
+    params: {
+      threadId: "thread_ordered_tools",
+      item: { type: "commandExecution", id: "command_2", command: "npm test" },
+    },
+  });
+  transport.receive({ jsonrpc: "2.0", method: "turn/completed", params: { threadId: "thread_ordered_tools" } });
+  await waitFor(() => calls.updated.length > 0);
+
+  const elements = calls.updated.at(-1).card.elements;
+  const before = elements.findIndex((element) => element.content === "I will inspect the code.");
+  const tools = elements.findIndex((element) => element.tag === "collapsible_panel");
+  const after = elements.findIndex((element) => element.content === "The tests passed.");
+  const laterTools = elements.findLastIndex((element) => element.tag === "collapsible_panel");
+  assert.ok(before < tools && tools < after, "tool summary remains between its surrounding commentary");
+  assert.ok(after < laterTools, "the same tool used after later commentary remains at its later position");
 });
 
 // Lets queued microtasks (the async card calls) settle.
 function tick() {
   return new Promise((resolve) => setTimeout(resolve, 5));
+}
+
+async function waitFor(predicate, { timeout = 5000, interval = 5 } = {}) {
+  const startedAt = Date.now();
+  while (!predicate()) {
+    if (Date.now() - startedAt >= timeout) {
+      throw new Error("waitFor: condition not met within timeout");
+    }
+    await new Promise((resolve) => setTimeout(resolve, interval));
+  }
 }
 
 test("completed card includes push buttons for changed files", async () => {
@@ -231,9 +583,8 @@ test("completed card includes push buttons for changed files", async () => {
     },
   });
 
-  // In the REAL Codex Desktop flow, the agent replies with text first: an
-  // item/completed agentMessage (which finalizes and DROPS the card session)
-  // arrives BEFORE turn/completed. The push buttons must render on THIS card.
+  // The agent reply arrives before turn/completed. It updates the live card but
+  // must not close it because another agent item or approval can still follow.
   transport.receive({
     jsonrpc: "2.0",
     method: "item/completed",
@@ -243,8 +594,9 @@ test("completed card includes push buttons for changed files", async () => {
     },
   });
   await tick();
+  assert.equal(calls.sent.length, 1, "the live turn still owns its original card");
 
-  // turn/completed arrives after the card session is already gone.
+  // turn/completed is the sole completion boundary and adds the file buttons.
   transport.receive({
     jsonrpc: "2.0",
     method: "turn/completed",
@@ -280,7 +632,7 @@ test("a Codex approval for a Feishu thread is delivered as a card", async () => 
     "thread_f",
   );
 
-  const calls = { sent: [] };
+  const calls = { sent: [], updated: [] };
   state.runtime.feishu.__setTestDriver({
     getStatus: () => ({ state: "configured" }),
     verifyEvent: () => true,
@@ -288,7 +640,9 @@ test("a Codex approval for a Feishu thread is delivered as a card", async () => 
       calls.sent.push(message);
       return { messageId: "om_approval" };
     },
-    async updateCard() {},
+    async updateCard(message) {
+      calls.updated.push(message);
+    },
   });
 
   transport.receive({
@@ -301,7 +655,163 @@ test("a Codex approval for a Feishu thread is delivered as a card", async () => 
 
   assert.equal(calls.sent.length, 1);
   const action = calls.sent[0].card.elements.find((el) => el.tag === "action");
-  assert.deepEqual(action.actions.map((b) => b.value.decision), ["accept", "decline"]);
+  assert.deepEqual(action.actions.map((b) => b.value.decision), ["accept", "acceptForSession", "decline"]);
+
+  await desktop.resolveApproval("a1", "acceptForSession");
+  await tick();
+
+  assert.equal(calls.updated.length, 1, "the original approval card was edited in place");
+  assert.equal(calls.updated[0].messageId, "om_approval");
+  const resolvedActions = calls.updated[0].card.elements.find((el) => el.tag === "action").actions;
+  assert.equal(resolvedActions.length, 1);
+  assert.equal(resolvedActions[0].type, "primary");
+  assert.equal("value" in resolvedActions[0], false);
+
+  const approvalLogs = state.eventLog.list({ limit: 20 }).filter((entry) => entry.message.includes("审批 a1"));
+  assert.equal(approvalLogs.length, 1);
+  assert.match(approvalLogs[0].message, /本次会话/);
+  assert.doesNotMatch(approvalLogs[0].message, /拒绝/);
+});
+
+test("a live Feishu turn shows approval and resumes work in the same card", async () => {
+  const { transport, desktop, state } = buildState();
+  await desktop.client.connect();
+  state.commandRouter.conversationByIdentity.set("feishu:ou_owner", {
+    channel: "feishu",
+    conversationId: "oc_chat",
+  });
+  state.commandRouter.bindThreadForIdentity(
+    { channel: "feishu", stableId: "ou_owner" },
+    "thread_live_approval",
+  );
+
+  const calls = { sent: [], updated: [] };
+  let onAction;
+  state.runtime.feishu.__setTestDriver({
+    getStatus: () => ({ state: "configured" }),
+    verifyEvent: () => true,
+    async startEventStream(options) {
+      onAction = options.onAction;
+    },
+    async sendCard(message) {
+      calls.sent.push(message);
+      return { messageId: "om_one_message" };
+    },
+    async updateCard(message) {
+      calls.updated.push(message);
+      return { code: 0 };
+    },
+  });
+  await state.runtime.feishu.start();
+
+  transport.receive({ jsonrpc: "2.0", method: "turn/started", params: { threadId: "thread_live_approval" } });
+  await tick();
+  transport.receive({
+    jsonrpc: "2.0",
+    method: "item/completed",
+    params: {
+      threadId: "thread_live_approval",
+      item: { type: "agentMessage", id: "commentary_1", text: "I will inspect the pull request first." },
+    },
+  });
+  await tick();
+  assert.equal(calls.sent.length, 1, "commentary keeps using the original live card");
+  transport.receive({
+    jsonrpc: "2.0",
+    method: "item/commandExecution/requestApproval",
+    id: "rpc_live",
+    params: { threadId: "thread_live_approval", command: "npm test", cwd: "/repo" },
+  });
+  await tick();
+
+  assert.equal(calls.sent.length, 1, "the turn owns one card message");
+  assert.equal(calls.updated.at(-1).messageId, "om_one_message");
+  assert.match(JSON.stringify(calls.updated.at(-1).card), /npm test/);
+
+  state.authorization.confirmIdentity({ channel: "feishu", stableId: "ou_owner" });
+  const beforeResolution = calls.updated.length;
+  const callbackResult = await onAction({
+    open_id: "ou_owner",
+    open_message_id: "om_one_message",
+    action: { value: { kind: "approval", code: "a1", decision: "accept" } },
+  });
+  assert.match(callbackResult.toast.content, /已批准/);
+  await waitFor(() => calls.updated.length > beforeResolution
+    && /已批准 \[a1\]/.test(JSON.stringify(calls.updated.at(-1).card)));
+  assert.equal(calls.sent.length, 1, "approval resolution sends no new card");
+  assert.equal(calls.updated.at(-1).messageId, "om_one_message");
+  assert.match(
+    JSON.stringify(calls.updated.at(-1).card),
+    /已批准 \[a1\]/,
+    "the resumed live card visibly records the approval decision",
+  );
+  assert.equal(
+    state.outboundReplies.list({ channel: "feishu" }).filter((reply) => reply.kind === "approvalResolved").length,
+    0,
+    "live approval resolution does not wait for the outbound queue",
+  );
+
+  transport.receive({
+    jsonrpc: "2.0",
+    method: "item/completed",
+    params: {
+      threadId: "thread_live_approval",
+      item: { type: "agentMessage", id: "final_1", text: "The pull request review is complete." },
+    },
+  });
+  transport.receive({
+    jsonrpc: "2.0",
+    method: "turn/completed",
+    params: { threadId: "thread_live_approval" },
+  });
+  await tick();
+  assert.equal(calls.sent.length, 1, "the complete turn used one Feishu message");
+  assert.match(JSON.stringify(calls.updated.at(-1).card), /review is complete/);
+});
+
+test("a failed live approval update falls back to a fresh Feishu approval card", async () => {
+  const { transport, desktop, state } = buildState();
+  await desktop.client.connect();
+  state.commandRouter.conversationByIdentity.set("feishu:ou_owner", {
+    channel: "feishu",
+    conversationId: "oc_chat",
+  });
+  state.commandRouter.bindThreadForIdentity(
+    { channel: "feishu", stableId: "ou_owner" },
+    "thread_approval_fallback",
+  );
+
+  const calls = { sent: [], updated: [] };
+  state.runtime.feishu.__setTestDriver({
+    getStatus: () => ({ state: "configured" }),
+    verifyEvent: () => true,
+    async sendCard(message) {
+      calls.sent.push(message);
+      return { messageId: `om_${calls.sent.length}` };
+    },
+    async updateCard(message) {
+      calls.updated.push(message);
+      throw new Error("temporary Feishu card update failure");
+    },
+  });
+
+  transport.receive({
+    jsonrpc: "2.0",
+    method: "turn/started",
+    params: { threadId: "thread_approval_fallback" },
+  });
+  await waitFor(() => calls.sent.length === 1);
+  transport.receive({
+    jsonrpc: "2.0",
+    method: "item/commandExecution/requestApproval",
+    id: "rpc_fallback",
+    params: { threadId: "thread_approval_fallback", command: "npm test", cwd: "/repo" },
+  });
+
+  await waitFor(() => calls.sent.length === 2);
+  assert.equal(calls.updated.length, 1, "the runtime first attempts the in-place approval update");
+  assert.match(JSON.stringify(calls.sent[1].card), /npm test/);
+  assert.match(JSON.stringify(calls.sent[1].card), /批准/);
 });
 
 test("completed card fallback tail localizes to en", async () => {
