@@ -90,6 +90,7 @@ export class DingTalkRuntimeService extends BaseChannelRuntime {
       timer: null,
       paused: false,
       resumeCard: null,
+      liveApprovals: new Map(),
       updateChain: Promise.resolve(),
     });
     return true;
@@ -164,14 +165,21 @@ export class DingTalkRuntimeService extends BaseChannelRuntime {
       paused: session.paused,
       pendingCard: session.pendingCard,
       resumeCard: session.resumeCard,
+      liveApprovals: new Map(session.liveApprovals ?? []),
     };
     if (session.timer) {
       clearTimeout(session.timer);
       session.timer = null;
     }
-    session.resumeCard = session.pendingCard ?? session.lastCard;
+    if (session.pendingCard) {
+      session.resumeCard = session.pendingCard;
+    } else if (!session.resumeCard) {
+      session.resumeCard = session.lastCard;
+    }
     session.pendingCard = null;
     session.paused = true;
+    session.liveApprovals ??= new Map();
+    session.liveApprovals.set(String(code), { approval, autoApproved });
     this.liveApprovalThreads.set(code, threadId);
     this.rememberApprovalMessage(code, {
       outTrackId: session.outTrackId,
@@ -186,6 +194,7 @@ export class DingTalkRuntimeService extends BaseChannelRuntime {
       session.paused = previousState.paused;
       session.pendingCard = previousState.pendingCard;
       session.resumeCard = previousState.resumeCard;
+      session.liveApprovals = previousState.liveApprovals;
       this.liveApprovalThreads.delete(code);
       this.approvalMessages.messages.delete(String(code));
       if (!session.paused && session.pendingCard) {
@@ -193,6 +202,7 @@ export class DingTalkRuntimeService extends BaseChannelRuntime {
       }
       throw error;
     }
+    session.lastCard = card;
     return true;
   }
 
@@ -206,9 +216,31 @@ export class DingTalkRuntimeService extends BaseChannelRuntime {
       this.liveApprovalThreads.delete(resolution.code);
       return;
     }
+    const liveApprovals = session.liveApprovals ?? new Map();
+    session.liveApprovals = liveApprovals;
+    liveApprovals.delete(String(resolution.code));
+    if (liveApprovals.size > 0) {
+      const [code, pending] = [...liveApprovals.entries()].at(-1);
+      session.pendingCard = null;
+      const card = this.renderer.buildApprovalCard({
+        code,
+        approval: pending.approval,
+        autoApproved: pending.autoApproved,
+      });
+      await this._updateSessionCard(session, card);
+      session.lastCard = card;
+      session.paused = true;
+      return;
+    }
     const card = session.pendingCard ?? session.resumeCard
       ?? this.buildStatusCard({ phase: "progress", threadId: message.threadId });
     await this._updateSessionCard(session, card);
+    // A new approval can arrive while the resume update is in flight. Its
+    // showThreadApproval call has already re-paused the session and queued its
+    // own card update, so do not clear that newer state here.
+    if (session.liveApprovals.size > 0) {
+      return;
+    }
     if (session.pendingCard === card) session.pendingCard = null;
     session.resumeCard = null;
     session.lastCard = card;

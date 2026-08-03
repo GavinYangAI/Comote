@@ -544,11 +544,12 @@ export class CodexDesktopConnector {
     );
   }
 
-  async startThread({ cwd }) {
-    return this.client.request("thread/start", {
-      cwd,
-      approvalsReviewer: "user",
-    });
+  async startThread({ cwd, approvalsReviewer } = {}) {
+    const params = { cwd };
+    if (approvalsReviewer !== undefined) {
+      params.approvalsReviewer = approvalsReviewer;
+    }
+    return this.client.request("thread/start", params);
   }
 
   async resumeThread({ threadId, cwd = null }) {

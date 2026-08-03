@@ -423,6 +423,40 @@ test("failed live approval display restores queued progress", async () => {
   assert.equal(session.resumeCard, null);
 });
 
+test("multiple live approvals restore the underlying status card, not an older approval", async () => {
+  const driver = cardDriver();
+  const runtime = makeRuntime({
+    adapter: { handleInbound: async () => ({ kind: "text" }) },
+    outboundQueue: new OutboundQueue(),
+    driver,
+    cardUpdateIntervalMs: 0,
+  });
+  const status = { elements: ["streaming status"] };
+  await runtime.openThreadCard({
+    threadId: "t-multiple-approvals",
+    conversationId: "oc_chat",
+    card: status,
+  });
+  await runtime.showThreadApproval({
+    threadId: "t-multiple-approvals",
+    code: "a1",
+    approval: { shortCode: "a1", params: { command: "first command" } },
+  });
+  await runtime.showThreadApproval({
+    threadId: "t-multiple-approvals",
+    code: "a2",
+    approval: { shortCode: "a2", params: { command: "second command" } },
+  });
+
+  await runtime.resolveApprovalMessage({ code: "a1", decision: "accept" });
+  assert.match(JSON.stringify(driver.calls.updated.at(-1).card), /second command/);
+  assert.equal(runtime.cardSessions.get("t-multiple-approvals").paused, true);
+
+  await runtime.resolveApprovalMessage({ code: "a2", decision: "accept" });
+  assert.deepEqual(driver.calls.updated.at(-1).card, status);
+  assert.equal(runtime.cardSessions.get("t-multiple-approvals").paused, false);
+});
+
 test("live approval is ordered after an in-flight progress update", async () => {
   const driver = cardDriver();
   let releaseProgress;

@@ -1083,17 +1083,48 @@ export function createComoteState({
         );
       }
       if (binding && typeof stack?.runtime?.resolveApprovalMessage === "function") {
-        outboundReplies.enqueue({
-          channel: binding.channel,
-          conversationId: binding.conversationId,
-          ...(binding.accountId ? { accountId: binding.accountId } : {}),
-          kind: "approvalResolved",
-          code: event.approval.shortCode,
-          approval: event.approval,
-          decision: event.decision,
-          dedupeKey: `approval-resolved:${event.approval.id}`,
-        });
-        deliverIfPush(binding.channel);
+        const enqueueResolved = () => {
+          outboundReplies.enqueue({
+            channel: binding.channel,
+            conversationId: binding.conversationId,
+            ...(binding.accountId ? { accountId: binding.accountId } : {}),
+            kind: "approvalResolved",
+            code: event.approval.shortCode,
+            approval: event.approval,
+            decision: event.decision,
+            dedupeKey: `approval-resolved:${event.approval.id}`,
+          });
+          deliverIfPush(binding.channel);
+        };
+        if (resolvedLive?.hasThreadCard(event.approval.threadId)) {
+          const session = resolvedLive.cardSessions?.get(event.approval.threadId);
+          const fallback = session
+            ? {
+                messageId: session.messageId,
+                outTrackId: session.outTrackId,
+                conversationId: session.conversationId ?? binding.conversationId,
+                approval: event.approval,
+                threadId: event.approval.threadId,
+              }
+            : null;
+          void Promise.resolve(stack.runtime.resolveApprovalMessage({
+            code: event.approval.shortCode,
+            decision: event.decision,
+            approval: event.approval,
+            fallback,
+          })).then((resumed) => {
+            if (!resumed) enqueueResolved();
+          }).catch((error) => {
+            eventLog.error("恢复实时审批卡片失败", {
+              threadId: event.approval.threadId,
+              shortCode: event.approval.shortCode,
+              error: error?.message ?? String(error),
+            });
+            enqueueResolved();
+          });
+        } else {
+          enqueueResolved();
+        }
         persistInBackground();
       }
       const outcome = event.decision === "decline"
@@ -1261,7 +1292,7 @@ export function createComoteState({
         });
         return;
       }
-      const enqueueApproval = () => {
+      const enqueueApproval = ({ liveCardAttempted = false } = {}) => {
         outboundReplies.enqueue({
           channel: binding.channel,
           conversationId: binding.conversationId,
@@ -1269,6 +1300,7 @@ export function createComoteState({
           kind: "approval",
           code: event.approval.shortCode,
           approval: event.approval,
+          ...(liveCardAttempted ? { liveCardAttempted: true } : {}),
           dedupeKey: `approval:${event.approval.id}`,
         });
         deliverIfPush(binding.channel);
@@ -1282,10 +1314,10 @@ export function createComoteState({
             code: event.approval.shortCode,
             approval: event.approval,
           })).then((shown) => {
-            if (!shown) enqueueApproval();
+            if (!shown) enqueueApproval({ liveCardAttempted: true });
           }).catch((error) => {
             approvalLive.lastError = error.message;
-            enqueueApproval();
+            enqueueApproval({ liveCardAttempted: true });
           });
       } else {
         enqueueApproval();

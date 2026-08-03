@@ -40,6 +40,19 @@ export function createFeishuRenderer() {
           approval: reply.approval,
         });
       }
+      if (reply.kind === "approval"
+        && !reply.liveCardAttempted
+        && reply.approval?.threadId
+        && runtime?.hasThreadCard?.(reply.approval.threadId)
+        && typeof runtime.showThreadApproval === "function") {
+        const shown = await runtime.showThreadApproval({
+          threadId: reply.approval.threadId,
+          code: reply.code,
+          approval: reply.approval,
+          autoApproved: reply.autoApproved,
+        });
+        if (shown) return shown;
+      }
       const card = this._cardFor(reply);
       const result = await driver.sendCard({ receiveId: reply.conversationId, receiveIdType: "chat_id", card });
       if (reply.kind === "approval" && result?.messageId) {

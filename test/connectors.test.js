@@ -184,7 +184,6 @@ test("desktop connector lists and starts Codex threads", async () => {
   assert.equal(transport.sent[1].method, "thread/start");
   assert.deepEqual(transport.sent[1].params, {
     cwd: "/repo",
-    approvalsReviewer: "user",
   });
   transport.receive({
     jsonrpc: "2.0",

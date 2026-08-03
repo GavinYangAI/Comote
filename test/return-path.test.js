@@ -594,9 +594,13 @@ test("a live Feishu turn shows approval and resumes work in the same card", asyn
   );
 
   const calls = { sent: [], updated: [] };
+  let onAction;
   state.runtime.feishu.__setTestDriver({
     getStatus: () => ({ state: "configured" }),
     verifyEvent: () => true,
+    async startEventStream(options) {
+      onAction = options.onAction;
+    },
     async sendCard(message) {
       calls.sent.push(message);
       return { messageId: "om_one_message" };
@@ -606,6 +610,7 @@ test("a live Feishu turn shows approval and resumes work in the same card", asyn
       return { code: 0 };
     },
   });
+  await state.runtime.feishu.start();
 
   transport.receive({ jsonrpc: "2.0", method: "turn/started", params: { threadId: "thread_live_approval" } });
   await tick();
@@ -631,14 +636,27 @@ test("a live Feishu turn shows approval and resumes work in the same card", asyn
   assert.equal(calls.updated.at(-1).messageId, "om_one_message");
   assert.match(JSON.stringify(calls.updated.at(-1).card), /npm test/);
 
-  await desktop.resolveApproval("a1", "accept");
-  await tick();
+  state.authorization.confirmIdentity({ channel: "feishu", stableId: "ou_owner" });
+  const beforeResolution = calls.updated.length;
+  const callbackResult = await onAction({
+    open_id: "ou_owner",
+    open_message_id: "om_one_message",
+    action: { value: { kind: "approval", code: "a1", decision: "accept" } },
+  });
+  assert.match(callbackResult.toast.content, /已批准/);
+  await waitFor(() => calls.updated.length > beforeResolution
+    && /已批准 \[a1\]/.test(JSON.stringify(calls.updated.at(-1).card)));
   assert.equal(calls.sent.length, 1, "approval resolution sends no new card");
   assert.equal(calls.updated.at(-1).messageId, "om_one_message");
   assert.match(
     JSON.stringify(calls.updated.at(-1).card),
     /已批准 \[a1\]/,
     "the resumed live card visibly records the approval decision",
+  );
+  assert.equal(
+    state.outboundReplies.list({ channel: "feishu" }).filter((reply) => reply.kind === "approvalResolved").length,
+    0,
+    "live approval resolution does not wait for the outbound queue",
   );
 
   transport.receive({

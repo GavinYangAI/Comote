@@ -114,6 +114,18 @@ export function createDingTalkRenderer({ templates = {} } = {}) {
     },
 
     async _renderApproval(reply, driver, runtime = null) {
+      if (!reply.liveCardAttempted
+        && reply.approval?.threadId
+        && runtime?.hasThreadCard?.(reply.approval.threadId)
+        && typeof runtime.showThreadApproval === "function") {
+        const shown = await runtime.showThreadApproval({
+          threadId: reply.approval.threadId,
+          code: reply.code,
+          approval: reply.approval,
+          autoApproved: reply.autoApproved,
+        });
+        if (shown) return shown;
+      }
       if (reply.autoApproved || !this.templates.approval) {
         await driver.sendMarkdown({
           receiveId: reply.conversationId,

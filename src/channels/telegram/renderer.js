@@ -41,6 +41,18 @@ export function createTelegramRenderer() {
         case "media":
           return this._renderMedia(reply, driver);
         case "approval": {
+          if (!reply.liveCardAttempted
+            && reply.approval?.threadId
+            && runtime?.hasThreadCard?.(reply.approval.threadId)
+            && typeof runtime.showThreadApproval === "function") {
+            const shown = await runtime.showThreadApproval({
+              threadId: reply.approval.threadId,
+              code: reply.code,
+              approval: reply.approval,
+              autoApproved: reply.autoApproved,
+            });
+            if (shown) return shown;
+          }
           const text = describeApprovalForChat(reply.approval, { autoApproved: reply.autoApproved });
           const result = await driver.sendMessage({
             chatId: reply.conversationId,
