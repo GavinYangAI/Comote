@@ -2,28 +2,39 @@ services:
   comote:
     build:
       context: .
-      dockerfile: Dockerfile
-    container_name: comote-local
+      args:
+        NODE_IMAGE: ${NODE_IMAGE:-docker.m.daocloud.io/library/node:22-bookworm-slim@sha256:f32b81066cde10a75dbac96646099533316d94bac4150c55da1636e1f0ffdc46}
+        CODEX_VERSION: ${CODEX_VERSION:-0.146.0}
+        NPM_REGISTRY: ${NPM_REGISTRY:-https://registry.npmmirror.com}
     restart: unless-stopped
-    ports:
-      - "16208:16208"
     environment:
-      NODE_ENV: production
       HOST: 0.0.0.0
       PORT: 16208
       COMOTE_STATE_PATH: /data/state.json
+      COMOTE_PROJECT_ROOT: /workspace
       COMOTE_CODEX_PATH: /usr/local/bin/codex
-      # Required when HOST is non-loopback. Override in .env for a private value.
-      COMOTE_LOCAL_API_TOKEN: ${COMOTE_LOCAL_API_TOKEN:-comote-local-dev-token}
+      COMOTE_LOCAL_API_TOKEN: ${COMOTE_LOCAL_API_TOKEN:?Set COMOTE_LOCAL_API_TOKEN in .env}
     volumes:
-      - comote-state:/data
-      # Keep Linux Codex sessions isolated from Codex Desktop, while reusing
-      # the host login credential as a read-only first-start seed.
-      - codex-state:/root/.codex
-      - ${USERPROFILE}/.codex/auth.json:/run/secrets/codex-auth.json:ro
-      # Workspace available to Codex inside the container.
-      - .:/workspace/Comote
+      - "${USERPROFILE}/.comote:/data"
+      - codex-home:/home/node/.codex
+      - "${USERPROFILE}/.codex/auth.json:/home/node/.codex/auth.json"
+      - "${USERPROFILE}/.codex/config.toml:/home/node/.codex/config.toml:ro"
+      - ".:/workspace/Comote"
+    expose:
+      - "16208"
+
+  gateway:
+    image: ${NGINX_IMAGE:-docker.m.daocloud.io/library/nginx:1.27-alpine@sha256:65645c7bb6a0661892a8b03b89d0743208a18dd2f3f17a54ef4b76fb8e2f2a10}
+    restart: unless-stopped
+    depends_on:
+      comote:
+        condition: service_healthy
+    environment:
+      COMOTE_LOCAL_API_TOKEN: ${COMOTE_LOCAL_API_TOKEN:?Set COMOTE_LOCAL_API_TOKEN in .env}
+    volumes:
+      - ./deploy/nginx.conf.template:/etc/nginx/templates/default.conf.template:ro
+    ports:
+      - "127.0.0.1:16208:16208"
 
 volumes:
-  comote-state:
-  codex-state:
+  codex-home:

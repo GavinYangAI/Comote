@@ -3,6 +3,8 @@
 docs/
 .DS_Store
 node_modules/
+.env
+logs/
 dist/
 release/
 build-assets/
