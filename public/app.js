@@ -428,18 +428,34 @@ function setupChannelCards() {
     const saveBtn = event.target.closest("[data-save-config]");
     if (saveBtn) {
       const id = saveBtn.dataset.saveConfig;
+      const channel = channelsById[id];
+      const configForm = container.querySelector(`form[data-config-form="${cssEscapeId(id)}"]`);
+      if (configForm && !configForm.reportValidity()) {
+        return;
+      }
       // D-4: give the button a saving → saved lifecycle instead of silence.
       // guardedAction already alerts on failure and returns null there.
       saveBtn.disabled = true;
       const originalLabel = saveBtn.textContent;
       saveBtn.textContent = tWeb("web.channel.saving");
-      const result = await guardedAction(() =>
-        getJson(`/api/channels/${encodeURIComponent(id)}/config`, {
+      const result = await guardedAction(async () => {
+        const values = readChannelForm(id);
+        if (channel?.credentialBinding) {
+          values.enabled = true;
+        }
+        const config = await getJson(`/api/channels/${encodeURIComponent(id)}/config`, {
           method: "PUT",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify(readChannelForm(id)),
-        }),
-      );
+          body: JSON.stringify(values),
+        });
+        // Hybrid channels (currently Feishu) support both QR registration and
+        // manually supplied app credentials. A valid manual config is already
+        // the binding, so start its WebSocket runtime immediately after save.
+        if (channel?.credentialBinding && config?.configured) {
+          await getJson(`/api/channels/${encodeURIComponent(id)}/runtime/start`, { method: "POST" });
+        }
+        return config;
+      });
       if (result === null) {
         saveBtn.disabled = false;
         saveBtn.textContent = originalLabel;
@@ -497,7 +513,7 @@ function connectedRowHtml(ch) {
   const expanded = expandedChannelId === ch.id;
   const toggleLabel = expanded ? tWeb("web.channel.collapse") : tWeb("web.channel.manage");
   return `
-    <article class="channel-row ${expanded ? "expanded" : ""}" data-channel="${escapeAttr(ch.id)}">
+    <article class="channel-row ${expanded ? "expanded" : ""} ${ch.credentialBinding ? "channel-card-hybrid" : ""}" data-channel="${escapeAttr(ch.id)}">
       <div class="channel-row-head" data-toggle="${escapeAttr(ch.id)}">
         <div class="channel-tile ${escapeAttr(ch.id)}-icon" aria-hidden="true">${escapeHtml(icon)}</div>
         <div><div class="ch-name">${escapeHtml(ch.displayName ?? ch.id)}</div>${summary ? `<div class="ch-summary">${escapeHtml(summary)}</div>` : ""}</div>
@@ -513,16 +529,17 @@ function connectedRowHtml(ch) {
 function availableTileHtml(ch) {
   const icon = ch.icon ?? (ch.displayName ?? "")[0] ?? "";
   const expanded = expandedChannelId === ch.id;
+  const hybridClass = ch.credentialBinding ? " channel-card-hybrid" : "";
   if (expanded) {
-    return `<article class="channel-add-tile expanded" data-channel="${escapeAttr(ch.id)}">
-      <div class="channel-row-head" data-toggle="${escapeAttr(ch.id)}" style="padding:0 0 8px">
+    return `<article class="channel-add-tile expanded${hybridClass}" data-channel="${escapeAttr(ch.id)}">
+      <div class="channel-row-head channel-add-head" data-toggle="${escapeAttr(ch.id)}">
         <div class="channel-tile ${escapeAttr(ch.id)}-icon" aria-hidden="true">${escapeHtml(icon)}</div>
         <div class="ch-name">${escapeHtml(ch.displayName ?? ch.id)}</div>
-        <button type="button" class="secondary-button" data-toggle="${escapeAttr(ch.id)}" style="margin-left:auto">${escapeHtml(tWeb("web.channel.collapse"))} ▴</button>
+        <button type="button" class="secondary-button" data-toggle="${escapeAttr(ch.id)}">${escapeHtml(tWeb("web.channel.collapse"))} ▴</button>
       </div>
       ${channelDetailHtml(ch)}</article>`;
   }
-  return `<article class="channel-add-tile" data-channel="${escapeAttr(ch.id)}">
+  return `<article class="channel-add-tile${hybridClass}" data-channel="${escapeAttr(ch.id)}">
     <div class="channel-tile ${escapeAttr(ch.id)}-icon" aria-hidden="true">${escapeHtml(icon)}</div>
     <div class="ch-name">${escapeHtml(ch.displayName ?? ch.id)}</div>
     <button type="button" class="btn-primary-card" data-toggle="${escapeAttr(ch.id)}">+ ${escapeHtml(tWeb("web.channel.add"))}</button>
@@ -537,10 +554,12 @@ function channelDetailHtml(ch) {
   if (aff?.kind === "pairingCode") {
     affHtml = `<div class="pairing-block"><div class="intro">${escapeHtml(tWeb("web.channel.pairing.intro"))}</div><span class="pairing-code">${escapeHtml(aff.code ?? "—")}</span></div>`;
   } else if (aff?.kind === "qr") {
-    affHtml = qrAreaHtml(ch); // the <id>LoginResult scan area, painted by paintChannelCardResting
+    affHtml = qrAreaHtml(ch, ch.credentialBinding ? tWeb("web.channel.feishu.manualHint") : null); // the <id>LoginResult scan area, painted by paintChannelCardResting
   }
   // bound qr channel: still show its resting QR area (account summary) on expand
-  const qrResting = ch.binding === "qr" && !aff ? qrAreaHtml(ch) : "";
+  const qrResting = ch.binding === "qr" && !aff
+    ? qrAreaHtml(ch, ch.credentialBinding ? tWeb("web.channel.feishu.manualHint") : null)
+    : "";
   // C-1: surface the runtime's recorded lastError as a red row so a bad token
   // (configure "succeeds", runtime start fails) is no longer invisible.
   const lastError = channelLastError(ch);
@@ -551,6 +570,31 @@ function channelDetailHtml(ch) {
   const setup = channelSetup(ch, tWeb);
   const setupHtml = setup ? `<details class="channel-setup"><summary>${escapeHtml(tWeb("web.channel.howTo"))} ▸</summary><ol>${setup.steps.map((s) => `<li>${escapeHtml(s)}</li>`).join("")}</ol>${setup.link ? `<a href="${escapeAttr(setup.link.url)}" target="_blank" rel="noopener">↗ ${escapeHtml(setup.link.label)}</a>` : ""}</details>` : "";
   const button = channelBoundButton(ch, tWeb, { activeLoginId: activeLogin[ch.id]?.loginId ?? null });
+  if (ch.credentialBinding) {
+    const statusHtml = rows ? `<dl class="kv status-rows feishu-status-strip">${rows}</dl>` : "";
+    const qrHtml = affHtml || qrResting || qrAreaHtml(ch, tWeb("web.channel.feishu.qrDesc"));
+    return `${errorHtml}${statusHtml}<div class="feishu-bind-grid">
+      <section class="bind-method bind-method-primary">
+        <header class="bind-method-head">
+          <span class="bind-method-tag">${escapeHtml(tWeb("web.channel.feishu.recommended"))}</span>
+          <h4>${escapeHtml(tWeb("web.channel.feishu.bindCredentials"))}</h4>
+          <p>${escapeHtml(tWeb("web.channel.feishu.manualHint"))}</p>
+        </header>
+        ${channelConfigFormHtml(ch)}
+        ${setupHtml}
+        <div class="actions card-actions"><button type="button" class="btn-primary-card" data-save-config="${escapeAttr(ch.id)}">${escapeHtml(tWeb("web.channel.feishu.bindCredentials"))}</button></div>
+      </section>
+      <section class="bind-method bind-method-secondary">
+        <header class="bind-method-head">
+          <span class="bind-method-tag neutral">${escapeHtml(tWeb("web.channel.feishu.alternative"))}</span>
+          <h4>${escapeHtml(tWeb("web.channel.feishu.bindQr"))}</h4>
+          <p>${escapeHtml(tWeb("web.channel.feishu.qrDesc"))}</p>
+        </header>
+        ${qrHtml}
+        <div class="actions card-actions"><button type="button" class="secondary-button qr-bind-button" data-bind="${escapeAttr(ch.id)}">${escapeHtml(tWeb("web.channel.feishu.bindQr"))}</button></div>
+      </section>
+    </div>`;
+  }
   const actionBtn = ch.binding === "qr"
     ? `<button type="button" class="btn-primary-card" data-bind="${escapeAttr(ch.id)}">${escapeHtml(button.label)}</button>`
     : `<button type="button" class="btn-primary-card" data-save-config="${escapeAttr(ch.id)}">${escapeHtml(tWeb("web.channel.save"))}</button>`;
@@ -559,10 +603,10 @@ function channelDetailHtml(ch) {
 
 // The qr scan area (extracted from the old channelCardHtml qr branch) so both the
 // pending-scan affordance and a bound qr channel's resting summary can render it.
-function qrAreaHtml(ch) {
+function qrAreaHtml(ch, message = null) {
   return `<div id="${escapeAttr(ch.id)}LoginResult" class="qr-result">
     <div class="qr-glyph"><svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="#c4c2bc" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><path d="M14 14h3v3M21 14v7h-7M17 21v-4"/></svg></div>
-    <span>${escapeHtml(tWeb("web.channel.qr.scanHint"))}</span>
+    <span>${escapeHtml(message ?? tWeb("web.channel.qr.scanHint"))}</span>
   </div>`;
 }
 
@@ -575,17 +619,19 @@ function channelConfigFormHtml(ch) {
   }
   const fields = spec
     .map((field) => {
+      const inputId = `channel-${ch.id}-${field.name}`;
+      const required = field.required ? " required" : "";
       if (field.type === "select") {
         const options = field.options
           .map((opt) => `<option value="${escapeAttr(opt.value)}"${String(opt.value) === String(field.value) ? " selected" : ""}>${escapeHtml(opt.label)}</option>`)
           .join("");
-        return `<div class="config-field"><label class="domain-label">${escapeHtml(field.label)}</label><label class="select-wrap"><select name="${escapeAttr(field.name)}">${options}</select></label></div>`;
+        return `<div class="config-field"><label class="domain-label" for="${escapeAttr(inputId)}">${escapeHtml(field.label)}</label><label class="select-wrap"><select id="${escapeAttr(inputId)}" name="${escapeAttr(field.name)}"${required}>${options}</select></label></div>`;
       }
       if (field.type === "checkbox") {
         return `<label class="config-field"><input name="${escapeAttr(field.name)}" type="checkbox"${field.value ? " checked" : ""}> <span>${escapeHtml(field.label)}</span></label>`;
       }
       const inputType = field.secret || field.type === "password" ? "password" : "text";
-      return `<div class="config-field"><label class="domain-label">${escapeHtml(field.label)}</label><input name="${escapeAttr(field.name)}" type="${inputType}" value="${escapeAttr(field.value ?? "")}"></div>`;
+      return `<div class="config-field"><label class="domain-label" for="${escapeAttr(inputId)}">${escapeHtml(field.label)}</label><input id="${escapeAttr(inputId)}" name="${escapeAttr(field.name)}" type="${inputType}" value="${escapeAttr(field.value ?? "")}"${required} autocomplete="off"></div>`;
     })
     .join("");
   return `<form class="stack-form channel-config-form" data-config-form="${escapeAttr(ch.id)}">${fields}</form>`;
@@ -1057,18 +1103,25 @@ function showLoadError(error) {
   const panel = document.querySelector("#loadError");
   const title = document.querySelector("#loadErrorTitle");
   const detail = document.querySelector("#loadErrorDetail");
+  const tokenForm = document.querySelector("#apiTokenForm");
+  const tokenInput = document.querySelector("#apiTokenInput");
   if (error?.status === 401) {
     title.textContent = tWeb("web.loadError.tokenTitle");
     detail.textContent = tWeb("web.loadError.tokenDetail");
+    tokenForm.hidden = false;
+    tokenInput.value = localStorage.getItem("comoteApiToken") ?? "";
+    requestAnimationFrame(() => tokenInput.focus());
   } else {
     title.textContent = tWeb("web.loadError.connTitle");
     detail.textContent = tWeb("web.loadError.connDetail", { message: error?.message ?? "" });
+    tokenForm.hidden = true;
   }
   panel.hidden = false;
 }
 
 function hideLoadError() {
   document.querySelector("#loadError").hidden = true;
+  document.querySelector("#apiTokenForm").hidden = true;
 }
 
 function sectionError(message) {
@@ -1078,6 +1131,24 @@ function sectionError(message) {
 
 document.querySelector("#retryLoad").addEventListener("click", async () => {
   await render();
+});
+
+document.querySelector("#saveApiToken").addEventListener("click", async () => {
+  const input = document.querySelector("#apiTokenInput");
+  const token = input.value.trim();
+  if (!token) {
+    input.focus();
+    return;
+  }
+  localStorage.setItem("comoteApiToken", token);
+  await render();
+});
+
+document.querySelector("#apiTokenInput").addEventListener("keydown", async (event) => {
+  if (event.key === "Enter") {
+    event.preventDefault();
+    document.querySelector("#saveApiToken").click();
+  }
 });
 
 document.querySelector("#refreshLogs").addEventListener("click", async () => {
@@ -1367,8 +1438,9 @@ function renderQrInto(elId, view) {
   image.src = imageSource;
   image.alt = tWeb("web.channel.qr.imageAlt");
   target.append(image);
-  target.append(createStrongLine(tWeb("web.channel.qr.scanHint")));
-  if (view.message) {
+  const scanHint = tWeb("web.channel.qr.scanHint");
+  target.append(createStrongLine(scanHint));
+  if (view.message && view.message !== scanHint) {
     target.append(createTextLine(view.message));
   }
 }

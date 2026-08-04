@@ -518,6 +518,51 @@ button,
   color: #6c1f1d;
 }
 
+.token-auth-form {
+  margin-top: 12px;
+}
+
+.token-auth-form > label {
+  display: block;
+  margin-bottom: 6px;
+  color: var(--error-text);
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.token-auth-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.token-auth-controls input {
+  width: min(360px, 100%);
+  min-height: 36px;
+  padding: 0 10px;
+  border: 1px solid rgba(186, 26, 26, 0.35);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--ink);
+  font: inherit;
+}
+
+.token-auth-controls input:focus {
+  outline: 2px solid rgba(186, 26, 26, 0.25);
+  outline-offset: 1px;
+}
+
+@media (max-width: 640px) {
+  .token-auth-controls {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .token-auth-controls input {
+    width: 100%;
+  }
+}
+
 /* ============================================================
    GETTING-STARTED READINESS CHECKLIST
    Styled as horizontal card grid (mockup: 4-col check-cards)
@@ -1619,3 +1664,190 @@ code {
 
 /* pending badge tone (amber) */
 .badge.pending { background: var(--warning-bg); color: var(--warning); }
+
+/* Feishu supports two binding paths. Keep credentials primary and place QR in
+   a compact secondary panel so an active code never dominates the whole page. */
+.channel-card-hybrid.expanded {
+  padding: 18px;
+  border-style: solid;
+  background: var(--surface);
+  box-shadow: var(--shadow-sm);
+}
+
+.channel-card-hybrid .channel-add-head {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 12px;
+  padding: 0 0 14px;
+  margin-bottom: 16px;
+  border-bottom: 1px solid var(--line);
+}
+
+.channel-card-hybrid .channel-add-head .channel-tile {
+  width: 44px;
+  height: 44px;
+  margin: 0;
+  border-radius: 12px;
+  font-size: 19px;
+}
+
+.channel-card-hybrid .channel-add-head .ch-name {
+  align-self: center;
+  font-size: 16px;
+}
+
+.feishu-status-strip {
+  grid-template-columns: auto minmax(0, 1fr) auto minmax(0, 1fr);
+  margin-bottom: 14px;
+  border: 1px solid var(--line);
+  background: var(--line);
+}
+
+.feishu-status-strip dt,
+.feishu-status-strip dd {
+  min-height: 42px;
+  padding: 9px 12px;
+  background: var(--surface-low);
+}
+
+.feishu-bind-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.25fr) minmax(280px, 0.75fr);
+  gap: 14px;
+  align-items: stretch;
+}
+
+.bind-method {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  padding: 20px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+}
+
+.bind-method-primary {
+  border-color: rgba(47, 158, 143, 0.28);
+  background: #f4fbf9;
+  box-shadow: 0 10px 26px rgba(31, 122, 111, 0.08);
+}
+
+.bind-method-secondary {
+  background: var(--surface-low);
+}
+
+.bind-method-head {
+  margin-bottom: 16px;
+}
+
+.bind-method-tag {
+  display: block;
+  margin-bottom: 7px;
+  color: var(--teal-text);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+}
+
+.bind-method-tag.neutral {
+  color: var(--subtle);
+}
+
+.bind-method-head h4 {
+  color: var(--ink);
+  font-size: 18px;
+  font-weight: 700;
+  line-height: 1.25;
+  letter-spacing: -0.02em;
+}
+
+.bind-method-head p {
+  max-width: 54ch;
+  margin-top: 6px;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.55;
+  text-wrap: pretty;
+}
+
+.bind-method .channel-config-form {
+  gap: 13px;
+}
+
+.bind-method .config-field {
+  display: grid;
+  gap: 6px;
+}
+
+.bind-method .config-field > .domain-label {
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.bind-method .channel-config-form input,
+.bind-method .channel-config-form select {
+  min-height: 42px;
+  background-color: var(--surface);
+}
+
+.bind-method .channel-config-form select {
+  width: 100%;
+}
+
+.bind-method .channel-setup {
+  margin-top: 14px;
+}
+
+.bind-method .card-actions {
+  margin-top: 18px;
+}
+
+.bind-method .btn-primary-card,
+.bind-method .qr-bind-button {
+  min-height: 44px;
+}
+
+.bind-method .qr-bind-button {
+  width: 100%;
+  color: var(--ink);
+  background: var(--surface);
+}
+
+.bind-method-secondary .qr-result {
+  flex: 1;
+  min-height: 230px;
+  padding: 18px;
+  border-style: solid;
+  border-color: var(--line);
+  background: var(--surface);
+  text-align: center;
+}
+
+.bind-method-secondary .qr-result img {
+  width: min(156px, 100%);
+}
+
+@media (max-width: 920px) {
+  .feishu-bind-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .bind-method-secondary .qr-result {
+    min-height: 180px;
+  }
+}
+
+@media (max-width: 640px) {
+  .channel-card-hybrid.expanded {
+    padding: 14px;
+  }
+
+  .feishu-status-strip {
+    grid-template-columns: minmax(82px, max-content) 1fr;
+  }
+
+  .bind-method {
+    padding: 16px;
+  }
+}

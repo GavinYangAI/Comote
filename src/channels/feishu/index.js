@@ -81,10 +81,25 @@ const feishuPlugin = {
     displayName: "飞书 / Lark",
     inboundMode: "push",
     binding: "qr",
+    credentialBinding: true,
     capabilities: { cards: 1, media: 1, liveUpdates: 1, milestones: 0, typing: 0, fileButtons: 1 },
     descriptionKey: "web.channel.feishu.desc",
     icon: "飞",
     configFields: [
+      {
+        name: "appId",
+        type: "text",
+        required: true,
+        labelKey: "web.channel.feishu.appId",
+      },
+      {
+        name: "appSecret",
+        type: "password",
+        secret: true,
+        required: true,
+        hasValueField: "hasAppSecret",
+        labelKey: "web.channel.feishu.appSecret",
+      },
       {
         name: "domain",
         type: "select",

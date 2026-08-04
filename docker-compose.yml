@@ -1,0 +1,29 @@
+services:
+  comote:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: comote-local
+    restart: unless-stopped
+    ports:
+      - "16208:16208"
+    environment:
+      NODE_ENV: production
+      HOST: 0.0.0.0
+      PORT: 16208
+      COMOTE_STATE_PATH: /data/state.json
+      COMOTE_CODEX_PATH: /usr/local/bin/codex
+      # Required when HOST is non-loopback. Override in .env for a private value.
+      COMOTE_LOCAL_API_TOKEN: ${COMOTE_LOCAL_API_TOKEN:-comote-local-dev-token}
+    volumes:
+      - comote-state:/data
+      # Keep Linux Codex sessions isolated from Codex Desktop, while reusing
+      # the host login credential as a read-only first-start seed.
+      - codex-state:/root/.codex
+      - ${USERPROFILE}/.codex/auth.json:/run/secrets/codex-auth.json:ro
+      # Workspace available to Codex inside the container.
+      - .:/workspace/Comote
+
+volumes:
+  comote-state:
+  codex-state:

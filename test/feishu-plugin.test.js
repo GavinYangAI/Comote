@@ -78,8 +78,9 @@ test("meta is complete", () => {
   assert.equal(Array.isArray(feishuPlugin.meta.configFields), true);
   assert.deepEqual(
     feishuPlugin.meta.configFields.map((f) => f.name),
-    ["domain"],
+    ["appId", "appSecret", "domain"],
   );
+  assert.equal(feishuPlugin.meta.credentialBinding, true);
 });
 
 test("feishu normalizeLoginStatus maps raw login states", () => {

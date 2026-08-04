@@ -829,6 +829,11 @@ function findNestedCodexExecutable(dir, { exists, readdir, depth = 0, maxDepth =
 
 // Reads Codex Desktop's persisted workspace list: the active workspace, then
 // the user's project order, then any other saved workspaces. Deduplicated.
+//
+// Older Codex versions stored filesystem paths directly in `project-order`.
+// Newer versions store stable project ids there and keep the display name plus
+// real roots in `local-projects`. Accept both shapes so an id such as
+// `0f2e...` never leaks into Comote as a fake project path.
 function readCodexWorkspaceProjects(statePath) {
   let state;
   try {
@@ -840,32 +845,64 @@ function readCodexWorkspaceProjects(statePath) {
   const order = state["project-order"] ?? [];
   const saved = state["electron-saved-workspace-roots"] ?? [];
   const labels = state["electron-workspace-root-labels"] ?? {};
+  const localProjects = state["local-projects"] ?? {};
   const seen = new Set();
   const projects = [];
   const hasLabel = (path) => typeof labels[path] === "string" && labels[path].trim();
-  const add = (path, isActive) => {
+  const localProjectName = (project) =>
+    typeof project?.name === "string" && project.name.trim() ? project.name.trim() : null;
+  const localProjectRoots = (project) =>
+    Array.isArray(project?.rootPaths)
+      ? project.rootPaths.filter((path) => typeof path === "string" && path.trim())
+      : [];
+  const localProjectByRoot = new Map();
+  for (const project of Object.values(localProjects)) {
+    for (const path of localProjectRoots(project)) {
+      if (!localProjectByRoot.has(path)) {
+        localProjectByRoot.set(path, project);
+      }
+    }
+  }
+  const addPath = (path, isActive, preferredName = null) => {
     if (!path || seen.has(path)) {
       return;
     }
     seen.add(path);
     projects.push({
-      name: hasLabel(path) ? labels[path].trim() : basename(path),
+      name: preferredName ?? (hasLabel(path) ? labels[path].trim() : basename(path)),
       path,
       source: "codex-desktop",
       status: "available",
       active: isActive,
     });
   };
-  for (const path of active) {
-    add(path, true);
+  const hasDisplayName = (reference) => {
+    const project = localProjects[reference] ?? localProjectByRoot.get(reference);
+    return Boolean(localProjectName(project) || hasLabel(reference));
+  };
+  const add = (reference, isActive) => {
+    const projectById = localProjects[reference];
+    if (projectById) {
+      const roots = localProjectRoots(projectById);
+      const name = localProjectName(projectById);
+      for (const path of roots) {
+        addPath(path, isActive, name);
+      }
+      return;
+    }
+    const projectByRoot = localProjectByRoot.get(reference);
+    addPath(reference, isActive, localProjectName(projectByRoot));
+  };
+  for (const reference of active) {
+    add(reference, true);
   }
-  for (const path of [...order, ...saved]) {
-    if (hasLabel(path)) {
-      add(path, false);
+  for (const reference of [...order, ...saved]) {
+    if (hasDisplayName(reference)) {
+      add(reference, false);
     }
   }
-  for (const path of [...order, ...saved]) {
-    add(path, false);
+  for (const reference of [...order, ...saved]) {
+    add(reference, false);
   }
   return projects;
 }

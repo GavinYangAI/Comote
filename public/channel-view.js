@@ -59,6 +59,7 @@ export function channelFormSpec(channel, t) {
       type: f.type,
       label: t(f.labelKey),
       secret: Boolean(f.secret),
+      required: Boolean(f.required) && !(f.hasValueField && channel.config?.[f.hasValueField]),
       value: channel.config?.[f.name] ?? f.default ?? "",
       options: (f.options ?? []).map((o) => ({ value: o.value, label: t(o.labelKey) })),
     }));

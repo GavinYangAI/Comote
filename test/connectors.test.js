@@ -504,6 +504,57 @@ test("desktop connector lists the active workspace first, then project order", a
   }
 });
 
+test("desktop connector resolves modern project ids through local-projects", async () => {
+  const statePath = join(tmpdir(), `comote-codex-local-projects-${process.pid}.json`);
+  writeFileSync(
+    statePath,
+    JSON.stringify({
+      "local-projects": {
+        "project-comote": {
+          id: "project-comote",
+          name: "Comote",
+          rootPaths: ["D:\\work\\Comote"],
+        },
+        "project-report": {
+          id: "project-report",
+          name: "智能体项目",
+          rootPaths: ["D:\\work\\tzx-report"],
+        },
+      },
+      "project-order": ["project-comote", "project-report"],
+    }),
+  );
+  try {
+    const transport = new MemoryTransport();
+    const connector = new CodexDesktopConnector({ transport, codexStatePath: statePath });
+    const projectsPromise = connector.listProjects();
+    await flushAsyncWork();
+    transport.receive({
+      jsonrpc: "2.0",
+      id: 1,
+      result: {
+        threads: [
+          // Thread history contains the same real roots. The workspace entries
+          // must win and the project ids must never appear as fake paths.
+          { id: "t1", cwd: "D:\\work\\Comote" },
+          { id: "t2", cwd: "D:\\work\\tzx-report", source: "cli" },
+        ],
+      },
+    });
+    const projects = await projectsPromise;
+    assert.deepEqual(
+      projects.map((p) => [p.name, p.path, p.source]),
+      [
+        ["Comote", "D:\\work\\Comote", "codex-desktop"],
+        ["智能体项目", "D:\\work\\tzx-report", "codex-desktop"],
+      ],
+    );
+    assert.equal(projects.some((p) => p.path.startsWith("project-")), false);
+  } finally {
+    rmSync(statePath, { force: true });
+  }
+});
+
 test("desktop connector resumes existing Codex Desktop threads", async () => {
   const transport = new MemoryTransport();
   const connector = new CodexDesktopConnector({ transport });

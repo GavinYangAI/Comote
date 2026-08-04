@@ -94,6 +94,13 @@
           <div>
             <strong id="loadErrorTitle" data-i18n="web.loadError.title">加载设置时出错</strong>
             <p id="loadErrorDetail"></p>
+            <div id="apiTokenForm" class="token-auth-form" hidden>
+              <label for="apiTokenInput" data-i18n="web.loadError.tokenInputLabel">本地 API token</label>
+              <div class="token-auth-controls">
+                <input id="apiTokenInput" type="password" autocomplete="off" spellcheck="false" data-i18n-attr="placeholder:web.loadError.tokenInputPlaceholder" placeholder="输入 COMOTE_LOCAL_API_TOKEN">
+                <button id="saveApiToken" class="secondary-button" type="button" data-i18n="web.loadError.tokenSave">保存并重试</button>
+              </div>
+            </div>
           </div>
           <button id="retryLoad" class="secondary-button" type="button" data-i18n="web.button.retry">重试</button>
         </section>
