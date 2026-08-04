@@ -12,6 +12,7 @@ services:
       PORT: 16208
       COMOTE_STATE_PATH: /data/state.json
       COMOTE_PROJECT_ROOT: /workspace
+      COMOTE_HOST_PROJECT_ROOT: ${COMOTE_HOST_PROJECT_ROOT:-}
       COMOTE_CODEX_PATH: /usr/local/bin/codex
       COMOTE_LOCAL_API_TOKEN: ${COMOTE_LOCAL_API_TOKEN:?Set COMOTE_LOCAL_API_TOKEN in .env}
     volumes:
@@ -19,7 +20,8 @@ services:
       - codex-home:/home/node/.codex
       - "${USERPROFILE}/.codex/auth.json:/home/node/.codex/auth.json"
       - "${USERPROFILE}/.codex/config.toml:/home/node/.codex/config.toml:ro"
-      - ".:/workspace/Comote"
+      - "${USERPROFILE}/.codex/.codex-global-state.json:/home/node/.codex/.codex-global-state.json:ro"
+      - "${COMOTE_PROJECTS_PATH:-.}:/workspace"
     expose:
       - "16208"
 

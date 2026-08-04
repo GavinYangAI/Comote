@@ -15,11 +15,15 @@ export class CodexDesktopConnector {
     transportFactory = null,
     command = null,
     codexStatePath = `${homedir()}/.codex/.codex-global-state.json`,
+    hostProjectRoot = process.env.COMOTE_HOST_PROJECT_ROOT ?? null,
+    projectRoot = process.env.COMOTE_PROJECT_ROOT ?? null,
     firstConnectRetryMs = 30_000,
   } = {}) {
     this.transport = transport;
     this.command = command ?? resolveCodexCommand();
     this.codexStatePath = codexStatePath;
+    this.hostProjectRoot = hostProjectRoot;
+    this.projectRoot = projectRoot;
     this.transportFactory =
       transportFactory ?? (() => this.transport ?? new StdioTransport({ command: this.command }));
     this.state = "not_connected";
@@ -475,7 +479,12 @@ export class CodexDesktopConnector {
     // conversations but is not (or no longer) a workspace — CLI-only work,
     // removed workspaces. Deduped by path; workspace entries keep their order
     // and win on conflict, thread-derived ones follow sorted by name.
-    const workspaceProjects = readCodexWorkspaceProjects(this.codexStatePath);
+    const workspaceProjects = readCodexWorkspaceProjects(this.codexStatePath, {
+      mapPath: (path) => mapHostProjectPath(path, {
+        hostProjectRoot: this.hostProjectRoot,
+        projectRoot: this.projectRoot,
+      }),
+    });
     let threadProjects;
     try {
       threadProjects = await this.#projectsFromThreadHistory({ limit });
@@ -511,10 +520,14 @@ export class CodexDesktopConnector {
     const threads = normalizeThreadList(response);
     const projectsByPath = new Map();
     for (const thread of threads) {
-      const cwd = thread.cwd ?? thread.workingDirectory ?? thread.projectPath ?? null;
-      if (!cwd) {
+      const rawCwd = thread.cwd ?? thread.workingDirectory ?? thread.projectPath ?? null;
+      if (!rawCwd) {
         continue;
       }
+      const cwd = mapHostProjectPath(rawCwd, {
+        hostProjectRoot: this.hostProjectRoot,
+        projectRoot: this.projectRoot,
+      });
       const source = isCliThread(thread) ? "codex-cli" : "codex-desktop";
       const existing = projectsByPath.get(cwd);
       if (existing) {
@@ -834,7 +847,7 @@ function findNestedCodexExecutable(dir, { exists, readdir, depth = 0, maxDepth =
 // Newer versions store stable project ids there and keep the display name plus
 // real roots in `local-projects`. Accept both shapes so an id such as
 // `0f2e...` never leaks into Comote as a fake project path.
-function readCodexWorkspaceProjects(statePath) {
+function readCodexWorkspaceProjects(statePath, { mapPath = (path) => path } = {}) {
   let state;
   try {
     state = JSON.parse(readFileSync(statePath, "utf8"));
@@ -864,13 +877,14 @@ function readCodexWorkspaceProjects(statePath) {
     }
   }
   const addPath = (path, isActive, preferredName = null) => {
-    if (!path || seen.has(path)) {
+    const mappedPath = path ? mapPath(path) : path;
+    if (!mappedPath || seen.has(mappedPath)) {
       return;
     }
-    seen.add(path);
+    seen.add(mappedPath);
     projects.push({
-      name: preferredName ?? (hasLabel(path) ? labels[path].trim() : basename(path)),
-      path,
+      name: preferredName ?? (hasLabel(path) ? labels[path].trim() : basename(mappedPath)),
+      path: mappedPath,
       source: "codex-desktop",
       status: "available",
       active: isActive,
@@ -905,6 +919,23 @@ function readCodexWorkspaceProjects(statePath) {
     add(reference, false);
   }
   return projects;
+}
+
+function mapHostProjectPath(path, { hostProjectRoot, projectRoot } = {}) {
+  if (typeof path !== "string" || !hostProjectRoot || !projectRoot) {
+    return path;
+  }
+  const normalize = (value) => String(value).replace(/\\/g, "/").replace(/\/+$/, "");
+  const source = normalize(path);
+  const hostRoot = normalize(hostProjectRoot);
+  const targetRoot = normalize(projectRoot);
+  const sourceLower = source.toLowerCase();
+  const hostLower = hostRoot.toLowerCase();
+  if (sourceLower !== hostLower && !sourceLower.startsWith(`${hostLower}/`)) {
+    return path;
+  }
+  const suffix = source.slice(hostRoot.length).replace(/^\/+/, "");
+  return suffix ? `${targetRoot}/${suffix}` : targetRoot;
 }
 
 function approvalResultFor(method, decision) {

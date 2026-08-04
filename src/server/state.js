@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 
 import { isWithinDir, resolveWithinProject, sanitizeUploadName } from "../core/paths.js";
 import { planChangedFileDelivery } from "../core/changed-files-delivery.js";
+import { planLocalMarkdownImages } from "../core/markdown-images.js";
 
 import { AuthorizationStore } from "../core/authorization.js";
 import { CommandRouter } from "../core/commands.js";
@@ -1022,14 +1023,7 @@ export function createComoteState({
           // the turn's changed files. Re-running deliverChangedFilesAndFinish would
           // re-enqueue those files under a fresh-millisecond dedupeKey the queue
           // cannot collapse — a double delivery. Enqueue only this message's text.
-          outboundReplies.enqueue({
-            channel: binding.channel,
-            conversationId: binding.conversationId,
-            ...(binding.accountId ? { accountId: binding.accountId } : {}),
-            kind: "text",
-            text: event.text ?? "",
-            dedupeKey: agentDedupeKey(event),
-          });
+          enqueueAgentMessage(binding, event);
           deliverIfPush(binding.channel);
           persistInBackground();
           return;
@@ -1047,14 +1041,7 @@ export function createComoteState({
         return;
       }
       // Chunking moved to the wechat renderer — enqueue ONE semantic text reply.
-      outboundReplies.enqueue({
-        channel: binding.channel,
-        conversationId: binding.conversationId,
-        ...(binding.accountId ? { accountId: binding.accountId } : {}),
-        kind: "text",
-        text: event.text ?? "",
-        dedupeKey: agentDedupeKey(event),
-      });
+      enqueueAgentMessage(binding, event);
       deliverIfPush(binding.channel);
       persistInBackground();
       return;
@@ -1347,6 +1334,7 @@ export function createComoteState({
   // fire-and-forget from the agentMessage handler so routeDesktopEvent stays sync.
   async function deliverChangedFilesAndFinish(live, binding, event, claimedSession) {
     const channel = binding.channel;
+    const agentPlan = planAgentMessage(binding, event);
     const supportsButtons = Boolean(channelStacks.get(channel)?.plugin.meta.capabilities?.fileButtons);
     const plan = await planChangedFileDelivery(
       buildChangedFiles(event.threadId, event.changedPaths),
@@ -1362,10 +1350,11 @@ export function createComoteState({
         dedupeKey: `changedfiles:${binding.conversationId}:${event.threadId}:${stamp}:${i}`,
       });
     });
+    enqueueAgentMedia(binding, event, agentPlan.images);
     const completedCard = live.buildStatusCard({
       phase: "completed",
       threadId: event.threadId,
-      text: event.text ?? "",
+      text: agentPlan.text,
       done: true,
       files: plan.buttonFiles,
     });
@@ -1377,16 +1366,54 @@ export function createComoteState({
       : false;
     if (!updated) {
       // No live card (e.g. the daemon restarted mid-turn) — send fresh.
-      outboundReplies.enqueue({
-        channel,
-        conversationId: binding.conversationId,
-        ...(binding.accountId ? { accountId: binding.accountId } : {}),
-        kind: "text",
-        text: event.text ?? "",
-        dedupeKey: agentDedupeKey(event),
-      });
+      enqueueAgentText(binding, event, agentPlan.text);
     }
     deliverIfPush(channel);
+  }
+
+  // Converts local Markdown images in a Codex reply into two channel-safe
+  // pieces: neutralized text plus project-fenced image attachments. Today the
+  // automatic attachment split is enabled only for Feishu, the channel whose
+  // cards reject raw markdown images without image_key. Other renderers keep
+  // receiving their existing text behavior.
+  function planAgentMessage(binding, event) {
+    if (binding.channel !== "feishu") {
+      return { text: event.text ?? "", images: [] };
+    }
+    return planLocalMarkdownImages(event.text, { projectRoot: binding.projectPath });
+  }
+
+  function enqueueAgentMessage(binding, event) {
+    const plan = planAgentMessage(binding, event);
+    enqueueAgentText(binding, event, plan.text);
+    enqueueAgentMedia(binding, event, plan.images);
+  }
+
+  function enqueueAgentText(binding, event, text) {
+    if (!String(text ?? "").trim()) return;
+    outboundReplies.enqueue({
+      channel: binding.channel,
+      conversationId: binding.conversationId,
+      ...(binding.accountId ? { accountId: binding.accountId } : {}),
+      kind: "text",
+      text,
+      dedupeKey: agentDedupeKey(event),
+    });
+  }
+
+  function enqueueAgentMedia(binding, event, images) {
+    images.forEach((path, index) => {
+      outboundReplies.enqueue({
+        channel: binding.channel,
+        conversationId: binding.conversationId,
+        ...(binding.accountId ? { accountId: binding.accountId } : {}),
+        kind: "media",
+        mediaKind: "image",
+        path,
+        fileName: basename(path),
+        dedupeKey: `${agentDedupeKey(event)}:image:${index}:${path}`,
+      });
+    });
   }
 
   // Maps a turn's absolute changedPaths to the {path, name} entries the

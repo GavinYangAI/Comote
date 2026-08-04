@@ -6,7 +6,7 @@ import { CommandRouter } from "../src/core/commands.js";
 import { ProjectStore } from "../src/core/projects.js";
 import { SessionStore } from "../src/core/sessions.js";
 
-function createRouter({ scanLocalProjects } = {}) {
+function createRouter({ scanLocalProjects, codexDesktop = null } = {}) {
   const authorization = new AuthorizationStore();
   const projects = new ProjectStore();
   const sessions = new SessionStore();
@@ -16,7 +16,7 @@ function createRouter({ scanLocalProjects } = {}) {
     authorization,
     projects,
     sessions,
-    codexDesktop: null,
+    codexDesktop,
     scanLocalProjects,
   });
   return { router, identity, projects };
@@ -46,6 +46,27 @@ test("scanned projects become selectable by number", async () => {
   const opened = await router.handleMessageAsync({ identity, text: "2" });
 
   assert.match(opened.text, /\/work\/beta/);
+});
+
+test("connected headless Codex falls back to mounted projects when Desktop list is empty", async () => {
+  const scanned = [
+    { name: "Comote", path: "/workspace/Comote", source: "local-scan", status: "available" },
+  ];
+  const codexDesktop = {
+    getStatus: () => ({ state: "connected" }),
+    async listProjects() {
+      return [];
+    },
+  };
+  const { router, identity } = createRouter({
+    codexDesktop,
+    scanLocalProjects: () => scanned,
+  });
+
+  const reply = await router.handleMessageAsync({ identity, text: "/projects" });
+
+  assert.match(reply.text, /\/workspace\/Comote/);
+  assert.doesNotMatch(reply.text, /Codex Desktop projects found/);
 });
 
 test("empty scan shows an actionable hint, not a bare dead end", async () => {

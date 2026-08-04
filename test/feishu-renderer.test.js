@@ -23,6 +23,19 @@ test("text reply renders as a card via sendCard", async () => {
   assert.equal(driver.calls[0][1].receiveId, "oc");
 });
 
+test("text reply never passes raw markdown image syntax to a Feishu card", async () => {
+  const r = createFeishuRenderer();
+  const driver = stubDriver();
+  await r.render({
+    kind: "text",
+    conversationId: "oc",
+    text: "完成\n![预览](D:\\work\\preview.png)",
+  }, { driver });
+  const cardText = driver.calls[0][1].card.elements.map((element) => element.content ?? "").join("\n");
+  assert.ok(!cardText.includes("!["));
+  assert.match(cardText, /🖼️ 预览/);
+});
+
 test("approval reply renders an approve/reject card", async () => {
   const r = createFeishuRenderer();
   const driver = stubDriver();

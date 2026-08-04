@@ -166,6 +166,64 @@ test("Codex streaming for a Feishu thread drives a live card", async () => {
   assert.equal(state.outboundReplies.list({ channel: "feishu" }).length, 0);
 });
 
+test("Feishu agent output sends project-local Markdown images as image messages", async () => {
+  const { transport, desktop, state } = buildState();
+  await desktop.client.connect();
+
+  const root = await mkdtemp(join(tmpdir(), "comote-feishu-agent-image-"));
+  const imagePath = join(root, "preview.png");
+  await writeFile(imagePath, Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+
+  state.commandRouter.conversationByIdentity.set("feishu:ou_owner", {
+    channel: "feishu",
+    conversationId: "oc_chat",
+  });
+  state.commandRouter.bindThreadForIdentity(
+    { channel: "feishu", stableId: "ou_owner" },
+    "thread_image",
+    root,
+  );
+
+  const calls = [];
+  state.runtime.feishu.__setTestDriver({
+    getStatus: () => ({ state: "configured" }),
+    verifyEvent: () => true,
+    async sendCard(message) {
+      calls.push(["sendCard", message]);
+      return { messageId: "om_text" };
+    },
+    async uploadImage(path) {
+      calls.push(["uploadImage", path]);
+      return "img_uploaded";
+    },
+    async sendImage(message) {
+      calls.push(["sendImage", message]);
+      return { messageId: "om_image" };
+    },
+  });
+
+  transport.receive({
+    jsonrpc: "2.0",
+    method: "item/completed",
+    params: {
+      threadId: "thread_image",
+      item: {
+        type: "agentMessage",
+        id: "image_reply",
+        text: `预览已生成\n\n![结果图](<${imagePath}>)`,
+      },
+    },
+  });
+  await tick();
+  await tick();
+
+  const sentCard = calls.find(([kind]) => kind === "sendCard")?.[1]?.card;
+  assert.ok(sentCard, "the neutralized text card was sent");
+  assert.ok(!JSON.stringify(sentCard).includes("!["));
+  assert.deepEqual(calls.find(([kind]) => kind === "uploadImage"), ["uploadImage", imagePath]);
+  assert.equal(calls.find(([kind]) => kind === "sendImage")?.[1]?.imageKey, "img_uploaded");
+});
+
 // Lets queued microtasks (the async card calls) settle.
 function tick() {
   return new Promise((resolve) => setTimeout(resolve, 5));

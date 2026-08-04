@@ -555,6 +555,48 @@ test("desktop connector resolves modern project ids through local-projects", asy
   }
 });
 
+test("desktop connector maps Windows host project roots into a Docker workspace", async () => {
+  const statePath = join(tmpdir(), `comote-codex-docker-paths-${process.pid}.json`);
+  writeFileSync(
+    statePath,
+    JSON.stringify({
+      "local-projects": {
+        "project-comote": {
+          id: "project-comote",
+          name: "Comote",
+          rootPaths: ["D:\\soft_work\\02-MINE\\Comote"],
+        },
+        "project-report": {
+          id: "project-report",
+          name: "Report",
+          rootPaths: ["D:\\soft_work\\03-ZENITH\\report"],
+        },
+      },
+      "project-order": ["project-comote", "project-report"],
+    }),
+  );
+  try {
+    const transport = new MemoryTransport();
+    const connector = new CodexDesktopConnector({
+      transport,
+      codexStatePath: statePath,
+      hostProjectRoot: "D:/soft_work",
+      projectRoot: "/workspace",
+    });
+    const projectsPromise = connector.listProjects();
+    await flushAsyncWork();
+    transport.receive({ jsonrpc: "2.0", id: 1, result: { threads: [] } });
+
+    const projects = await projectsPromise;
+    assert.deepEqual(projects.map((project) => project.path), [
+      "/workspace/02-MINE/Comote",
+      "/workspace/03-ZENITH/report",
+    ]);
+  } finally {
+    rmSync(statePath, { force: true });
+  }
+});
+
 test("desktop connector resumes existing Codex Desktop threads", async () => {
   const transport = new MemoryTransport();
   const connector = new CodexDesktopConnector({ transport });
