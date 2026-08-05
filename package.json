@@ -26,9 +26,11 @@
     "desktop:dev": "npm run desktop:icons && npm run sidecar:build && tauri dev",
     "dist:mac": "npm run desktop:icons && npm run sidecar:build:mac && node scripts/install-prod-deps.mjs && tauri build --bundles app --target aarch64-apple-darwin && node scripts/sign-macos-app.mjs && node scripts/create-mac-dmg.mjs",
     "dist:win": "npm run desktop:icons && npm run sidecar:build:win && node scripts/install-prod-deps.mjs && tauri build --bundles nsis --target x86_64-pc-windows-msvc && node scripts/collect-tauri-artifacts.mjs win",
+    "dist:linux": "npm run desktop:icons && npm run sidecar:build:linux && node scripts/install-prod-deps.mjs && tauri build --bundles deb,appimage && node scripts/collect-tauri-artifacts.mjs linux",
     "sidecar:build": "node scripts/build-sidecar.mjs current",
     "sidecar:build:mac": "node scripts/build-sidecar.mjs aarch64-apple-darwin",
     "sidecar:build:win": "node scripts/build-sidecar.mjs x86_64-pc-windows-msvc",
+    "sidecar:build:linux": "node scripts/build-sidecar.mjs linux-current",
     "dev": "node src/server/index.js",
     "wechat:check": "node scripts/check-wechat-channel.mjs",
     "test": "node --test"

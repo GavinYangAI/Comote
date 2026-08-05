@@ -12,8 +12,14 @@ if (mode === "mac") {
 } else if (mode === "win") {
   const source = await findArtifact(join(process.cwd(), "src-tauri", "target"), ".exe");
   await copyFile(source, join(releaseDir, `Comote-Setup-${pkg.version}-x64.exe`));
+} else if (mode === "linux") {
+  const arch = process.arch === "arm64" ? "arm64" : "x64";
+  const appImage = await findArtifact(join(process.cwd(), "src-tauri", "target"), ".AppImage");
+  const deb = await findArtifact(join(process.cwd(), "src-tauri", "target"), ".deb");
+  await copyFile(appImage, join(releaseDir, `Comote-${pkg.version}-${arch}.AppImage`));
+  await copyFile(deb, join(releaseDir, `Comote-${pkg.version}-${arch}.deb`));
 } else {
-  throw new Error("Usage: node scripts/collect-tauri-artifacts.mjs <mac|win>");
+  throw new Error("Usage: node scripts/collect-tauri-artifacts.mjs <mac|win|linux>");
 }
 
 console.log(`Collected ${mode} installer in ${releaseDir}`);

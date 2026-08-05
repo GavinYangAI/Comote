@@ -214,8 +214,8 @@
               </div>
             </article>
 
-            <article id="keepAlivePanel" class="panel" hidden>
-              <h3 data-i18n="web.advanced.keepAliveTitle">后台运行</h3>
+            <article id="keepAlivePanel" class="panel desktop-runtime-panel">
+              <h3 data-i18n="web.advanced.startupTitle">后台与启动</h3>
               <label class="setting-toggle" for="keepDaemonAlive">
                 <span class="setting-copy">
                   <strong data-i18n="web.advanced.keepAliveLabel">关闭窗口后保持后台运行</strong>
@@ -223,6 +223,16 @@
                 </span>
                 <span class="switch-control">
                   <input id="keepDaemonAlive" type="checkbox" role="switch" data-i18n-attr="aria-label:web.advanced.keepAliveLabel" aria-label="关闭窗口后保持后台运行">
+                  <span class="switch-track" aria-hidden="true"></span>
+                </span>
+              </label>
+              <label class="setting-toggle setting-toggle-separated" for="launchAtLogin">
+                <span class="setting-copy">
+                  <strong data-i18n="web.advanced.launchAtLoginLabel">登录系统时自动启动 Comote</strong>
+                  <span id="launchAtLoginStatus" class="setting-note" data-i18n="web.advanced.launchAtLoginHint" aria-live="polite">启动后隐藏在系统托盘，并自动运行本地服务。</span>
+                </span>
+                <span class="switch-control">
+                  <input id="launchAtLogin" type="checkbox" role="switch" disabled data-i18n-attr="aria-label:web.advanced.launchAtLoginLabel" aria-label="登录系统时自动启动 Comote">
                   <span class="switch-track" aria-hidden="true"></span>
                 </span>
               </label>

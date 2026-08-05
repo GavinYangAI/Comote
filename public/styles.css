@@ -1674,6 +1674,16 @@ code {
   box-shadow: var(--shadow-sm);
 }
 
+.setting-toggle-separated {
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px solid var(--line);
+}
+
+.setting-note.is-error {
+  color: var(--danger, #b42318);
+}
+
 .channel-card-hybrid .channel-add-head {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr) auto;

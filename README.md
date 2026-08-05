@@ -80,6 +80,7 @@ Comote 通过 `codex app-server`（stdio JSON-RPC）与 Codex 通信，会自动
 
 - macOS：`Comote-x.y.z.dmg`
 - Windows：`Comote-x.y.z-setup.exe`
+- Linux 桌面：`Comote-x.y.z.AppImage` 或 `.deb`
 
 **npm**（命令行版，跨平台，含 Linux）：
 
@@ -88,6 +89,8 @@ npm i -g comote   # 需要 Node 22+
 ```
 
 Linux / 无界面服务器请看[下面](#linux--无界面服务器headless-vps)的部署说明。也可以[从源码编译](#从源码构建)。
+
+桌面安装版可在“高级设置 → 后台与启动”中开启“登录系统时自动启动 Comote”。Windows、macOS 和 Linux 桌面版都会以当前用户身份在登录后启动，默认隐藏在系统托盘，同时拉起本地服务；这与“关闭窗口后保持后台运行”是两个独立设置。Linux 无桌面服务器请使用 systemd，不通过网页修改系统级服务。
 
 ### 2. 绑定一个 IM
 
@@ -313,7 +316,7 @@ Linux 上没有应用内自动下载更新，手动升级即可。
 
 ## 从源码构建
 
-要求：Node.js ≥ 22，Rust（Tauri 需要），macOS 12+ 或 Windows 10+。
+要求：Node.js ≥ 22，Rust（Tauri 需要），macOS 12+、Windows 10+ 或带 WebKitGTK 的 Linux 桌面环境。
 
 ```bash
 git clone https://github.com/GavinYangAI/comote.git
@@ -340,6 +343,10 @@ npm run dist:mac
 # Windows（必须在 Windows 上跑 —— Node sidecar + NSIS 都依赖 Windows 工具链）
 npm run dist:win
 # 产物：release/win/
+
+# Linux（必须在 Linux 上跑；生成当前 CPU 架构的 deb 和 AppImage）
+npm run dist:linux
+# 产物：release/Comote-x.y.z-{x64|arm64}.{deb|AppImage}
 ```
 
 也可以让 GitHub Actions 帮忙（`windows-latest` runner）—— 参考 `.github/workflows/desktop-release.yml`。

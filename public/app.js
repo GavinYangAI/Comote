@@ -112,29 +112,96 @@ if (isTauri) {
 }
 
 // Wires the "keep daemon alive after quit" toggle. Only meaningful inside the
-// desktop app (the preference is read by the Rust quit path), so the panel stays
-// hidden in a plain browser where the command does not exist.
+// desktop app (the preference is read by the Rust quit path). In a plain
+// browser the panel remains visible for discoverability, with controls disabled.
+function setDesktopSettingStatus(element, key, isError = false) {
+  if (!element) return;
+  element.dataset.i18n = key;
+  element.textContent = tWeb(key);
+  element.classList.toggle("is-error", isError);
+}
+
 async function setupKeepAliveToggle() {
   const panel = document.querySelector("#keepAlivePanel");
   const checkbox = document.querySelector("#keepDaemonAlive");
-  if (!panel || !checkbox || !isTauri) {
+  const status = document.querySelector("#keepDaemonAliveStatus");
+  if (!panel || !checkbox) {
     return;
   }
-  panel.hidden = false;
+  if (!isTauri) {
+    checkbox.disabled = true;
+    setDesktopSettingStatus(status, "web.advanced.desktopOnly");
+    return;
+  }
   try {
     const enabled = await tauriInvoke("get_keep_daemon_alive");
     checkbox.checked = Boolean(enabled);
+    checkbox.disabled = false;
   } catch (error) {
     console.error("get_keep_daemon_alive failed", error);
+    checkbox.disabled = true;
+    setDesktopSettingStatus(status, "web.advanced.settingLoadError", true);
   }
   checkbox.addEventListener("change", async () => {
     const desired = checkbox.checked;
     checkbox.disabled = true;
     try {
       await tauriInvoke("set_keep_daemon_alive", { enabled: desired });
+      setDesktopSettingStatus(status, "web.advanced.keepAliveHint");
     } catch (error) {
       console.error("set_keep_daemon_alive failed", error);
       checkbox.checked = !desired; // revert on failure
+      setDesktopSettingStatus(status, "web.advanced.settingSaveError", true);
+    } finally {
+      checkbox.disabled = false;
+    }
+  });
+}
+
+// Wires the operating-system login startup entry. Registration is owned by
+// the desktop shell; in a normal browser the control remains visible but
+// disabled so users know where the feature lives and why it cannot be changed.
+async function setupLaunchAtLoginToggle() {
+  const checkbox = document.querySelector("#launchAtLogin");
+  const status = document.querySelector("#launchAtLoginStatus");
+  if (!checkbox || !status) {
+    return;
+  }
+  const showState = (enabled) => {
+    setDesktopSettingStatus(
+      status,
+      enabled
+        ? "web.advanced.launchAtLoginEnabled"
+        : "web.advanced.launchAtLoginDisabled",
+    );
+  };
+  if (!isTauri) {
+    checkbox.disabled = true;
+    setDesktopSettingStatus(status, "web.advanced.desktopOnly");
+    return;
+  }
+  try {
+    const state = await tauriInvoke("get_launch_at_login");
+    checkbox.checked = Boolean(state && state.enabled);
+    checkbox.disabled = !(state && state.supported);
+    showState(checkbox.checked);
+  } catch (error) {
+    console.error("get_launch_at_login failed", error);
+    checkbox.disabled = true;
+    setDesktopSettingStatus(status, "web.advanced.settingLoadError", true);
+  }
+  checkbox.addEventListener("change", async () => {
+    const desired = checkbox.checked;
+    checkbox.disabled = true;
+    setDesktopSettingStatus(status, "web.advanced.settingSaving");
+    try {
+      const state = await tauriInvoke("set_launch_at_login", { enabled: desired });
+      checkbox.checked = Boolean(state && state.enabled);
+      showState(checkbox.checked);
+    } catch (error) {
+      console.error("set_launch_at_login failed", error);
+      checkbox.checked = !desired;
+      setDesktopSettingStatus(status, "web.advanced.settingSaveError", true);
     } finally {
       checkbox.disabled = false;
     }
@@ -2022,3 +2089,4 @@ init().catch((error) => {
 });
 
 setupKeepAliveToggle().catch((error) => console.error(error));
+setupLaunchAtLoginToggle().catch((error) => console.error(error));

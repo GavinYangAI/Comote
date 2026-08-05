@@ -102,6 +102,30 @@ jobs:
           path: release/Comote-Setup-*-x64.exe
           if-no-files-found: error
 
+  linux-x64:
+    name: Comote Linux x64 packages
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install Tauri Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libfuse2
+      - run: npm ci
+      - run: npm test
+      - run: npm run dist:linux
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: Comote-linux-x64
+          path: |
+            release/Comote-*-x64.AppImage
+            release/Comote-*-x64.deb
+          if-no-files-found: error
+
   publish-npm:
     name: Publish to npm
     # Only the canonical repo can publish — forks lack the trusted-publisher
@@ -140,7 +164,7 @@ jobs:
 
   publish-release:
     name: Publish GitHub Release
-    needs: [mac-arm64, windows-x64]
+    needs: [mac-arm64, windows-x64, linux-x64]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     steps:
@@ -153,6 +177,10 @@ jobs:
         with:
           name: Comote-win-x64-setup
           path: release-artifacts
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: Comote-linux-x64
+          path: release-artifacts
       - name: Build release notes from CHANGELOG
         run: |
           set -euo pipefail
@@ -164,7 +192,8 @@ jobs:
             if [ -n "$NOTES" ]; then printf '%s\n' "$NOTES"; else printf 'Comote %s\n' "$TAG"; fi
             printf '\n### Downloads / 下载\n\n'
             printf -- '- **macOS (Apple Silicon)** — `Comote-*-arm64.dmg`\n'
-            printf -- '- **Windows x64** — `Comote-Setup-*-x64.exe`\n\n'
+            printf -- '- **Windows x64** — `Comote-Setup-*-x64.exe`\n'
+            printf -- '- **Linux x64** — `Comote-*-x64.AppImage` / `Comote-*-x64.deb`\n\n'
             printf 'See the [README](https://github.com/GavinYangAI/comote#readme) for installation and setup. / 安装与配置见 [README](https://github.com/GavinYangAI/comote#readme)。\n'
           } > RELEASE_BODY.md
           echo "----- release body -----"

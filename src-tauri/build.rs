@@ -7,6 +7,8 @@ fn main() {
         "open_external",
         "get_keep_daemon_alive",
         "set_keep_daemon_alive",
+        "get_launch_at_login",
+        "set_launch_at_login",
     ]);
     tauri_build::try_build(tauri_build::Attributes::new().app_manifest(manifest))
         .expect("failed to run tauri-build");
