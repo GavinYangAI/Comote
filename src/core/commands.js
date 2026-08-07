@@ -4,9 +4,10 @@ import { t } from "./i18n/index.js";
 import { classifyMedia, resolveWithinProject } from "./paths.js";
 import { buildFileDeliveries } from "./file-delivery.js";
 import { scanLocalProjects as defaultScanLocalProjects } from "./local-projects.js";
+import { isAbsolute, win32 } from "node:path";
 
 function isAbsolutePath(value) {
-  return typeof value === "string" && value.startsWith("/");
+  return typeof value === "string" && (isAbsolute(value) || win32.isAbsolute(value));
 }
 
 // Upper bound for the one-time-message identity sets (welcome card /
@@ -35,6 +36,8 @@ export class CommandRouter {
     persisted = {},
     maxTurnsPerHour = 60,
     transcript = null,
+    taskMonitor = null,
+    globalManager = null,
     scanLocalProjects = defaultScanLocalProjects,
   }) {
     this.authorization = authorization;
@@ -44,6 +47,8 @@ export class CommandRouter {
     this.codexCli = codexCli;
     this.outboundQueue = outboundQueue;
     this.transcript = transcript;
+    this.taskMonitor = taskMonitor;
+    this.globalManager = globalManager;
     // Headless/Linux fallback project source: enumerates folders under a root
     // when there is no Codex Desktop to list workspaces. Injectable for tests.
     this.scanLocalProjects = scanLocalProjects;
@@ -76,6 +81,10 @@ export class CommandRouter {
       noticedIdentities: [...this.noticedIdentities],
       greetedIdentities: [...this.greetedIdentities],
     };
+  }
+
+  setGlobalManager(globalManager) {
+    this.globalManager = globalManager;
   }
 
   // Throws a user-facing error when an identity exceeds its hourly turn budget,
@@ -187,6 +196,10 @@ export class CommandRouter {
         return { kind: "notice", text: this.unauthorizedNoticeText() };
       }
       return this.deniedReply();
+    }
+    const managerReply = await this.globalManager?.handleMessage?.(message);
+    if (managerReply) {
+      return managerReply;
     }
     const reply = await this.dispatchAuthorizedMessage(message);
     if (!this.greetedIdentities.has(key)) {

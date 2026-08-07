@@ -318,6 +318,10 @@ export class FeishuRuntimeService extends BaseChannelRuntime {
     if (!action.value) {
       return {};
     }
+    const managerResult = await this.globalManager?.handleCardAction?.(action);
+    if (managerResult) {
+      return managerResult;
+    }
     const router = this.adapter?.commandRouter ?? null;
     const identity = this.clickerIdentity(action);
     // Gate every side-effecting button on allow-list membership — matching the

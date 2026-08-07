@@ -1,9 +1,15 @@
+import { basename, isAbsolute, win32 } from "node:path";
+
 function normalizePath(path) {
-  return path.replace(/\/+$/, "") || "/";
+  return path.replace(/[\\/]+$/, "") || "/";
 }
 
 function isAbsolutePath(value) {
-  return typeof value === "string" && value.startsWith("/");
+  return typeof value === "string" && (isAbsolute(value) || win32.isAbsolute(value));
+}
+
+function pathName(path) {
+  return win32.isAbsolute(path) ? win32.basename(path) : basename(path);
 }
 
 export class ProjectStore {
@@ -34,7 +40,7 @@ export class ProjectStore {
       }
       next.push({
         id,
-        name: project.name ?? path.split("/").filter(Boolean).at(-1) ?? path,
+        name: project.name ?? pathName(path) ?? path,
         path,
         source: project.source ?? "codex-desktop",
         status: project.status ?? "available",
@@ -52,7 +58,7 @@ export class ProjectStore {
       const path = normalizePath(selector);
       return {
         id: "path",
-        name: path.split("/").filter(Boolean).at(-1) ?? path,
+        name: pathName(path) || path,
         path,
         source: "direct",
         status: "available",

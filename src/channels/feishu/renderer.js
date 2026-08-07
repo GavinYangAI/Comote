@@ -20,7 +20,38 @@ export function createFeishuRenderer() {
     pickerTitle(pickKind) {
       return t(pickKind === "project" ? "card.picker.project" : "card.picker.conversation");
     },
-    async render(reply, { driver }) {
+    async render(reply, { driver, runtime }) {
+      if (reply.kind === "globalManagerCard") {
+        try {
+          if (!runtime?.globalManager?.canDeliverQueuedCard?.(reply)) {
+            throw new Error("global manager binding is not ready for this queued card");
+          }
+          let result = null;
+          if (reply.messageId) {
+            try {
+              await driver.updateCard({ messageId: reply.messageId, card: reply.card });
+              result = { messageId: reply.messageId };
+            } catch {
+              result = await driver.sendCard({
+                receiveId: reply.conversationId,
+                receiveIdType: reply.receiveIdType ?? "open_id",
+                card: reply.card,
+              });
+            }
+          } else {
+            result = await driver.sendCard({
+              receiveId: reply.conversationId,
+              receiveIdType: reply.receiveIdType ?? "open_id",
+              card: reply.card,
+            });
+          }
+          runtime?.globalManager?.handleQueuedCardDelivered?.(reply, result);
+          return result;
+        } catch (error) {
+          runtime?.globalManager?.handleQueuedCardFailure?.(reply, error);
+          throw error;
+        }
+      }
       if (reply.kind === "media") {
         return this._renderMedia(reply, driver);
       }

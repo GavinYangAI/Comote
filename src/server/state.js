@@ -24,6 +24,8 @@ import { OutboundQueue } from "../core/outbound-queue.js";
 import { EventLog } from "../core/event-log.js";
 import { SleepGuard } from "../core/sleep-guard.js";
 import { Transcript } from "../core/transcript.js";
+import { TaskMonitor } from "../core/task-monitor.js";
+import { GlobalManager } from "../core/global-manager.js";
 import { VersionChecker } from "../core/version-check.js";
 import { setLocale as setI18nLocale, DEFAULT_LOCALE, t } from "../core/i18n/index.js";
 
@@ -56,6 +58,10 @@ export function createComoteState({
   versionChecker = null,
   milestoneOptions = {},
   scanLocalProjects = defaultScanLocalProjects,
+  taskMonitor: taskMonitorOverride = null,
+  taskMonitorOptions = {},
+  globalManagerOptions = {},
+  autoStartTaskMonitor = true,
 } = {}) {
   // Route the persisted value through i18n's validation so a hand-edited or
   // stale state.json can't desync settings.locale from the locale actually served.
@@ -80,6 +86,14 @@ export function createComoteState({
   const transcript = new Transcript({ entries: persisted.transcript ?? [] });
   const desktop = desktopOverride ?? new CodexDesktopConnector();
   const cli = new CodexCliConnector();
+  const taskMonitor = taskMonitorOverride ?? new TaskMonitor({
+    desktop,
+    persisted: persisted.taskMonitor ?? {},
+    logger: {
+      warn: (message) => eventLog.warn("Codex 全局任务监控降级", { error: message }),
+    },
+    ...taskMonitorOptions,
+  });
 
   const outboundReplies = new OutboundQueue({
     entries: persisted.outboundReplies ?? [],
@@ -144,6 +158,7 @@ export function createComoteState({
     outboundQueue: outboundReplies,
     persisted: persisted.router ?? {},
     transcript,
+    taskMonitor,
     scanLocalProjects,
   });
   const registry = createRegistry([feishuPlugin, wechatPlugin, dingtalkPlugin, telegramPlugin]);
@@ -428,6 +443,23 @@ export function createComoteState({
   // cards / typing) — keep them as locals so that logic is UNCHANGED.
   const feishuRuntime = channelStacks.get("feishu").runtime;
   const wechatRuntime = channelStacks.get("wechat").runtime;
+  const globalManager = new GlobalManager({
+    taskMonitor,
+    desktop,
+    authorization,
+    transcript,
+    persisted: persisted.globalManager ?? {},
+    getFeishuConfig: () => channelStacks.get("feishu").config,
+    getFeishuRuntime: () => channelStacks.get("feishu").runtime,
+    outboundQueue: outboundReplies,
+    deliverFeishuQueue: () => deliverIfPush("feishu"),
+    logger: {
+      warn: (message) => eventLog.warn("飞书全局管理应用降级", { error: message }),
+    },
+    ...globalManagerOptions,
+  });
+  commandRouter.setGlobalManager(globalManager);
+  feishuRuntime.globalManager = globalManager;
 
   // Returns the runtime for a channel IF it supports live status cards (the
   // liveUpdates capability + the open/update/finish/buildStatusCard methods).
@@ -657,6 +689,8 @@ export function createComoteState({
     outboundReplies,
     eventLog,
     transcript,
+    taskMonitor,
+    globalManager,
     getSettings() {
       return { ...settings };
     },
@@ -690,6 +724,8 @@ export function createComoteState({
         router: commandRouter.snapshot(),
         events: eventLog.snapshot(),
         transcript: transcript.snapshot(),
+        taskMonitor: taskMonitor.persistSnapshot?.() ?? {},
+        globalManager: globalManager.persistSnapshot(),
         wechatCursor: channelStacks.get("wechat").runtime.cursor,
       });
     },
@@ -743,6 +779,9 @@ export function createComoteState({
       // daemon can exit cleanly without leaked timers holding the event loop.
       teardownAllMilestoneState();
       versionChecker?.stop?.();
+      unsubscribeTaskPersistence?.();
+      globalManager.stop();
+      taskMonitor.stop?.();
       await Promise.allSettled(
         [...channelStacks.values()].map((stack) =>
           Promise.resolve(stack.runtime.stop?.()).catch(() => {}),
@@ -754,6 +793,26 @@ export function createComoteState({
       await Promise.resolve(stateStore?.flush?.()).catch(() => {});
     },
   };
+  taskMonitor.setPersistHandler?.(() => stateRef.persist());
+  // Live lifecycle records need to survive a restart, but they must share the
+  // return-path persist already performed for the same desktop event. Persisting
+  // directly from the monitor would turn one chatty turn into several full
+  // state-file writes (turn state + milestone queue + final reply). Running is
+  // intentionally omitted: after a restart the rollout reconciliation restores
+  // it, while waiting/terminal states carry the durable attention/round data.
+  let taskMonitorLifecyclePersistDirty = false;
+  const durableTaskStates = new Set(["waiting", "completed", "failed", "interrupted"]);
+  const unsubscribeTaskPersistence = taskMonitor.subscribe?.((event) => {
+    if (
+      event?.type === "task"
+      && event.reason === "state"
+      && durableTaskStates.has(event.task?.state)
+    ) {
+      taskMonitorLifecyclePersistDirty = true;
+    }
+  });
+  globalManager.setPersistHandler(() => stateRef.persist());
+  globalManager.start();
   // --- Codex Desktop return path: route thread events back to the phone ---
   // threadId -> { count, lastSentAt } for throttled progress updates.
   const progressByThread = new Map();
@@ -818,9 +877,13 @@ export function createComoteState({
 
   desktop.onEvent = (event) => {
     try {
+      taskMonitor.ingestLiveEvent?.(event);
+      globalManager.handleDesktopEvent(event);
       routeDesktopEvent(event);
     } catch (error) {
       eventLog.error("处理 Codex 事件失败", { error: error.message });
+    } finally {
+      flushTaskMonitorLifecyclePersist();
     }
   };
 
@@ -829,9 +892,18 @@ export function createComoteState({
   // rejection is unhandled and Node's default handler crashes the daemon. Log
   // and degrade instead — a missed snapshot is recoverable, a dead daemon is not.
   function persistInBackground() {
+    // Any full snapshot also covers pending monitor lifecycle and milestone
+    // queue changes, so later flushes for the same synchronous event are no-ops.
+    taskMonitorLifecyclePersistDirty = false;
+    milestonePersistDirty = false;
     Promise.resolve(stateRef.persist?.()).catch((err) =>
       eventLog.error("持久化失败", { error: err?.message ?? String(err) }),
     );
+  }
+
+  function flushTaskMonitorLifecyclePersist() {
+    if (!taskMonitorLifecyclePersistDirty) return;
+    persistInBackground();
   }
 
   function routeDesktopEvent(event) {
@@ -1446,6 +1518,13 @@ export function createComoteState({
     const timer = setTimeout(fn, autoStartDelayMs);
     timer.unref?.();
   };
+  if (autoStartTaskMonitor) {
+    deferAutoStart(() => {
+      taskMonitor.start?.().catch((error) => {
+        eventLog.warn("Codex 全局任务监控启动失败", { error: error?.message ?? String(error) });
+      });
+    });
+  }
   if (autoStartWeChatRuntime && wechatConfig.enabled && wechatConfig.token) {
     deferAutoStart(() => {
       wechatRuntime.start();
@@ -1455,7 +1534,10 @@ export function createComoteState({
   if (autoStartFeishuRuntime && feishuConfig.enabled && feishuConfig.appId && feishuConfig.appSecret) {
     deferAutoStart(() => {
       feishuRuntime.start().then(
-        () => eventLog.info("飞书运行时已自动启动", { appId: feishuConfig.appId }),
+        () => {
+          eventLog.info("飞书运行时已自动启动", { appId: feishuConfig.appId });
+          globalManager.scheduleDashboard(0);
+        },
         (error) => {
           feishuRuntime.lastError = error.message;
           eventLog.error("飞书运行时启动失败", { error: error.message });

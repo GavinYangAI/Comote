@@ -293,6 +293,47 @@ async function handleApi(request, response, state) {
     return;
   }
 
+  if (request.method === "GET" && url.pathname === "/api/global-manager") {
+    sendJson(response, 200, state.globalManager?.publicSnapshot?.() ?? { status: "unbound", enabled: false });
+    return;
+  }
+
+  if (request.method === "POST" && url.pathname === "/api/global-manager/bind") {
+    try {
+      const result = await state.globalManager.bindCurrentFeishu();
+      state.eventLog?.info("已绑定飞书全局管理应用", {
+        appId: result.appId,
+        manager: result.manager?.stableId,
+      });
+      sendJson(response, 200, result);
+    } catch (error) {
+      state.eventLog?.warn("绑定飞书全局管理应用失败", { error: error.message });
+      sendJson(response, 409, { error: error.message });
+    }
+    return;
+  }
+
+  if (request.method === "POST" && url.pathname === "/api/global-manager/test") {
+    try {
+      sendJson(response, 200, await state.globalManager.sendTest());
+    } catch (error) {
+      sendJson(response, 503, { error: error.message });
+    }
+    return;
+  }
+
+  if (request.method === "DELETE" && url.pathname === "/api/global-manager") {
+    const result = await state.globalManager.unbind();
+    state.eventLog?.warn("已解除飞书全局管理应用绑定");
+    sendJson(response, 200, result);
+    return;
+  }
+
+  if (request.method === "GET" && url.pathname === "/api/global-manager/tasks") {
+    sendJson(response, 200, state.taskMonitor?.snapshot?.() ?? { state: "offline", counts: {}, tasks: [] });
+    return;
+  }
+
   // The channel list (meta + live status) for a generic frontend binding page.
   // Registry-driven, so a newly registered channel auto-appears here. config is
   // the wrapper's PUBLIC config (redacted) — never raw secrets.

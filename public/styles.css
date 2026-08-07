@@ -1193,6 +1193,52 @@ code {
   border: none;
 }
 
+.global-manager-panel {
+  display: grid;
+  gap: 16px;
+  border: 1px solid var(--line);
+}
+
+.global-manager-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+}
+
+.global-manager-head strong {
+  color: var(--ink);
+  font-size: 17px;
+}
+
+.global-manager-details {
+  grid-template-columns: minmax(120px, auto) minmax(0, 1fr);
+}
+
+.global-manager-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.global-manager-actions button[hidden] {
+  display: none;
+}
+
+.global-manager-panel .qr-result[hidden] {
+  display: none;
+}
+
+.danger-button {
+  color: var(--danger, #b42318);
+  background: var(--surface);
+  border-color: rgba(180, 35, 24, 0.28);
+}
+
+.danger-button:hover {
+  background: var(--error-soft);
+}
+
 /* ============================================================
    ADVANCED SECTION (details/summary)
    ============================================================ */

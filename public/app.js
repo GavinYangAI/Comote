@@ -43,7 +43,13 @@ async function getJson(path, options = {}) {
   };
   const response = await fetch(path, { ...options, headers });
   if (!response.ok) {
-    const error = new Error(`Request failed: ${response.status}`);
+    let detail = null;
+    try {
+      detail = await response.json();
+    } catch {
+      detail = null;
+    }
+    const error = new Error(detail?.error ?? `Request failed: ${response.status}`);
     error.status = response.status;
     throw error;
   }
@@ -210,6 +216,7 @@ async function setupLaunchAtLoginToggle() {
 
 // Generic per-channel login state: id -> { loginId, pollTimer, startCtx }.
 const activeLogin = {};
+let globalManagerLogin = null;
 let expandedChannelId = null; // accordion: at most one channel expanded at a time
 let lastChannels = []; // latest fetched list, so toggle handlers can re-render
 let accordionUserDecided = false; // once the user toggles any channel, stop auto-expanding pending
@@ -261,6 +268,7 @@ async function renderOnce() {
     candidates,
     projects,
     channelsResult,
+    globalManagerResult,
     approvals,
     logs,
   ] = await Promise.all([
@@ -269,6 +277,7 @@ async function renderOnce() {
     safeGet("/api/identities/candidates", []),
     safeGet("/api/projects", []),
     safeGet("/api/channels", []),
+    safeGet("/api/global-manager", { status: "unbound", enabled: false }),
     safeGet("/api/approvals", []),
     safeGet("/api/logs?limit=5&offset=0", { entries: [], total: 0, hasMore: false }),
   ]);
@@ -314,11 +323,61 @@ async function renderOnce() {
   renderCandidates(candidates);
   renderProjects(projects);
   renderChannels(channels);
+  renderGlobalManager(globalManagerResult, channels);
   renderChannelDropdown(channels);
   renderApprovals(approvals);
   renderLogs(logs);
   renderConversation(transcript);
   await renderThreads(status.value, projects.value);
+}
+
+function renderGlobalManager(result, channels) {
+  const manager = result.ok ? result.value : { status: "unbound", enabled: false, lastError: result.error?.message };
+  const feishu = channels.find((channel) => channel.id === "feishu") ?? null;
+  const status = manager.status ?? "unbound";
+  const labels = {
+    unbound: [tWeb("web.globalManager.status.unbound"), "neutral"],
+    ready: [tWeb("web.globalManager.status.ready"), "success"],
+    offline: [tWeb("web.globalManager.status.offline"), "pending"],
+    stale: [tWeb("web.globalManager.status.stale"), "pending"],
+    degraded: [tWeb("web.globalManager.status.degraded"), "pending"],
+  };
+  const [label, tone] = labels[status] ?? labels.unbound;
+  const badge = document.querySelector("#globalManagerStatus");
+  badge.textContent = label;
+  badge.className = `badge ${tone}`;
+  const configured = Boolean(feishu?.config?.configured);
+  document.querySelector("#globalManagerDescription").textContent = manager.manager
+    ? tWeb("web.globalManager.boundAs", { name: manager.manager.displayName ?? manager.manager.stableId })
+    : configured
+      ? tWeb("web.globalManager.useCurrent")
+      : tWeb("web.globalManager.scanHint");
+  const rows = [
+    [tWeb("web.globalManager.row.app"), manager.appId ?? feishu?.config?.appId ?? tWeb("web.globalManager.value.none")],
+    [tWeb("web.globalManager.row.user"), manager.manager?.displayName ?? feishu?.config?.linkedUserName ?? feishu?.config?.linkedUserId ?? tWeb("web.globalManager.value.none")],
+    [tWeb("web.globalManager.row.runtime"), manager.runtime ?? feishu?.runtime?.state ?? tWeb("web.globalManager.value.none")],
+  ];
+  if (manager.lastError) rows.push([tWeb("web.globalManager.row.error"), manager.lastError]);
+  document.querySelector("#globalManagerDetails").innerHTML = rows
+    .map(([key, value]) => `<dt>${escapeHtml(key)}</dt><dd>${escapeHtml(value)}</dd>`)
+    .join("");
+
+  const bind = document.querySelector("#globalManagerBind");
+  bind.hidden = status !== "unbound" && status !== "stale";
+  bind.textContent = configured ? tWeb("web.globalManager.useButton") : tWeb("web.globalManager.bind");
+  document.querySelector("#globalManagerTest").hidden = status !== "ready";
+  document.querySelector("#globalManagerUnbind").hidden = status === "unbound";
+  document.querySelector("#globalManagerRescan").hidden = !configured;
+  document.querySelector("#globalManagerWarning").hidden = !configured;
+
+  const qrBox = document.querySelector("#globalManagerLoginResult");
+  if (globalManagerLogin?.lastView) {
+    qrBox.hidden = false;
+    renderQrInto("globalManagerLoginResult", globalManagerLogin.lastView);
+  } else {
+    qrBox.hidden = true;
+    qrBox.innerHTML = "";
+  }
 }
 
 function renderReadiness(status, identitiesResult, channels) {
@@ -1462,6 +1521,75 @@ function pollQrLogin(ch, startCtx) {
   }, QR_POLL_MS);
 }
 
+async function startGlobalManagerQr() {
+  clearInterval(activeLogin.feishu?.pollTimer);
+  delete activeLogin.feishu;
+  clearInterval(globalManagerLogin?.pollTimer);
+  const button = document.querySelector("#globalManagerBind");
+  button.disabled = true;
+  button.textContent = tWeb("web.qr.generating");
+  const feishu = channelsById.feishu;
+  const body = { domain: feishu?.config?.domain ?? "feishu" };
+  try {
+    const start = await getJson("/api/channels/feishu/login/start", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    const view = normalizedLoginView(start, tWeb);
+    globalManagerLogin = { startCtx: start, lastView: view, pollTimer: null };
+    document.querySelector("#globalManagerLoginResult").hidden = false;
+    renderQrInto("globalManagerLoginResult", view);
+    pollGlobalManagerQr(start);
+  } catch (error) {
+    globalManagerLogin = { lastView: { phase: "failed", qrUrl: null, accountLine: null, message: error.message }, pollTimer: null };
+    document.querySelector("#globalManagerLoginResult").hidden = false;
+    renderQrInto("globalManagerLoginResult", globalManagerLogin.lastView);
+  } finally {
+    button.disabled = false;
+    button.textContent = tWeb("web.globalManager.bind");
+  }
+}
+
+function pollGlobalManagerQr(startCtx) {
+  const params = new URLSearchParams({ loginId: startCtx.loginId ?? "" });
+  for (const key of ["domain", "interval", "expireIn"]) {
+    if (startCtx[key] != null) params.set(key, startCtx[key]);
+  }
+  globalManagerLogin.pollTimer = setInterval(async () => {
+    try {
+      const status = await getJson(`/api/channels/feishu/login/status?${params}`);
+      const view = normalizedLoginView(status, tWeb);
+      if (!view.qrUrl) view.qrUrl = startCtx.qrUrl ?? null;
+      if (globalManagerLogin) globalManagerLogin.lastView = view;
+      document.querySelector("#globalManagerLoginResult").hidden = false;
+      renderQrInto("globalManagerLoginResult", view);
+      if (!["confirmed", "expired", "failed"].includes(view.phase)) return;
+      clearInterval(globalManagerLogin.pollTimer);
+      if (view.phase === "confirmed") {
+        try {
+          await getJson("/api/global-manager/bind", { method: "POST" });
+          globalManagerLogin = null;
+          await render();
+        } catch (error) {
+          globalManagerLogin = { lastView: { phase: "failed", qrUrl: null, accountLine: null, message: error.message }, pollTimer: null };
+          renderQrInto("globalManagerLoginResult", globalManagerLogin.lastView);
+        }
+      }
+    } catch (error) {
+      if (globalManagerLogin) {
+        globalManagerLogin.lastView = {
+          phase: "pending",
+          qrUrl: startCtx.qrUrl ?? null,
+          accountLine: null,
+          message: tWeb("web.channel.qr.checkFailed", { message: error.message }),
+        };
+        renderQrInto("globalManagerLoginResult", globalManagerLogin.lastView);
+      }
+    }
+  }, QR_POLL_MS);
+}
+
 // Renders a normalized login view ({ phase, qrUrl, accountLine, message }) into a
 // channel's `.qr-result` element. Reuses normalizeQrImageSource + qrDataUrl.
 function renderQrInto(elId, view) {
@@ -2051,6 +2179,33 @@ document.querySelector("#refreshConnect")?.addEventListener("click", async (even
     button.disabled = false;
     button.textContent = original;
   }
+});
+
+document.querySelector("#globalManagerBind")?.addEventListener("click", async () => {
+  const feishu = channelsById.feishu;
+  if (feishu?.config?.configured) {
+    const result = await guardedAction(() => getJson("/api/global-manager/bind", { method: "POST" }));
+    if (result) await render();
+    return;
+  }
+  await startGlobalManagerQr();
+});
+
+document.querySelector("#globalManagerTest")?.addEventListener("click", async () => {
+  const result = await guardedAction(() => getJson("/api/global-manager/test", { method: "POST" }));
+  if (result) window.alert(tWeb("web.globalManager.testSent"));
+  await render();
+});
+
+document.querySelector("#globalManagerUnbind")?.addEventListener("click", async () => {
+  if (!window.confirm(tWeb("web.globalManager.unbindConfirm"))) return;
+  const result = await guardedAction(() => getJson("/api/global-manager", { method: "DELETE" }));
+  if (result) await render();
+});
+
+document.querySelector("#globalManagerRescan")?.addEventListener("click", async () => {
+  if (!window.confirm(tWeb("web.globalManager.rescanConfirm"))) return;
+  await startGlobalManagerQr();
 });
 
 document.querySelector("#refreshUsers")?.addEventListener("click", async (event) => {
