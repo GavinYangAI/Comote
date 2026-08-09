@@ -14,6 +14,10 @@ function responseItem(payload, timestamp) {
   return JSON.stringify({ timestamp, type: "response_item", payload }) + "\n";
 }
 
+function agentMessage(message, timestamp = "2026-08-06T06:00:30.000Z") {
+  return JSON.stringify({ timestamp, type: "event_msg", payload: { type: "agent_message", message } }) + "\n";
+}
+
 test("readJsonLines retries a partial final JSON line on the next scan", async () => {
   const dir = await mkdtemp(join(tmpdir(), "comote-monitor-"));
   const file = join(dir, "rollout.jsonl");
@@ -79,6 +83,53 @@ test("baseline history does not become attention, later completion does", async 
     assert.equal(monitor.getTask("thread-1").attention, true);
     monitor.markHandled("thread-1");
     assert.equal(monitor.getTask("thread-1").attention, false);
+  } finally {
+    monitor.stop();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("live Codex message text becomes the current task-card content and a new turn clears it", () => {
+  const monitor = new TaskMonitor({ desktop: null });
+  monitor.ingestLiveEvent({ type: "turnStarted", threadId: "thread-live-content" });
+  monitor.ingestLiveEvent({
+    type: "agentMessageDelta",
+    threadId: "thread-live-content",
+    text: "放大检查后，第 1 张点赞手已经能读出 1 个拇指 + 4 个握拳指节。",
+  });
+
+  assert.equal(
+    monitor.getTask("thread-live-content").currentContent,
+    "放大检查后，第 1 张点赞手已经能读出 1 个拇指 + 4 个握拳指节。",
+  );
+
+  monitor.ingestLiveEvent({ type: "turnCompleted", threadId: "thread-live-content" });
+  assert.match(monitor.getTask("thread-live-content").currentContent, /放大检查后/);
+  monitor.ingestLiveEvent({ type: "turnStarted", threadId: "thread-live-content" });
+  assert.equal(monitor.getTask("thread-live-content").currentContent, null);
+});
+
+test("rollout agent_message content is recovered for tasks not started through Comote", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "comote-monitor-content-"));
+  const file = join(dir, "rollout.jsonl");
+  await writeFile(
+    file,
+    event("task_started")
+      + agentMessage("正在统一角色五指结构，并保留现有动作和版面。")
+      + event("task_complete", "2026-08-06T06:01:00.000Z"),
+  );
+  const desktop = {
+    getStatus: () => ({ state: "connected" }),
+    listThreads: async () => ({
+      data: [{ id: "thread-rollout-content", name: "绘画任务", cwd: dir, path: file }],
+    }),
+  };
+  const monitor = new TaskMonitor({ desktop, indexIntervalMs: 60_000, activeIntervalMs: 60_000 });
+  try {
+    await monitor.start();
+    const task = monitor.getTask("thread-rollout-content");
+    assert.equal(task.currentContent, "正在统一角色五指结构，并保留现有动作和版面。");
+    assert.equal(task.state, "completed");
   } finally {
     monitor.stop();
     await rm(dir, { recursive: true, force: true });
@@ -156,8 +207,11 @@ test("baseline recovers an active task whose start event is older than the tail 
   const monitor = new TaskMonitor({ desktop });
   try {
     await monitor.start();
-    assert.equal(monitor.getTask("long").state, "running");
-    assert.equal(monitor.getTask("long").attention, false);
+    const task = monitor.getTask("long");
+    assert.equal(task.state, "running");
+    assert.equal(task.attention, false);
+    assert.equal(task.currentContent.length, 240);
+    assert.match(task.currentContent, /…$/);
   } finally {
     monitor.stop();
     await rm(dir, { recursive: true, force: true });

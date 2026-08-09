@@ -162,6 +162,8 @@ export default {
   "globalManager.card.taskTitle": "Codex 任务状态",
   "globalManager.card.project": "项目：",
   "globalManager.card.task": "任务：",
+  "globalManager.card.currentExecution": "当前执行：",
+  "globalManager.card.currentExecutionPending": "正在等待 Codex 输出…",
   "globalManager.card.state": "状态",
   "globalManager.card.activity": "最近活动：",
   "globalManager.card.cancel": "取消任务",

@@ -58,6 +58,11 @@ export function globalManagerTaskCard(task) {
       content: [
         `**${t("globalManager.card.project")}** ${escapeMarkdown(task.project?.name ?? t("cmd.status.none"))}`,
         `**${t("globalManager.card.task")}** ${escapeMarkdown(task.title)}`,
+        task.currentContent
+          ? `**${t("globalManager.card.currentExecution")}** ${escapeMarkdown(task.currentContent)}`
+          : task.state === "running"
+            ? `**${t("globalManager.card.currentExecution")}** ${t("globalManager.card.currentExecutionPending")}`
+            : null,
         `**${t("globalManager.card.state")}** ${escapeMarkdown(task.state)}`,
         task.lastActivity?.label ? `**${t("globalManager.card.activity")}** ${escapeMarkdown(task.lastActivity.label)}` : null,
         `\`${task.id}\``,

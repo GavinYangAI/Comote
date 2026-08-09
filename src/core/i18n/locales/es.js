@@ -162,6 +162,8 @@ export default {
   "globalManager.card.taskTitle": "Codex task status",
   "globalManager.card.project": "Project:",
   "globalManager.card.task": "Task:",
+  "globalManager.card.currentExecution": "Current:",
+  "globalManager.card.currentExecutionPending": "Waiting for Codex output…",
   "globalManager.card.state": "State",
   "globalManager.card.activity": "Latest activity:",
   "globalManager.card.cancel": "Cancel task",

@@ -1,6 +1,6 @@
 # Project Memory
 
-Last updated: 2026-08-08
+Last updated: 2026-08-09
 
 ## Project
 
@@ -9,9 +9,10 @@ Last updated: 2026-08-08
 
 ## Current state
 
-- Local `main` includes the Feishu global task manager through commit `5130fa4`.
+- Local `main` includes the Feishu global task manager and the task-card current-execution preview.
 - The feature was fast-forwarded from `codex/feishu-global-manager-app`; it does not merge or cherry-pick `codex/global-task-monitor`.
 - `origin/main` still points to `a99e49c` until the user explicitly requests a push.
+- The task-card preview follow-up was developed on `codex/monitor-session-titles` and fast-forwarded into local `main`; each task-status card shows the latest user-visible Codex message directly below the task title, matching the title-plus-preview information shown by the Codex pet.
 
 ## Feature model
 
@@ -23,6 +24,7 @@ Last updated: 2026-08-08
 - Global-manager card actions are accepted only from the linked manager. Task paths and capabilities are re-resolved from the monitor by `threadId`; card payload paths are never trusted.
 - Approval cards can accept or decline pending Codex approvals across all monitored projects, with text-command fallbacks.
 - Terminal task states update their existing task card and also send a new deduplicated Feishu card so `completed`, `failed`, and `interrupted` transitions produce a user-visible notification.
+- Notification timing can be separated with persisted outbound timestamps: recent completion cards were queued within about 0.3 seconds of the terminal transition and acknowledged by Feishu in about 1 second total. A later visible alert is therefore a Feishu client/conversation notification issue unless these timestamps regress.
 
 ## Workspace cautions
 
@@ -35,7 +37,10 @@ Last updated: 2026-08-08
 
 ## Verification
 
-- `npm test`: 968 tests, 966 passed, 2 skipped, 0 failed.
+- Global-manager merge baseline: `npm test` ran 968 tests, 966 passed, 2 skipped, 0 failed.
+- Task-card preview follow-up captures live `agentMessageDelta` and rollout `agent_message` text, clears stale content at the start of a new turn, and keeps the global dashboard compact.
+- The preview recovery path also retains the latest user-visible assistant message when an active rollout exceeds the normal 512 KiB tail window.
+- Follow-up full regression: `npm test` ran 972 tests, 970 passed, 2 skipped, 0 failed.
 - Targeted final global-manager, task-monitor, approval-security, outbound-queue, Feishu-renderer, and milestone regression suite: 55 passed.
 - `node --check`: all 20 changed or newly added JavaScript files passed.
 - `git diff --check`: passed; only the three pre-existing permission files and two edited web assets report Git line-ending conversion warnings.

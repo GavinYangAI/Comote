@@ -159,6 +159,7 @@ export class TaskMonitor {
     switch (event.type) {
       case "turnStarted":
         task.startedAt = at;
+        task.currentContent = null;
         task.lastActivity = { kind: "started", at };
         this.#setState(task, "running", { attention: false });
         break;
@@ -172,11 +173,20 @@ export class TaskMonitor {
         break;
       case "progress":
       case "milestone":
-      case "agentMessageDelta":
         task.lastActivity = { kind: event.type, label: event.label ?? null, at };
         if (!ACTIVE_STATES.has(task.state)) this.#setState(task, "running", { attention: false });
         else this.#changed(task, "activity", false);
         break;
+      case "agentMessageDelta":
+      case "agentMessage": {
+        const content = activityPreview(event.text);
+        const changed = Boolean(content && content !== task.currentContent);
+        if (content) task.currentContent = content;
+        task.lastActivity = { kind: event.type, at };
+        if (!ACTIVE_STATES.has(task.state)) this.#setState(task, "running", { attention: false });
+        else if (changed) this.#changed(task, "activity", false);
+        break;
+      }
       case "turnCompleted":
         task.completedAt = at;
         task.lastActivity = { kind: "completed", at };
@@ -264,6 +274,7 @@ export class TaskMonitor {
       startedAt: null,
       completedAt: record.completedAt ?? null,
       updatedAt: null,
+      currentContent: null,
       lastActivity: null,
     };
     this.tasks.set(id, task);
@@ -291,10 +302,11 @@ export class TaskMonitor {
       this.#applySessionEntry(task, entry, { baseline });
     }
     // A long active turn can exceed the initial tail window. If the tail has no
-    // lifecycle marker, recover from the beginning once, retaining only the few
-    // lifecycle/request-input records instead of materializing the full log.
+    // lifecycle marker, recover from the beginning once. Keep lifecycle,
+    // request-input, and user-visible assistant-message records so a long turn
+    // can still expose the same latest preview as the Codex pet.
     if (!cursor && start > 0 && task.state === "unknown") {
-      const full = await readJsonLines(task.rolloutPath, 0, fileStat.size, false, isLifecycleEntry);
+      const full = await readJsonLines(task.rolloutPath, 0, fileStat.size, false, isRecoveryEntry);
       for (const entry of full.events) {
         this.#applySessionEntry(task, entry, { baseline });
       }
@@ -340,6 +352,7 @@ export class TaskMonitor {
     if (entry.type === "event_msg") {
       if (payload.type === "task_started") {
         task.startedAt = at;
+        task.currentContent = null;
         task.lastActivity = { kind: "started", at };
         this.#setState(task, "running", {
           attention: false,
@@ -362,13 +375,28 @@ export class TaskMonitor {
           notify: !baseline,
           preserveInteraction: baseline,
         });
-      } else if (["agent_reasoning", "agent_message", "mcp_tool_call_end", "patch_apply_end", "image_generation_end"].includes(payload.type)) {
+      } else if (payload.type === "agent_message") {
+        const content = activityPreview(payload.message ?? payload.text);
+        const changed = Boolean(content && content !== task.currentContent);
+        if (content) task.currentContent = content;
+        task.lastActivity = { kind: payload.type, at };
+        task.updatedAt = at;
+        if (changed && !baseline) this.#changed(task, "activity", false);
+      } else if (["agent_reasoning", "mcp_tool_call_end", "patch_apply_end", "image_generation_end"].includes(payload.type)) {
         task.lastActivity = { kind: payload.type, at };
         task.updatedAt = at;
       }
       return;
     }
     if (entry.type !== "response_item") return;
+    if (payload.type === "message" && payload.role === "assistant") {
+      const content = activityPreview(responseMessageText(payload));
+      const changed = Boolean(content && content !== task.currentContent);
+      if (content) task.currentContent = content;
+      task.lastActivity = { kind: "agent_message", at };
+      if (changed && !baseline) this.#changed(task, "activity", false);
+      return;
+    }
     if (payload.type === "function_call" && payload.name === "request_user_input" && payload.call_id) {
       this.pendingInputByThread.set(task.id, payload.call_id);
       task.lastActivity = { kind: "waitingInput", at };
@@ -450,6 +478,7 @@ export class TaskMonitor {
       startedAt: task.startedAt,
       completedAt: task.completedAt,
       updatedAt: task.updatedAt,
+      currentContent: task.currentContent,
       lastActivity: task.lastActivity,
       capabilities: {
         open: true,
@@ -553,19 +582,33 @@ export async function readJsonLines(filePath, start, end, discardFirstPartial = 
   }
 }
 
-function isLifecycleEntry(entry) {
+function isRecoveryEntry(entry) {
   const payload = entry?.payload;
   if (entry?.type === "event_msg") {
-    return ["task_started", "task_complete", "turn_aborted"].includes(payload?.type);
+    return ["task_started", "task_complete", "turn_aborted", "agent_message"].includes(payload?.type);
   }
   return entry?.type === "response_item"
-    && ((payload?.type === "function_call" && payload?.name === "request_user_input")
+    && ((payload?.type === "message" && payload?.role === "assistant")
+      || (payload?.type === "function_call" && payload?.name === "request_user_input")
       || payload?.type === "function_call_output");
 }
 
 function cleanTitle(value) {
   const text = String(value ?? "").replace(/\s+/g, " ").trim();
   return text.length > 120 ? `${text.slice(0, 117)}...` : text || "Untitled task";
+}
+
+function activityPreview(value, maxLength = 240) {
+  const text = String(value ?? "").replace(/\s+/g, " ").trim();
+  if (!text) return null;
+  return text.length > maxLength ? `${text.slice(0, maxLength - 1)}…` : text;
+}
+
+function responseMessageText(payload) {
+  return (payload.content ?? [])
+    .map((item) => item?.text ?? item?.output_text ?? "")
+    .filter(Boolean)
+    .join(" ");
 }
 
 function normalizeTimestamp(value) {
