@@ -5,6 +5,7 @@ docs/
 node_modules/
 .env
 logs/
+.runtime/
 dist/
 release/
 build-assets/
