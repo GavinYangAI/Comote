@@ -4,6 +4,185 @@ import assert from "node:assert/strict";
 import { createComoteState } from "../src/server/state.js";
 import wechatPlugin from "../src/channels/wechat/index.js";
 import { DingTalkDriver } from "../src/channels/dingtalk/driver.js";
+import { FeishuDriver } from "../src/channels/feishu/driver.js";
+
+test("rejects a Feishu login id that was not started by the current process", async () => {
+  let statusCalls = 0;
+  const state = createComoteState({
+    autoStartFeishuRuntime: false,
+    feishuLoginDriverFactory: () => ({
+      startLogin: async () => ({ loginId: "current_login", domain: "feishu" }),
+      getLoginStatus: async () => {
+        statusCalls += 1;
+        return {
+          state: "confirmed",
+          appId: "cli_stale",
+          appSecret: "secret_stale",
+          userId: "ou_stale",
+          domain: "feishu",
+        };
+      },
+    }),
+  });
+
+  const result = await state.runtime.feishu.getLoginStatus({ loginId: "stale_login" });
+
+  assert.equal(result.state, "expired");
+  assert.equal(statusCalls, 0);
+  assert.equal(state.runtime.feishu.getConfig().linkedUserId, null);
+  await state.shutdown();
+});
+
+test("a confirmed Feishu login id can update binding only once", async (t) => {
+  const originalResolveUserName = FeishuDriver.prototype.resolveUserName;
+  const originalStartEventStream = FeishuDriver.prototype.startEventStream;
+  FeishuDriver.prototype.resolveUserName = async () => "Current user";
+  FeishuDriver.prototype.startEventStream = async () => ({ ok: true });
+  t.after(() => {
+    FeishuDriver.prototype.resolveUserName = originalResolveUserName;
+    FeishuDriver.prototype.startEventStream = originalStartEventStream;
+  });
+
+  let statusCalls = 0;
+  const loginDriver = {
+    startLogin: async () => ({ loginId: "current_login", domain: "feishu" }),
+    getLoginStatus: async () => {
+      statusCalls += 1;
+      return {
+        state: "confirmed",
+        appId: "cli_current",
+        appSecret: "secret_current",
+        userId: "ou_current",
+        domain: "feishu",
+      };
+    },
+  };
+  const state = createComoteState({
+    autoStartFeishuRuntime: false,
+    feishuLoginDriverFactory: () => loginDriver,
+  });
+
+  await state.runtime.feishu.startLogin({ domain: "feishu" });
+  const confirmed = await state.runtime.feishu.getLoginStatus({ loginId: "current_login" });
+  const repeated = await state.runtime.feishu.getLoginStatus({ loginId: "current_login" });
+
+  assert.equal(confirmed.state, "confirmed");
+  assert.equal(repeated.state, "expired");
+  assert.equal(statusCalls, 1);
+  assert.equal(state.runtime.feishu.getConfig().linkedUserId, null);
+  assert.equal(state.runtime.feishu.getConfig().linkedUserAppId, null);
+  await state.shutdown();
+});
+
+test("starting a new Feishu login invalidates an older in-flight result", async (t) => {
+  const originalResolveUserName = FeishuDriver.prototype.resolveUserName;
+  const originalStartEventStream = FeishuDriver.prototype.startEventStream;
+  FeishuDriver.prototype.resolveUserName = async () => "New user";
+  FeishuDriver.prototype.startEventStream = async () => ({ ok: true });
+  t.after(() => {
+    FeishuDriver.prototype.resolveUserName = originalResolveUserName;
+    FeishuDriver.prototype.startEventStream = originalStartEventStream;
+  });
+
+  let loginCounter = 0;
+  let releaseOldStatus;
+  const oldStatusGate = new Promise((resolve) => { releaseOldStatus = resolve; });
+  const state = createComoteState({
+    autoStartFeishuRuntime: false,
+    feishuLoginDriverFactory: () => ({
+      startLogin: async () => {
+        loginCounter += 1;
+        return { loginId: `login_${loginCounter}`, domain: "feishu" };
+      },
+      getLoginStatus: async ({ loginId }) => {
+        if (loginId === "login_1") {
+          await oldStatusGate;
+          return {
+            state: "confirmed",
+            appId: "cli_old",
+            appSecret: "secret_old",
+            userId: "ou_old",
+            domain: "feishu",
+          };
+        }
+        return {
+          state: "confirmed",
+          appId: "cli_new",
+          appSecret: "secret_new",
+          userId: "ou_new",
+          domain: "feishu",
+        };
+      },
+    }),
+  });
+
+  await state.runtime.feishu.startLogin({ domain: "feishu" });
+  const oldStatus = state.runtime.feishu.getLoginStatus({ loginId: "login_1" });
+  await state.runtime.feishu.startLogin({ domain: "feishu" });
+  releaseOldStatus();
+
+  assert.equal((await oldStatus).state, "expired");
+  assert.equal(state.runtime.feishu.getConfig().linkedUserId, null);
+  assert.equal((await state.runtime.feishu.getLoginStatus({ loginId: "login_2" })).state, "confirmed");
+  assert.equal(state.runtime.feishu.getConfig().linkedUserId, null);
+  assert.equal(state.runtime.feishu.getConfig().linkedUserAppId, null);
+  await state.shutdown();
+});
+
+test("changing Feishu app credentials clears the previous app-scoped user binding", async () => {
+  const state = createComoteState({
+    autoStartFeishuRuntime: false,
+    persisted: {
+      channelConfigs: {
+        feishu: {
+          enabled: true,
+          appId: "cli_old",
+          appSecret: "secret_old",
+          linkedUserId: "ou_old",
+          linkedUserName: "Old user",
+          linkedUserAppId: "cli_old",
+          linkedUserSource: "inbound",
+        },
+      },
+    },
+  });
+
+  const updated = await state.runtime.feishu.configure({
+    appId: "cli_new",
+    appSecret: "secret_new",
+  });
+
+  assert.equal(updated.appId, "cli_new");
+  assert.equal(updated.linkedUserId, null);
+  assert.equal(updated.linkedUserName, null);
+  assert.equal(updated.linkedUserAppId, null);
+  await state.shutdown();
+});
+
+test("updating non-credential Feishu settings preserves the scoped user binding", async () => {
+  const state = createComoteState({
+    autoStartFeishuRuntime: false,
+    persisted: {
+      channelConfigs: {
+        feishu: {
+          enabled: true,
+          appId: "cli_same",
+          appSecret: "secret_same",
+          linkedUserId: "ou_same",
+          linkedUserName: "Same user",
+          linkedUserAppId: "cli_same",
+          linkedUserSource: "inbound",
+        },
+      },
+    },
+  });
+
+  const updated = await state.runtime.feishu.configure({ verificationToken: "verify" });
+
+  assert.equal(updated.linkedUserId, "ou_same");
+  assert.equal(updated.linkedUserAppId, "cli_same");
+  await state.shutdown();
+});
 
 test("stores WeChat login results when token and account id are present", () => {
   assert.equal(

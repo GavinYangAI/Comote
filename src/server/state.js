@@ -62,6 +62,7 @@ export function createComoteState({
   taskMonitorOptions = {},
   globalManagerOptions = {},
   autoStartTaskMonitor = true,
+  feishuLoginDriverFactory = null,
 } = {}) {
   // Route the persisted value through i18n's validation so a hand-edited or
   // stale state.json can't desync settings.locale from the locale actually served.
@@ -207,6 +208,17 @@ export function createComoteState({
   // outboundReplies, authorization, stateRef.persist). The plugin owns pure
   // construction (driver/adapter/runtime/renderer + config); everything that
   // closes over this server's runtime state lives here, keyed by channel id.
+  // Feishu registration login ids are process-local capabilities. Keeping only
+  // the currently active one prevents a browser tab left open across a restart
+  // from replaying a previously confirmed registration and restoring stale
+  // app-scoped credentials/open_id values.
+  let activeFeishuLogin = null;
+
+  function expiredFeishuLoginResult(stack) {
+    const result = { state: "expired" };
+    return { ...result, ...stack.plugin.normalizeLoginStatus(result) };
+  }
+
   // Builds a downloadAttachment closure shared by every channel that downloads
   // inbound files (feishu/dingtalk/telegram). The common shape is identical:
   // resolve the sender's current project, sanitize the name, fence the dest path
@@ -318,34 +330,75 @@ export function createComoteState({
       // Feishu login uses a dedicated registration login driver; getLoginStatus
       // reconfigures the driver + resolves the user name + persists + starts the
       // runtime when the result is storable.
-      startLogin(stack, { domain = stack.config.domain } = {}) {
-        return stack.plugin.createLoginDriver({ domain }).startLogin({ domain });
+      async startLogin(stack, { domain = stack.config.domain } = {}) {
+        const loginDriver = feishuLoginDriverFactory?.({ domain })
+          ?? stack.plugin.createLoginDriver({ domain });
+        const result = await loginDriver.startLogin({ domain });
+        activeFeishuLogin = result?.loginId
+          ? { loginId: result.loginId, domain: result.domain ?? domain, inFlight: false }
+          : null;
+        return result;
       },
       async getLoginStatus(stack, { loginId, domain = stack.config.domain, interval, expireIn }) {
-        const result = await stack.plugin.createLoginDriver({ domain }).getLoginStatus({
-          loginId,
-          domain,
-          interval,
-          expireIn,
-        });
+        const session = activeFeishuLogin;
+        if (!session || !loginId || session.loginId !== loginId) {
+          return expiredFeishuLoginResult(stack);
+        }
+        if (session.inFlight) {
+          const result = { state: "pending" };
+          return { ...result, ...stack.plugin.normalizeLoginStatus(result) };
+        }
+        session.inFlight = true;
+        const loginDomain = session.domain;
+        const loginDriver = feishuLoginDriverFactory?.({ domain: loginDomain })
+          ?? stack.plugin.createLoginDriver({ domain: loginDomain });
+        let result;
+        try {
+          result = await loginDriver.getLoginStatus({
+            loginId,
+            domain: loginDomain,
+            interval,
+            expireIn,
+          });
+        } catch (error) {
+          if (activeFeishuLogin === session) {
+            session.inFlight = false;
+          }
+          throw error;
+        }
+        // A new QR login or a settings update may have superseded this request
+        // while the remote poll was in flight. Its result must not overwrite the
+        // newer session's configuration.
+        if (activeFeishuLogin !== session) {
+          return expiredFeishuLoginResult(stack);
+        }
+        const normalized = stack.plugin.normalizeLoginStatus(result);
+        const terminal = ["confirmed", "expired", "failed"].includes(normalized.state);
+        if (terminal) {
+          activeFeishuLogin = null;
+        } else {
+          session.inFlight = false;
+        }
         if (stack.plugin.shouldStoreLoginResult(result)) {
           stack.config = stack.plugin.normalizeConfig({
             ...stack.config,
             enabled: true,
             appId: result.appId,
             appSecret: result.appSecret,
-            domain: result.domain ?? domain,
-            linkedUserId: result.userId,
+            domain: result.domain ?? loginDomain,
+            // The app-registration endpoint returns the scanner's open_id in
+            // the registration service's scope, not the newly created app's
+            // scope. Using it with the new app token causes 99992361
+            // "open_id cross app". The current-app identity is learned later
+            // from an inbound /manager bind message.
+            linkedUserId: null,
+            linkedUserName: null,
+            linkedUserAppId: null,
           });
           stack.runtime.configureDriver(stack.plugin.createDriver(stack.config));
-          let userName = null;
-          try {
-            userName = (await stack.runtime.driver?.resolveUserName?.(result.userId)) ?? null;
-          } catch {
-            userName = null;
-          }
-          stack.config = stack.plugin.normalizeConfig({ ...stack.config, linkedUserName: userName });
-          result.userName = userName;
+          result.userId = null;
+          result.userName = null;
+          result.requiresManagerBind = true;
           await stateRef.persist?.();
           await stack.runtime.start().catch((error) => {
             stack.runtime.lastError = error.message;
@@ -357,7 +410,7 @@ export function createComoteState({
         // frontend still reads), then let the normalized {state,qrUrl,account,message}
         // overwrite. The normalized "failed" vocab is recognized by the frontend
         // poller (transitional until C4 makes the frontend fully normalized-aware).
-        return { ...result, ...stack.plugin.normalizeLoginStatus(result) };
+        return { ...result, ...normalized };
       },
     },
     dingtalk: {
@@ -446,7 +499,6 @@ export function createComoteState({
   const globalManager = new GlobalManager({
     taskMonitor,
     desktop,
-    authorization,
     transcript,
     persisted: persisted.globalManager ?? {},
     getFeishuConfig: () => channelStacks.get("feishu").config,
@@ -626,6 +678,9 @@ export function createComoteState({
         return plugin.publicConfig(stack.config);
       },
       async configure(config) {
+        if (plugin.meta.id === "feishu") {
+          activeFeishuLogin = null;
+        }
         const patch = plugin.normalizeSecretPatch ? plugin.normalizeSecretPatch(config) : config;
         stack.config = plugin.normalizeConfig({ ...stack.config, ...patch });
         // Rebuild the renderer so newly-saved template ids (dingtalk) take effect.

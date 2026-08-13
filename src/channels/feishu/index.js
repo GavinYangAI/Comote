@@ -8,16 +8,30 @@ import { FeishuRuntimeService } from "./runtime.js";
 import { createFeishuRenderer } from "./renderer.js";
 
 function normalizeFeishuConfig(config = {}) {
+  const appId = config.appId ?? null;
+  const linkedUserAppId = config.linkedUserAppId ?? null;
+  const linkedUserSource = config.linkedUserSource ?? null;
+  // Feishu open_id values are application-scoped. A legacy binding without an
+  // app scope, or a binding left behind after changing appId, is unsafe to use
+  // and would fail with 99992361 "open_id cross app".
+  const hasCurrentAppUser = Boolean(
+    config.linkedUserId
+    && appId
+    && linkedUserAppId === appId
+    && linkedUserSource === "inbound",
+  );
   return {
     enabled: Boolean(config.enabled),
-    appId: config.appId ?? null,
+    appId,
     appSecret: config.appSecret ?? null,
     verificationToken: config.verificationToken ?? null,
     encryptKey: config.encryptKey ?? null,
     baseUrl: config.baseUrl ?? null,
     domain: config.domain ?? "feishu",
-    linkedUserId: config.linkedUserId ?? null,
-    linkedUserName: config.linkedUserName ?? null,
+    linkedUserId: hasCurrentAppUser ? config.linkedUserId : null,
+    linkedUserName: hasCurrentAppUser ? (config.linkedUserName ?? null) : null,
+    linkedUserAppId: hasCurrentAppUser ? linkedUserAppId : null,
+    linkedUserSource: hasCurrentAppUser ? linkedUserSource : null,
   };
 }
 
@@ -46,6 +60,8 @@ function publicFeishuConfig(config) {
     domain: config.domain,
     linkedUserId: config.linkedUserId,
     linkedUserName: config.linkedUserName,
+    linkedUserAppId: config.linkedUserAppId,
+    linkedUserSource: config.linkedUserSource,
   };
 }
 

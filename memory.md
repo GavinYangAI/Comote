@@ -24,6 +24,11 @@ Last updated: 2026-08-09
 - Global-manager card actions are accepted only from the linked manager. Task paths and capabilities are re-resolved from the monitor by `threadId`; card payload paths are never trusted.
 - Approval cards can accept or decline pending Codex approvals across all monitored projects, with text-command fallbacks.
 - Terminal task states update their existing task card and also send a new deduplicated Feishu card so `completed`, `failed`, and `interrupted` transitions produce a user-visible notification.
+- Codex global management and Codex project chat are two associated applications over one Feishu transport. Global-manager binding must not authorize a project-chat identity or mutate project selection/session/thread routing state.
+- Text management commands use the explicit `/manager ...` namespace and are routed before project attachment handling. Ordinary text and `/projects`, `/task`, `/cancel`, and `/approve` continue to belong to the project application.
+- Feishu `open_id` values are scoped to one Feishu App. Persist `linkedUserAppId` with `linkedUserId`; discard legacy or mismatched user IDs before global-manager delivery so changing App credentials cannot cause `99992361 open_id cross app`.
+- Feishu QR registration accepts only the current process's active `loginId`, consumes it on a terminal result, and returns `expired` for historical or repeated IDs. This prevents stale browser pollers from replaying an old App-scoped `open_id` after a service restart.
+- Feishu app registration's `user_info.open_id` is not usable with the newly created App token. QR confirmation stores only the App credentials; the global manager is bound only after the user sends `/manager bind` to the new bot, using that current-App inbound `open_id` without authorizing the project application.
 - Notification timing can be separated with persisted outbound timestamps: recent completion cards were queued within about 0.3 seconds of the terminal transition and acknowledged by Feishu in about 1 second total. A later visible alert is therefore a Feishu client/conversation notification issue unless these timestamps regress.
 
 ## Workspace cautions

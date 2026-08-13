@@ -2,8 +2,11 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import { AuthorizationStore } from "../src/core/authorization.js";
+import { CommandRouter } from "../src/core/commands.js";
 import { GlobalManager } from "../src/core/global-manager.js";
 import { OutboundQueue } from "../src/core/outbound-queue.js";
+import { ProjectStore } from "../src/core/projects.js";
+import { SessionStore } from "../src/core/sessions.js";
 import { createFeishuRenderer } from "../src/channels/feishu/renderer.js";
 
 function fixture({ persisted = {}, runtimeState = "running" } = {}) {
@@ -46,6 +49,8 @@ function fixture({ persisted = {}, runtimeState = "running" } = {}) {
     appSecret: "secret",
     linkedUserId: "ou_manager",
     linkedUserName: "Manager",
+    linkedUserAppId: "cli_app",
+    linkedUserSource: "inbound",
   };
   const runtime = {
     running: runtimeState === "running",
@@ -84,7 +89,7 @@ function fixture({ persisted = {}, runtimeState = "running" } = {}) {
   return { manager, taskMonitor, tasks, listeners, config, runtime, desktopCalls, authorization, sent, updated };
 }
 
-test("binding reuses the current Feishu app, verifies delivery, and persists no secret", async () => {
+test("binding reuses the current Feishu transport without changing project-app authorization", async () => {
   const f = fixture();
   const result = await f.manager.bindCurrentFeishu();
 
@@ -92,11 +97,37 @@ test("binding reuses the current Feishu app, verifies delivery, and persists no 
   assert.equal(result.manager.stableId, "ou_manager");
   assert.equal(f.sent[0].receiveIdType, "open_id");
   assert.equal(f.sent[0].receiveId, "ou_manager");
-  assert.equal(f.authorization.isAuthorized({ channel: "feishu", stableId: "ou_manager" }), true);
+  assert.equal(f.authorization.isAuthorized({ channel: "feishu", stableId: "ou_manager" }), false);
   const persisted = f.manager.persistSnapshot();
   assert.equal(persisted.appId, "cli_app");
   assert.equal(persisted.managerOpenId, "ou_manager");
   assert.equal(Object.hasOwn(persisted, "appSecret"), false);
+});
+
+test("an unbound current-app Feishu identity can bind with /manager bind only", async () => {
+  const f = fixture();
+  f.config.linkedUserId = null;
+  f.config.linkedUserName = null;
+  f.config.linkedUserAppId = null;
+  const identity = { channel: "feishu", stableId: "ou_current_app", displayName: "Current manager" };
+
+  assert.match((await f.manager.handleMessage({ identity, text: "/manager tasks" })).text, /manager bind|绑定/i);
+  const result = await f.manager.handleMessage({ identity, text: "/manager bind" });
+
+  assert.match(result.text, /bound|绑定/i);
+  assert.equal(f.manager.publicSnapshot().status, "ready");
+  assert.equal(f.manager.publicSnapshot().manager.stableId, "ou_current_app");
+  assert.equal(f.sent[0].receiveId, "ou_current_app");
+  assert.equal(f.sent[0].receiveIdType, "open_id");
+  assert.equal(f.authorization.isAuthorized(identity), false);
+});
+
+test("the local bind endpoint cannot reuse a QR-registration open_id", async () => {
+  const f = fixture();
+  f.config.linkedUserSource = "registration";
+  await assert.rejects(() => f.manager.bindCurrentFeishu(), /manager bind|绑定/i);
+  assert.equal(f.sent.length, 0);
+  assert.equal(f.manager.publicSnapshot().status, "unbound");
 });
 
 test("a failed verification card does not save or authorize the manager binding", async () => {
@@ -107,28 +138,57 @@ test("a failed verification card does not save or authorize the manager binding"
   assert.equal(f.authorization.isAuthorized({ channel: "feishu", stableId: "ou_manager" }), false);
 });
 
+test("a cross-app open_id failure becomes an actionable rescan error", async () => {
+  const f = fixture();
+  f.runtime.driver.sendCard = async () => {
+    throw new Error('Feishu card send failed: 400 {"code":99992361,"msg":"open_id cross app"}');
+  };
+  await assert.rejects(() => f.manager.bindCurrentFeishu(), /manager bind/i);
+  assert.equal(f.manager.publicSnapshot().status, "unbound");
+});
+
 test("a changed app or linked user makes a persisted binding stale", () => {
   const f = fixture({ persisted: { enabled: true, appId: "old_app", managerOpenId: "ou_manager" } });
   assert.equal(f.manager.publicSnapshot().status, "stale");
   assert.equal(f.manager.isManagerIdentity({ channel: "feishu", stableId: "ou_manager" }), false);
 });
 
-test("global commands use explicit threadId and cwd without a current-project pointer", async () => {
+test("only /manager commands enter global management and use explicit threadId plus cwd", async () => {
   const f = fixture();
   await f.manager.bindCurrentFeishu();
   const identity = { channel: "feishu", stableId: "ou_manager" };
 
-  const detail = await f.manager.handleMessage({ identity, text: "/task 1" });
+  assert.equal(await f.manager.handleMessage({ identity, text: "please continue" }), null);
+  assert.equal(await f.manager.handleMessage({ identity, text: "/task 1" }), null);
+
+  const detail = await f.manager.handleMessage({ identity, text: "/manager task 1" });
   assert.match(detail.text, /thread-123456/);
-  const sent = await f.manager.handleMessage({ identity, text: "/send 1 rerun tests" });
+  const sent = await f.manager.handleMessage({ identity, text: "/manager send 1 rerun tests" });
   assert.match(sent.text, /thread-123456/);
   assert.deepEqual(f.desktopCalls.slice(0, 2), [
     ["resume", { threadId: "thread-123456", cwd: "D:\\work\\Comote" }],
     ["start", { threadId: "thread-123456", cwd: "D:\\work\\Comote", text: "rerun tests" }],
   ]);
-  const noTarget = await f.manager.handleMessage({ identity, text: "please continue" });
-  assert.match(noTarget.text, /Fix tests/);
   assert.equal(f.desktopCalls.length, 2);
+});
+
+test("manager binding authorizes only /manager while project commands keep their own authorization", async () => {
+  const f = fixture();
+  await f.manager.bindCurrentFeishu();
+  const router = new CommandRouter({
+    authorization: f.authorization,
+    projects: new ProjectStore(),
+    sessions: new SessionStore(),
+    globalManager: f.manager,
+  });
+  const identity = { channel: "feishu", stableId: "ou_manager" };
+
+  const managerReply = await router.handleMessageAsync({ identity, text: "/manager tasks" });
+  assert.match(managerReply.text, /Fix tests/);
+  const projectReply = await router.handleMessageAsync({ identity, text: "/projects" });
+  assert.equal(projectReply.kind, "notice");
+  assert.equal(router.currentProjectByIdentity.size, 0);
+  assert.equal(router.threadBindings.size, 0);
 });
 
 test("only the linked manager can cancel or approve from a global card", async () => {

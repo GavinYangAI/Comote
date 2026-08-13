@@ -190,6 +190,13 @@ export class CommandRouter {
   async handleMessageAsync(rawMessage) {
     const message = normalizeChannelMessage(rawMessage);
     const key = this.identityKey(message.identity);
+    // The global manager is a separate application over the same transport.
+    // Its explicit /manager namespace and manager binding authorize it without
+    // mutating or depending on the project application's identity allow-list.
+    const managerReply = await this.handleManagerMessageAsync(message);
+    if (managerReply) {
+      return managerReply;
+    }
     if (!this.authorization.isAuthorized(message.identity)) {
       if (!this.noticedIdentities.has(key)) {
         rememberIdentity(this.noticedIdentities, key);
@@ -197,16 +204,18 @@ export class CommandRouter {
       }
       return this.deniedReply();
     }
-    const managerReply = await this.globalManager?.handleMessage?.(message);
-    if (managerReply) {
-      return managerReply;
-    }
     const reply = await this.dispatchAuthorizedMessage(message);
     if (!this.greetedIdentities.has(key)) {
       rememberIdentity(this.greetedIdentities, key);
       return this.prependWelcome(reply);
     }
     return reply;
+  }
+
+  async handleManagerMessageAsync(rawMessage) {
+    const message = normalizeChannelMessage(rawMessage);
+    if (!/^\/manager(?:\s|$)/.test(message.text)) return null;
+    return await this.globalManager?.handleMessage?.(message) ?? null;
   }
 
   async dispatchAuthorizedMessage(message) {

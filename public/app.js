@@ -333,6 +333,10 @@ async function renderOnce() {
 
 function renderGlobalManager(result, channels) {
   const manager = result.ok ? result.value : { status: "unbound", enabled: false, lastError: result.error?.message };
+  if (manager.manager && globalManagerLogin) {
+    clearInterval(globalManagerLogin.pollTimer);
+    globalManagerLogin = null;
+  }
   const feishu = channels.find((channel) => channel.id === "feishu") ?? null;
   const status = manager.status ?? "unbound";
   const labels = {
@@ -1567,14 +1571,17 @@ function pollGlobalManagerQr(startCtx) {
       if (!["confirmed", "expired", "failed"].includes(view.phase)) return;
       clearInterval(globalManagerLogin.pollTimer);
       if (view.phase === "confirmed") {
-        try {
-          await getJson("/api/global-manager/bind", { method: "POST" });
-          globalManagerLogin = null;
-          await render();
-        } catch (error) {
-          globalManagerLogin = { lastView: { phase: "failed", qrUrl: null, accountLine: null, message: error.message }, pollTimer: null };
-          renderQrInto("globalManagerLoginResult", globalManagerLogin.lastView);
-        }
+        globalManagerLogin = {
+          lastView: {
+            phase: "pending",
+            qrUrl: null,
+            accountLine: null,
+            message: tWeb("web.globalManager.bindInChat"),
+          },
+          pollTimer: null,
+        };
+        renderQrInto("globalManagerLoginResult", globalManagerLogin.lastView);
+        await render();
       }
     } catch (error) {
       if (globalManagerLogin) {
@@ -2184,8 +2191,7 @@ document.querySelector("#refreshConnect")?.addEventListener("click", async (even
 document.querySelector("#globalManagerBind")?.addEventListener("click", async () => {
   const feishu = channelsById.feishu;
   if (feishu?.config?.configured) {
-    const result = await guardedAction(() => getJson("/api/global-manager/bind", { method: "POST" }));
-    if (result) await render();
+    window.alert(tWeb("web.globalManager.bindInChat"));
     return;
   }
   await startGlobalManagerQr();
@@ -2204,7 +2210,6 @@ document.querySelector("#globalManagerUnbind")?.addEventListener("click", async 
 });
 
 document.querySelector("#globalManagerRescan")?.addEventListener("click", async () => {
-  if (!window.confirm(tWeb("web.globalManager.rescanConfirm"))) return;
   await startGlobalManagerQr();
 });
 

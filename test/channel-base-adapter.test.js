@@ -44,6 +44,33 @@ test("routes a direct message and enqueues a semantic text reply", async () => {
   assert.equal(enqueued[0].conversationId, "c1");
 });
 
+test("routes manager commands before project attachment handling", async () => {
+  let downloads = 0;
+  let projectRoutes = 0;
+  const { adapter, enqueued, detected } = make({
+    commandRouter: {
+      handleManagerMessageAsync: async (message) => (
+        message.text.startsWith("/manager") ? { kind: "text", text: "manager:ok" } : null
+      ),
+      handleMessageAsync: async () => { projectRoutes += 1; return { kind: "text", text: "project" }; },
+    },
+    downloadAttachment: async () => { downloads += 1; return { relativePath: ".comote/uploads/file.txt" }; },
+  });
+
+  await adapter.handleInbound({
+    id: "manager-1",
+    chat: "c1",
+    user: "u1",
+    text: "/manager tasks",
+    attachments: [{ fileName: "file.txt" }],
+  });
+
+  assert.equal(downloads, 0);
+  assert.equal(projectRoutes, 0);
+  assert.equal(detected.length, 0);
+  assert.equal(enqueued[0].text, "manager:ok");
+});
+
 test("ignores group messages when allowGroups is false, with ONE direct-only notice per group (B-12a)", async () => {
   const { adapter, enqueued } = make();
   const out = await adapter.handleInbound({ id: "m2", chat: "g1", user: "u1", text: "hi", group: true });

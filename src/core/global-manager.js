@@ -14,7 +14,6 @@ export class GlobalManager {
   constructor({
     taskMonitor,
     desktop,
-    authorization,
     transcript = null,
     getFeishuConfig,
     getFeishuRuntime,
@@ -28,7 +27,6 @@ export class GlobalManager {
   }) {
     this.taskMonitor = taskMonitor;
     this.desktop = desktop;
-    this.authorization = authorization;
     this.transcript = transcript;
     this.getFeishuConfig = getFeishuConfig;
     this.getFeishuRuntime = getFeishuRuntime;
@@ -113,7 +111,7 @@ export class GlobalManager {
   status() {
     if (!this.binding.enabled) return "unbound";
     const config = this.getFeishuConfig?.() ?? {};
-    if (!config.appId || !config.linkedUserId || config.appId !== this.binding.appId || config.linkedUserId !== this.binding.managerOpenId) {
+    if (!config.appId || config.appId !== this.binding.appId || !this.binding.managerOpenId) {
       return "stale";
     }
     const runtimeState = this.getFeishuRuntime?.()?.getStatus?.().state;
@@ -136,8 +134,30 @@ export class GlobalManager {
 
   async bindCurrentFeishu() {
     const config = this.getFeishuConfig?.() ?? {};
+    if (
+      !config.linkedUserId
+      || config.linkedUserAppId !== config.appId
+      || config.linkedUserSource !== "inbound"
+    ) {
+      throw new Error(t("globalManager.error.bindFromChat"));
+    }
+    return this.bindIdentity({
+      channel: MANAGER_CHANNEL,
+      stableId: config.linkedUserId,
+      displayName: config.linkedUserName ?? config.linkedUserId,
+    });
+  }
+
+  async bindIdentity(identity) {
+    const config = this.getFeishuConfig?.() ?? {};
     const runtime = this.getFeishuRuntime?.();
-    if (!config.enabled || !config.appId || !config.appSecret || !config.linkedUserId) {
+    if (
+      !config.enabled
+      || !config.appId
+      || !config.appSecret
+      || identity?.channel !== MANAGER_CHANNEL
+      || !identity?.stableId
+    ) {
       throw new Error(t("globalManager.error.feishuNotBound"));
     }
     if (!runtime?.driver?.sendCard) {
@@ -147,23 +167,25 @@ export class GlobalManager {
       await runtime.start?.();
     }
     const snapshot = this.taskMonitor?.snapshot?.() ?? {};
-    const sent = await runtime.driver.sendCard({
-      receiveId: config.linkedUserId,
-      receiveIdType: "open_id",
-      card: globalManagerDashboardCard(snapshot),
-    });
+    let sent;
+    try {
+      sent = await runtime.driver.sendCard({
+        receiveId: identity.stableId,
+        receiveIdType: "open_id",
+        card: globalManagerDashboardCard(snapshot),
+      });
+    } catch (error) {
+      if (isCrossAppOpenIdError(error)) {
+        throw new Error(t("globalManager.error.crossAppOpenId"));
+      }
+      throw error;
+    }
     if (!sent?.messageId) throw new Error(t("globalManager.error.testFailed"));
-    this.authorization.confirmIdentity({
-      channel: MANAGER_CHANNEL,
-      stableId: config.linkedUserId,
-      displayName: config.linkedUserName ?? config.linkedUserId,
-      role: "owner",
-    });
     this.binding = normalizeBinding({
       enabled: true,
       appId: config.appId,
-      managerOpenId: config.linkedUserId,
-      managerName: config.linkedUserName ?? config.linkedUserId,
+      managerOpenId: identity.stableId,
+      managerName: identity.displayName ?? identity.stableId,
       dashboardMessageId: sent.messageId,
       taskCards: {},
       approvalCards: {},
@@ -199,22 +221,32 @@ export class GlobalManager {
   }
 
   async handleMessage(message) {
-    if (!this.isManagerIdentity(message.identity)) return null;
     const text = String(message.text ?? "").trim();
-    const [command = "", ...restParts] = text.split(/\s+/);
+    const [namespace = "", command = "", ...restParts] = text.split(/\s+/);
+    if (namespace !== "/manager") return null;
     const rest = restParts.join(" ").trim();
     try {
-      if (command === "/tasks" || command === "/help" || !command.startsWith("/")) {
+      if (command === "bind") {
+        if (this.binding.enabled && this.status() !== "stale" && !this.isManagerIdentity(message.identity)) {
+          throw new Error(t("globalManager.error.alreadyBound"));
+        }
+        await this.bindIdentity(message.identity);
+        return { kind: "text", text: t("globalManager.command.bound") };
+      }
+      if (!this.isManagerIdentity(message.identity)) {
+        return { kind: "error", text: t("globalManager.error.bindFromChat") };
+      }
+      if (!command || command === "tasks" || command === "help") {
         return { kind: "text", text: this.tasksText() };
       }
-      if (command === "/task") return { kind: "text", text: this.taskText(rest) };
-      if (command === "/send" || command === "/continue") {
+      if (command === "task") return { kind: "text", text: this.taskText(rest) };
+      if (command === "send" || command === "continue") {
         const [selector, ...messageParts] = rest.split(/\s+/);
         return { kind: "text", text: await this.sendToTask(selector, messageParts.join(" ").trim()) };
       }
-      if (command === "/cancel") return { kind: "text", text: await this.cancelTask(rest) };
-      if (command === "/approve") return { kind: "text", text: await this.resolveApproval(rest, "accept") };
-      if (command === "/deny") return { kind: "text", text: await this.resolveApproval(rest, "decline") };
+      if (command === "cancel") return { kind: "text", text: await this.cancelTask(rest) };
+      if (command === "approve") return { kind: "text", text: await this.resolveApproval(rest, "accept") };
+      if (command === "deny") return { kind: "text", text: await this.resolveApproval(rest, "decline") };
       return { kind: "error", text: t("globalManager.command.unknown", { command }) };
     } catch (error) {
       return { kind: "error", text: error.message };
@@ -622,4 +654,9 @@ function normalizeBinding(raw = {}) {
     updatedAt: raw.updatedAt ?? null,
     lastError: raw.lastError ?? null,
   };
+}
+
+function isCrossAppOpenIdError(error) {
+  const message = String(error?.message ?? error ?? "");
+  return message.includes("99992361") || /open_id\s+cross\s+app/i.test(message);
 }
