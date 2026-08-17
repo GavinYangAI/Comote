@@ -3,11 +3,23 @@ import assert from "node:assert/strict";
 import { REPLY_KINDS, isReplyKind, routerReplyToSemantic } from "../src/channels/base/messages.js";
 
 test("REPLY_KINDS lists the semantic kinds; isReplyKind validates", () => {
-  for (const k of ["text", "status", "approval", "approvalResolved", "picker", "media"]) {
+  for (const k of ["text", "status", "approval", "approvalResolved", "picker", "media", "managerBind"]) {
     assert.ok(REPLY_KINDS.includes(k));
   }
   assert.equal(isReplyKind("text"), true);
   assert.equal(isReplyKind("nope"), false);
+});
+
+test("routerReplyToSemantic preserves the global-manager bind-card kind", () => {
+  const out = routerReplyToSemantic(
+    { kind: "managerBind" },
+    { channel: "feishu-global-manager", conversationId: "manager-chat" },
+  );
+  assert.deepEqual(out, {
+    channel: "feishu-global-manager",
+    conversationId: "manager-chat",
+    kind: "managerBind",
+  });
 });
 
 test("routerReplyToSemantic maps a picker result to a picker reply", () => {

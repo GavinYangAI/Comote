@@ -61,6 +61,30 @@ test("generic dispatch PUT config returns the redacted public config", async () 
   assert.equal(body.appSecret, undefined, "raw secret must never be returned");
 });
 
+test("global-manager Feishu config has a dedicated API and never changes project chat", async () => {
+  const { server, port } = await startServer();
+  const managerResponse = await fetch(
+    `http://127.0.0.1:${port}/api/channels/feishu-global-manager/config`,
+    {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ enabled: true, appId: "cli_manager", appSecret: "manager_secret" }),
+    },
+  );
+  const managerConfig = await managerResponse.json();
+  const projectConfig = await fetch(
+    `http://127.0.0.1:${port}/api/channels/feishu/config`,
+  ).then((response) => response.json());
+  server.close();
+
+  assert.equal(managerResponse.status, 200);
+  assert.equal(managerConfig.appId, "cli_manager");
+  assert.equal(managerConfig.hasAppSecret, true);
+  assert.equal(managerConfig.appSecret, undefined);
+  assert.equal(projectConfig.appId, null);
+  assert.equal(projectConfig.hasAppSecret, false);
+});
+
 test("generic dispatch GET config returns the public config", async () => {
   const { server, port } = await startServer();
   const response = await fetch(`http://127.0.0.1:${port}/api/channels/wechat/config`);

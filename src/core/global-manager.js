@@ -6,7 +6,7 @@ import {
 } from "../channels/feishu/global-manager-cards.js";
 import { t } from "./i18n/index.js";
 
-const MANAGER_CHANNEL = "feishu";
+const DEFAULT_MANAGER_CHANNEL = "feishu-global-manager";
 const ACTIVE_STATES = new Set(["running", "waiting"]);
 const TERMINAL_NOTIFICATION_STATES = new Set(["completed", "failed", "interrupted"]);
 
@@ -19,6 +19,7 @@ export class GlobalManager {
     getFeishuRuntime,
     outboundQueue = null,
     deliverFeishuQueue = null,
+    channelId = DEFAULT_MANAGER_CHANNEL,
     persisted = {},
     logger = console,
     now = Date.now,
@@ -32,6 +33,7 @@ export class GlobalManager {
     this.getFeishuRuntime = getFeishuRuntime;
     this.outboundQueue = outboundQueue;
     this.deliverFeishuQueue = deliverFeishuQueue;
+    this.channelId = channelId;
     this.logger = logger;
     this.now = now;
     this.dashboardIntervalMs = dashboardIntervalMs;
@@ -40,7 +42,7 @@ export class GlobalManager {
     this.dashboardTimer = null;
     this.taskTimers = new Map();
     this.unsubscribeMonitor = null;
-    this.binding = normalizeBinding(persisted);
+    this.binding = normalizeBinding(persisted, this.channelId);
   }
 
   setPersistHandler(handler) {
@@ -76,7 +78,7 @@ export class GlobalManager {
   persistSnapshot() {
     return {
       enabled: this.binding.enabled,
-      channelId: MANAGER_CHANNEL,
+      channelId: this.channelId,
       appId: this.binding.appId,
       managerOpenId: this.binding.managerOpenId,
       managerName: this.binding.managerName,
@@ -96,12 +98,14 @@ export class GlobalManager {
     return {
       status,
       enabled: status !== "unbound",
-      channelId: MANAGER_CHANNEL,
+      channelId: this.channelId,
       appId: this.binding.appId,
       manager: this.binding.managerOpenId
         ? { stableId: this.binding.managerOpenId, displayName: this.binding.managerName ?? this.binding.managerOpenId }
         : null,
       configuredAppId: config.appId ?? null,
+      configured: Boolean(config.enabled && config.appId && config.appSecret),
+      domain: config.domain ?? "feishu",
       runtime: runtime?.getStatus?.().state ?? "not_configured",
       updatedAt: this.binding.updatedAt,
       lastError: this.binding.lastError ?? null,
@@ -126,7 +130,7 @@ export class GlobalManager {
   isManagerIdentity(identity) {
     return Boolean(
       this.binding.enabled
-      && identity?.channel === MANAGER_CHANNEL
+      && identity?.channel === this.channelId
       && identity.stableId === this.binding.managerOpenId
       && this.status() !== "stale",
     );
@@ -142,7 +146,7 @@ export class GlobalManager {
       throw new Error(t("globalManager.error.bindFromChat"));
     }
     return this.bindIdentity({
-      channel: MANAGER_CHANNEL,
+      channel: this.channelId,
       stableId: config.linkedUserId,
       displayName: config.linkedUserName ?? config.linkedUserId,
     });
@@ -155,7 +159,7 @@ export class GlobalManager {
       !config.enabled
       || !config.appId
       || !config.appSecret
-      || identity?.channel !== MANAGER_CHANNEL
+      || identity?.channel !== this.channelId
       || !identity?.stableId
     ) {
       throw new Error(t("globalManager.error.feishuNotBound"));
@@ -192,7 +196,7 @@ export class GlobalManager {
       lastDeliveredVersion: snapshot.version ?? 0,
       updatedAt: new Date(this.now()).toISOString(),
       lastError: null,
-    });
+    }, this.channelId);
     await this.persist();
     this.scheduleDashboard(0);
     return this.publicSnapshot();
@@ -215,7 +219,7 @@ export class GlobalManager {
   async unbind() {
     this.stopTimers();
     this.outboundQueue?.removeWhere?.((entry) => entry.kind === "globalManagerCard");
-    this.binding = normalizeBinding({});
+    this.binding = normalizeBinding({}, this.channelId);
     await this.persist();
     return this.publicSnapshot();
   }
@@ -234,7 +238,10 @@ export class GlobalManager {
         return { kind: "text", text: t("globalManager.command.bound") };
       }
       if (!this.isManagerIdentity(message.identity)) {
-        return { kind: "error", text: t("globalManager.error.bindFromChat") };
+        if (!this.binding.enabled || this.status() === "stale") {
+          return { kind: "managerBind" };
+        }
+        return { kind: "error", text: t("globalManager.error.alreadyBound") };
       }
       if (!command || command === "tasks" || command === "help") {
         return { kind: "text", text: this.tasksText() };
@@ -251,6 +258,16 @@ export class GlobalManager {
     } catch (error) {
       return { kind: "error", text: error.message };
     }
+  }
+
+  handleUnnamespacedMessage(message) {
+    if (this.isManagerIdentity(message?.identity)) {
+      return { kind: "text", text: this.tasksText() };
+    }
+    if (!this.binding.enabled || this.status() === "stale") {
+      return { kind: "managerBind" };
+    }
+    return { kind: "error", text: t("globalManager.error.alreadyBound") };
   }
 
   tasksText() {
@@ -324,6 +341,28 @@ export class GlobalManager {
   async handleCardAction(action) {
     const kind = action?.value?.kind;
     if (!kind?.startsWith("global_manager_")) return null;
+    if (kind === "global_manager_bind") {
+      if (!action.openId) {
+        return { toast: { type: "error", content: t("feishu.toast.notAuthorized") } };
+      }
+      const identity = {
+        channel: this.channelId,
+        stableId: action.openId,
+        displayName: action.openId,
+      };
+      if (this.binding.enabled && this.status() !== "stale") {
+        if (!this.isManagerIdentity(identity)) {
+          return { toast: { type: "error", content: t("globalManager.error.alreadyBound") } };
+        }
+        return { toast: { type: "success", content: t("globalManager.command.bound") } };
+      }
+      try {
+        await this.bindIdentity(identity);
+        return { toast: { type: "success", content: t("globalManager.command.bound") } };
+      } catch (error) {
+        return { toast: { type: "error", content: error.message } };
+      }
+    }
     if (!action.openId || action.openId !== this.binding.managerOpenId || !this.isReady()) {
       return { toast: { type: "error", content: t("feishu.toast.notAuthorized") } };
     }
@@ -580,7 +619,7 @@ export class GlobalManager {
 
   enqueueCard({ cardType, entityId, card, messageId = null, deliveryVersion = null, dedupeKey }) {
     return this.outboundQueue.enqueue({
-      channel: MANAGER_CHANNEL,
+      channel: this.channelId,
       conversationId: this.binding.managerOpenId,
       receiveIdType: "open_id",
       kind: "globalManagerCard",
@@ -640,10 +679,10 @@ export class GlobalManager {
   }
 }
 
-function normalizeBinding(raw = {}) {
+function normalizeBinding(raw = {}, channelId = DEFAULT_MANAGER_CHANNEL) {
   return {
     enabled: Boolean(raw.enabled),
-    channelId: MANAGER_CHANNEL,
+    channelId,
     appId: raw.appId ?? null,
     managerOpenId: raw.managerOpenId ?? null,
     managerName: raw.managerName ?? null,

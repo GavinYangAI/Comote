@@ -10,6 +10,31 @@ const STATE_TEMPLATES = {
   unknown: "grey",
 };
 
+export function globalManagerBindCard() {
+  return {
+    config: { wide_screen_mode: true },
+    header: {
+      title: { tag: "plain_text", content: t("globalManager.card.bindTitle") },
+      template: "blue",
+    },
+    elements: [
+      { tag: "markdown", content: t("globalManager.card.bindBody") },
+      {
+        tag: "action",
+        actions: [
+          {
+            tag: "button",
+            text: { tag: "plain_text", content: t("globalManager.card.bindButton") },
+            type: "primary",
+            value: { kind: "global_manager_bind" },
+          },
+        ],
+      },
+      { tag: "note", elements: [{ tag: "plain_text", content: t("globalManager.card.bindFallback") }] },
+    ],
+  };
+}
+
 export function globalManagerDashboardCard(snapshot = {}) {
   const counts = snapshot.counts ?? {};
   const tasks = (snapshot.tasks ?? []).slice(0, 12);

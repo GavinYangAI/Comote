@@ -1,7 +1,15 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { globalManagerDashboardCard, globalManagerTaskCard } from "../src/channels/feishu/global-manager-cards.js";
+import { globalManagerBindCard, globalManagerDashboardCard, globalManagerTaskCard } from "../src/channels/feishu/global-manager-cards.js";
+
+test("global manager bind card has a button and a text-command fallback", () => {
+  const card = globalManagerBindCard();
+  const action = card.elements.find((element) => element.tag === "action");
+  assert.equal(action.actions[0].text.content, "/manager bind");
+  assert.equal(action.actions[0].value.kind, "global_manager_bind");
+  assert.match(JSON.stringify(card), /\/manager bind/);
+});
 
 test("global manager task card shows the current Codex content directly below the task title", () => {
   const card = globalManagerTaskCard({

@@ -9,6 +9,8 @@ import { ProjectStore } from "../src/core/projects.js";
 import { SessionStore } from "../src/core/sessions.js";
 import { createFeishuRenderer } from "../src/channels/feishu/renderer.js";
 
+const MANAGER_CHANNEL = "feishu-global-manager";
+
 function fixture({ persisted = {}, runtimeState = "running" } = {}) {
   const sent = [];
   const updated = [];
@@ -76,6 +78,7 @@ function fixture({ persisted = {}, runtimeState = "running" } = {}) {
   };
   const authorization = new AuthorizationStore();
   const manager = new GlobalManager({
+    channelId: MANAGER_CHANNEL,
     taskMonitor,
     desktop,
     authorization,
@@ -89,7 +92,7 @@ function fixture({ persisted = {}, runtimeState = "running" } = {}) {
   return { manager, taskMonitor, tasks, listeners, config, runtime, desktopCalls, authorization, sent, updated };
 }
 
-test("binding reuses the current Feishu transport without changing project-app authorization", async () => {
+test("binding uses the dedicated manager transport without changing project-app authorization", async () => {
   const f = fixture();
   const result = await f.manager.bindCurrentFeishu();
 
@@ -109,9 +112,9 @@ test("an unbound current-app Feishu identity can bind with /manager bind only", 
   f.config.linkedUserId = null;
   f.config.linkedUserName = null;
   f.config.linkedUserAppId = null;
-  const identity = { channel: "feishu", stableId: "ou_current_app", displayName: "Current manager" };
+  const identity = { channel: MANAGER_CHANNEL, stableId: "ou_current_app", displayName: "Current manager" };
 
-  assert.match((await f.manager.handleMessage({ identity, text: "/manager tasks" })).text, /manager bind|绑定/i);
+  assert.equal((await f.manager.handleMessage({ identity, text: "/manager tasks" })).kind, "managerBind");
   const result = await f.manager.handleMessage({ identity, text: "/manager bind" });
 
   assert.match(result.text, /bound|绑定/i);
@@ -120,6 +123,42 @@ test("an unbound current-app Feishu identity can bind with /manager bind only", 
   assert.equal(f.sent[0].receiveId, "ou_current_app");
   assert.equal(f.sent[0].receiveIdType, "open_id");
   assert.equal(f.authorization.isAuthorized(identity), false);
+});
+
+test("an unbound manager app offers a bind card and its button binds the current-app identity", async () => {
+  const f = fixture();
+  f.config.linkedUserId = null;
+  f.config.linkedUserName = null;
+  f.config.linkedUserAppId = null;
+  const identity = { channel: MANAGER_CHANNEL, stableId: "ou_card_user", displayName: "Card user" };
+
+  assert.equal(f.manager.handleUnnamespacedMessage({ identity, text: "hello" }).kind, "managerBind");
+  assert.equal((await f.manager.handleMessage({ identity, text: "/manager" })).kind, "managerBind");
+
+  const result = await f.manager.handleCardAction({
+    openId: identity.stableId,
+    value: { kind: "global_manager_bind" },
+  });
+
+  assert.equal(result.toast.type, "success");
+  assert.equal(f.manager.publicSnapshot().status, "ready");
+  assert.equal(f.manager.publicSnapshot().manager.stableId, identity.stableId);
+  assert.equal(f.sent[0].receiveId, identity.stableId);
+  assert.equal(f.authorization.isAuthorized({ channel: "feishu", stableId: identity.stableId }), false);
+});
+
+test("a stale bind card cannot replace another active global manager", async () => {
+  const f = fixture();
+  await f.manager.bindCurrentFeishu();
+
+  const result = await f.manager.handleCardAction({
+    openId: "ou_other",
+    value: { kind: "global_manager_bind" },
+  });
+
+  assert.equal(result.toast.type, "error");
+  assert.equal(f.manager.publicSnapshot().manager.stableId, "ou_manager");
+  assert.equal(f.sent.length, 1);
 });
 
 test("the local bind endpoint cannot reuse a QR-registration open_id", async () => {
@@ -150,13 +189,13 @@ test("a cross-app open_id failure becomes an actionable rescan error", async () 
 test("a changed app or linked user makes a persisted binding stale", () => {
   const f = fixture({ persisted: { enabled: true, appId: "old_app", managerOpenId: "ou_manager" } });
   assert.equal(f.manager.publicSnapshot().status, "stale");
-  assert.equal(f.manager.isManagerIdentity({ channel: "feishu", stableId: "ou_manager" }), false);
+  assert.equal(f.manager.isManagerIdentity({ channel: MANAGER_CHANNEL, stableId: "ou_manager" }), false);
 });
 
 test("only /manager commands enter global management and use explicit threadId plus cwd", async () => {
   const f = fixture();
   await f.manager.bindCurrentFeishu();
-  const identity = { channel: "feishu", stableId: "ou_manager" };
+  const identity = { channel: MANAGER_CHANNEL, stableId: "ou_manager" };
 
   assert.equal(await f.manager.handleMessage({ identity, text: "please continue" }), null);
   assert.equal(await f.manager.handleMessage({ identity, text: "/task 1" }), null);
@@ -181,7 +220,7 @@ test("manager binding authorizes only /manager while project commands keep their
     sessions: new SessionStore(),
     globalManager: f.manager,
   });
-  const identity = { channel: "feishu", stableId: "ou_manager" };
+  const identity = { channel: MANAGER_CHANNEL, stableId: "ou_manager" };
 
   const managerReply = await router.handleMessageAsync({ identity, text: "/manager tasks" });
   assert.match(managerReply.text, /Fix tests/);
@@ -273,7 +312,7 @@ test("queued terminal notifications are deduplicated by task occurrence and neve
   await f.manager.sendTaskNotification(task);
   await f.manager.sendTaskNotification(task);
 
-  const notifications = queue.list({ channel: "feishu" }).filter(
+  const notifications = queue.list({ channel: MANAGER_CHANNEL }).filter(
     (entry) => entry.globalManagerCardType === "notification",
   );
   assert.equal(notifications.length, 1);
@@ -292,7 +331,7 @@ test("global cards use the persisted outbound queue and replace a missing update
   await f.manager.bindCurrentFeishu();
 
   await f.manager.flushTask("thread-running");
-  const first = queue.list({ channel: "feishu" })[0];
+  const first = queue.list({ channel: MANAGER_CHANNEL })[0];
   assert.equal(first.kind, "globalManagerCard");
   assert.equal(first.receiveIdType, "open_id");
   assert.equal(drains, 1);
@@ -306,7 +345,7 @@ test("global cards use the persisted outbound queue and replace a missing update
   f.tasks[1].updatedAt = "2026-08-07T12:00:00.000Z";
   f.runtime.driver.updateCard = async () => { throw new Error("message missing"); };
   await f.manager.flushTask("thread-running");
-  const replacement = queue.list({ channel: "feishu" })[0];
+  const replacement = queue.list({ channel: MANAGER_CHANNEL })[0];
   await renderer.render(replacement, { driver: f.runtime.driver, runtime: { globalManager: f.manager } });
   assert.notEqual(f.manager.persistSnapshot().taskCards["thread-running"].messageId, firstMessageId);
 

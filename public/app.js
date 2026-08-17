@@ -217,6 +217,7 @@ async function setupLaunchAtLoginToggle() {
 // Generic per-channel login state: id -> { loginId, pollTimer, startCtx }.
 const activeLogin = {};
 let globalManagerLogin = null;
+let globalManagerSnapshot = null;
 let expandedChannelId = null; // accordion: at most one channel expanded at a time
 let lastChannels = []; // latest fetched list, so toggle handlers can re-render
 let accordionUserDecided = false; // once the user toggles any channel, stop auto-expanding pending
@@ -323,7 +324,7 @@ async function renderOnce() {
   renderCandidates(candidates);
   renderProjects(projects);
   renderChannels(channels);
-  renderGlobalManager(globalManagerResult, channels);
+  renderGlobalManager(globalManagerResult);
   renderChannelDropdown(channels);
   renderApprovals(approvals);
   renderLogs(logs);
@@ -331,13 +332,13 @@ async function renderOnce() {
   await renderThreads(status.value, projects.value);
 }
 
-function renderGlobalManager(result, channels) {
+function renderGlobalManager(result) {
   const manager = result.ok ? result.value : { status: "unbound", enabled: false, lastError: result.error?.message };
+  globalManagerSnapshot = manager;
   if (manager.manager && globalManagerLogin) {
     clearInterval(globalManagerLogin.pollTimer);
     globalManagerLogin = null;
   }
-  const feishu = channels.find((channel) => channel.id === "feishu") ?? null;
   const status = manager.status ?? "unbound";
   const labels = {
     unbound: [tWeb("web.globalManager.status.unbound"), "neutral"],
@@ -350,16 +351,16 @@ function renderGlobalManager(result, channels) {
   const badge = document.querySelector("#globalManagerStatus");
   badge.textContent = label;
   badge.className = `badge ${tone}`;
-  const configured = Boolean(feishu?.config?.configured);
+  const configured = Boolean(manager.configured);
   document.querySelector("#globalManagerDescription").textContent = manager.manager
     ? tWeb("web.globalManager.boundAs", { name: manager.manager.displayName ?? manager.manager.stableId })
     : configured
       ? tWeb("web.globalManager.useCurrent")
       : tWeb("web.globalManager.scanHint");
   const rows = [
-    [tWeb("web.globalManager.row.app"), manager.appId ?? feishu?.config?.appId ?? tWeb("web.globalManager.value.none")],
-    [tWeb("web.globalManager.row.user"), manager.manager?.displayName ?? feishu?.config?.linkedUserName ?? feishu?.config?.linkedUserId ?? tWeb("web.globalManager.value.none")],
-    [tWeb("web.globalManager.row.runtime"), manager.runtime ?? feishu?.runtime?.state ?? tWeb("web.globalManager.value.none")],
+    [tWeb("web.globalManager.row.app"), manager.appId ?? manager.configuredAppId ?? tWeb("web.globalManager.value.none")],
+    [tWeb("web.globalManager.row.user"), manager.manager?.displayName ?? tWeb("web.globalManager.value.none")],
+    [tWeb("web.globalManager.row.runtime"), manager.runtime ?? tWeb("web.globalManager.value.none")],
   ];
   if (manager.lastError) rows.push([tWeb("web.globalManager.row.error"), manager.lastError]);
   document.querySelector("#globalManagerDetails").innerHTML = rows
@@ -1526,16 +1527,13 @@ function pollQrLogin(ch, startCtx) {
 }
 
 async function startGlobalManagerQr() {
-  clearInterval(activeLogin.feishu?.pollTimer);
-  delete activeLogin.feishu;
   clearInterval(globalManagerLogin?.pollTimer);
   const button = document.querySelector("#globalManagerBind");
   button.disabled = true;
   button.textContent = tWeb("web.qr.generating");
-  const feishu = channelsById.feishu;
-  const body = { domain: feishu?.config?.domain ?? "feishu" };
+  const body = { domain: globalManagerSnapshot?.domain ?? "feishu" };
   try {
-    const start = await getJson("/api/channels/feishu/login/start", {
+    const start = await getJson("/api/channels/feishu-global-manager/login/start", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(body),
@@ -1562,7 +1560,7 @@ function pollGlobalManagerQr(startCtx) {
   }
   globalManagerLogin.pollTimer = setInterval(async () => {
     try {
-      const status = await getJson(`/api/channels/feishu/login/status?${params}`);
+      const status = await getJson(`/api/channels/feishu-global-manager/login/status?${params}`);
       const view = normalizedLoginView(status, tWeb);
       if (!view.qrUrl) view.qrUrl = startCtx.qrUrl ?? null;
       if (globalManagerLogin) globalManagerLogin.lastView = view;
@@ -2189,8 +2187,7 @@ document.querySelector("#refreshConnect")?.addEventListener("click", async (even
 });
 
 document.querySelector("#globalManagerBind")?.addEventListener("click", async () => {
-  const feishu = channelsById.feishu;
-  if (feishu?.config?.configured) {
+  if (globalManagerSnapshot?.configured) {
     window.alert(tWeb("web.globalManager.bindInChat"));
     return;
   }

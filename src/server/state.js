@@ -29,6 +29,8 @@ import { GlobalManager } from "../core/global-manager.js";
 import { VersionChecker } from "../core/version-check.js";
 import { setLocale as setI18nLocale, DEFAULT_LOCALE, t } from "../core/i18n/index.js";
 
+const GLOBAL_MANAGER_FEISHU_CHANNEL = "feishu-global-manager";
+
 // Shown on a live card when the Codex Desktop connection drops. The connection
 // events are logged with hardcoded Chinese strings throughout routeDesktopEvent
 // (they predate i18n); this mirrors that wording so the card matches the log.
@@ -97,7 +99,14 @@ export function createComoteState({
   });
 
   const outboundReplies = new OutboundQueue({
-    entries: persisted.outboundReplies ?? [],
+    // Older versions queued global-manager cards on the normal `feishu`
+    // channel. Move only those cards during restore so the project-chat runtime
+    // can never deliver them.
+    entries: (persisted.outboundReplies ?? []).map((entry) =>
+      entry?.kind === "globalManagerCard"
+        ? { ...entry, channel: GLOBAL_MANAGER_FEISHU_CHANNEL }
+        : entry,
+    ),
     // Shed = the queue is at capacity and dropping its oldest to make room.
     // Deliberately log-only: a shed happens exactly when the queue is FULL, so
     // enqueuing a failure notice here evicts the next-oldest real reply, whose
@@ -163,6 +172,16 @@ export function createComoteState({
     scanLocalProjects,
   });
   const registry = createRegistry([feishuPlugin, wechatPlugin, dingtalkPlugin, telegramPlugin]);
+  let globalManager = null;
+  const managerCommandRouter = {
+    handleManagerMessageAsync(message) {
+      return globalManager?.handleMessage?.(message) ?? null;
+    },
+    async handleMessageAsync(message) {
+      return globalManager?.handleUnnamespacedMessage?.(message)
+        ?? { kind: "error", text: t("globalManager.command.help") };
+    },
+  };
 
   // Per-channel seed configs (env-var defaults), keyed by plugin id. Normalized
   // through each plugin's normalizeConfig below.
@@ -178,6 +197,17 @@ export function createComoteState({
       verificationToken: process.env.COMOTE_FEISHU_VERIFICATION_TOKEN ?? null,
       encryptKey: process.env.COMOTE_FEISHU_ENCRYPT_KEY ?? null,
       domain: process.env.COMOTE_FEISHU_DOMAIN ?? "feishu",
+    },
+    [GLOBAL_MANAGER_FEISHU_CHANNEL]: persisted.channelConfigs?.[GLOBAL_MANAGER_FEISHU_CHANNEL] ?? {
+      enabled: Boolean(
+        process.env.COMOTE_GLOBAL_MANAGER_FEISHU_APP_ID
+        && process.env.COMOTE_GLOBAL_MANAGER_FEISHU_APP_SECRET
+      ),
+      appId: process.env.COMOTE_GLOBAL_MANAGER_FEISHU_APP_ID ?? null,
+      appSecret: process.env.COMOTE_GLOBAL_MANAGER_FEISHU_APP_SECRET ?? null,
+      verificationToken: process.env.COMOTE_GLOBAL_MANAGER_FEISHU_VERIFICATION_TOKEN ?? null,
+      encryptKey: process.env.COMOTE_GLOBAL_MANAGER_FEISHU_ENCRYPT_KEY ?? null,
+      domain: process.env.COMOTE_GLOBAL_MANAGER_FEISHU_DOMAIN ?? "feishu",
     },
     dingtalk: persisted.channelConfigs?.dingtalk ?? {
       enabled: Boolean(process.env.COMOTE_DINGTALK_APP_KEY && process.env.COMOTE_DINGTALK_APP_SECRET),
@@ -212,7 +242,7 @@ export function createComoteState({
   // the currently active one prevents a browser tab left open across a restart
   // from replaying a previously confirmed registration and restoring stale
   // app-scoped credentials/open_id values.
-  let activeFeishuLogin = null;
+  const activeFeishuLogins = new Map();
 
   function expiredFeishuLoginResult(stack) {
     const result = { state: "expired" };
@@ -302,24 +332,30 @@ export function createComoteState({
     },
     feishu: {
       buildAdapterOpts: (stack) => ({
-        commandRouter,
-        supportsMedia: Boolean(stack.plugin.meta.capabilities?.media),
-        onDetectedIdentity: (identity) => authorization.detectIdentity(identity),
+        channelId: stack.channelId,
+        commandRouter: stack.managerOnly ? managerCommandRouter : commandRouter,
+        supportsMedia: stack.managerOnly ? false : Boolean(stack.plugin.meta.capabilities?.media),
+        onDetectedIdentity: stack.managerOnly
+          ? null
+          : (identity) => authorization.detectIdentity(identity),
         resolveDisplayName: (openId) => stack.runtime?.driver?.resolveUserName?.(openId) ?? null,
-        downloadAttachment: makeDownloadAttachment(stack, ({ driver, attachment, destPath }) =>
-          driver.downloadMessageResource({
-            messageId: attachment.messageId,
-            fileKey: attachment.fileKey,
-            type: attachment.type === "image" ? "image" : "file",
-            destPath,
-          }),
-        ),
+        downloadAttachment: stack.managerOnly
+          ? null
+          : makeDownloadAttachment(stack, ({ driver, attachment, destPath }) =>
+            driver.downloadMessageResource({
+              messageId: attachment.messageId,
+              fileKey: attachment.fileKey,
+              type: attachment.type === "image" ? "image" : "file",
+              destPath,
+            }),
+          ),
         sendReply: async (reply) => {
           outboundReplies.enqueue(reply);
           return { ok: true };
         },
       }),
       buildRuntimeOpts: (stack) => ({
+        channelId: stack.channelId,
         adapter: stack.adapter,
         outboundQueue: outboundReplies,
         renderer: stack.renderer,
@@ -334,13 +370,19 @@ export function createComoteState({
         const loginDriver = feishuLoginDriverFactory?.({ domain })
           ?? stack.plugin.createLoginDriver({ domain });
         const result = await loginDriver.startLogin({ domain });
-        activeFeishuLogin = result?.loginId
-          ? { loginId: result.loginId, domain: result.domain ?? domain, inFlight: false }
-          : null;
+        if (result?.loginId) {
+          activeFeishuLogins.set(stack.channelId, {
+            loginId: result.loginId,
+            domain: result.domain ?? domain,
+            inFlight: false,
+          });
+        } else {
+          activeFeishuLogins.delete(stack.channelId);
+        }
         return result;
       },
       async getLoginStatus(stack, { loginId, domain = stack.config.domain, interval, expireIn }) {
-        const session = activeFeishuLogin;
+        const session = activeFeishuLogins.get(stack.channelId);
         if (!session || !loginId || session.loginId !== loginId) {
           return expiredFeishuLoginResult(stack);
         }
@@ -361,7 +403,7 @@ export function createComoteState({
             expireIn,
           });
         } catch (error) {
-          if (activeFeishuLogin === session) {
+          if (activeFeishuLogins.get(stack.channelId) === session) {
             session.inFlight = false;
           }
           throw error;
@@ -369,13 +411,13 @@ export function createComoteState({
         // A new QR login or a settings update may have superseded this request
         // while the remote poll was in flight. Its result must not overwrite the
         // newer session's configuration.
-        if (activeFeishuLogin !== session) {
+        if (activeFeishuLogins.get(stack.channelId) !== session) {
           return expiredFeishuLoginResult(stack);
         }
         const normalized = stack.plugin.normalizeLoginStatus(result);
         const terminal = ["confirmed", "expired", "failed"].includes(normalized.state);
         if (terminal) {
-          activeFeishuLogin = null;
+          activeFeishuLogins.delete(stack.channelId);
         } else {
           session.inFlight = false;
         }
@@ -398,7 +440,7 @@ export function createComoteState({
           stack.runtime.configureDriver(stack.plugin.createDriver(stack.config));
           result.userId = null;
           result.userName = null;
-          result.requiresManagerBind = true;
+          result.requiresManagerBind = Boolean(stack.managerOnly);
           await stateRef.persist?.();
           await stack.runtime.start().catch((error) => {
             stack.runtime.lastError = error.message;
@@ -479,6 +521,8 @@ export function createComoteState({
     const wiring = perChannelWiring[id];
     if (!wiring) throw new Error(`no host wiring for channel "${id}" — add an entry to perChannelWiring`);
     const stack = {
+      channelId: id,
+      managerOnly: false,
       plugin,
       config: plugin.normalizeConfig(channelSeeds[id]),
       renderer: plugin.createRenderer(plugin.normalizeConfig(channelSeeds[id])),
@@ -492,26 +536,52 @@ export function createComoteState({
     channelStacks.set(id, stack);
   }
 
+  // The global manager is a second Feishu application, not a second registered
+  // channel type. It deliberately stays out of the generic channel list while
+  // owning an independent config, adapter, driver, runtime, login session and
+  // outbound queue key.
+  {
+    const id = GLOBAL_MANAGER_FEISHU_CHANNEL;
+    const plugin = feishuPlugin;
+    const wiring = perChannelWiring.feishu;
+    const config = plugin.normalizeConfig(channelSeeds[id]);
+    const stack = {
+      channelId: id,
+      managerOnly: true,
+      plugin,
+      config,
+      renderer: plugin.createRenderer(config),
+      adapter: null,
+      runtime: null,
+      driver: null,
+    };
+    stack.adapter = plugin.createAdapter(wiring.buildAdapterOpts(stack));
+    stack.driver = plugin.createDriver(stack.config);
+    stack.runtime = plugin.createRuntime(wiring.buildRuntimeOpts(stack));
+    channelStacks.set(id, stack);
+  }
+
   // routeDesktopEvent + auto-start use these runtimes directly (live thread
   // cards / typing) — keep them as locals so that logic is UNCHANGED.
   const feishuRuntime = channelStacks.get("feishu").runtime;
+  const globalManagerFeishuRuntime = channelStacks.get(GLOBAL_MANAGER_FEISHU_CHANNEL).runtime;
   const wechatRuntime = channelStacks.get("wechat").runtime;
-  const globalManager = new GlobalManager({
+  globalManager = new GlobalManager({
+    channelId: GLOBAL_MANAGER_FEISHU_CHANNEL,
     taskMonitor,
     desktop,
     transcript,
     persisted: persisted.globalManager ?? {},
-    getFeishuConfig: () => channelStacks.get("feishu").config,
-    getFeishuRuntime: () => channelStacks.get("feishu").runtime,
+    getFeishuConfig: () => channelStacks.get(GLOBAL_MANAGER_FEISHU_CHANNEL).config,
+    getFeishuRuntime: () => globalManagerFeishuRuntime,
     outboundQueue: outboundReplies,
-    deliverFeishuQueue: () => deliverIfPush("feishu"),
+    deliverFeishuQueue: () => deliverIfPush(GLOBAL_MANAGER_FEISHU_CHANNEL),
     logger: {
       warn: (message) => eventLog.warn("飞书全局管理应用降级", { error: message }),
     },
     ...globalManagerOptions,
   });
-  commandRouter.setGlobalManager(globalManager);
-  feishuRuntime.globalManager = globalManager;
+  globalManagerFeishuRuntime.globalManager = globalManager;
 
   // Returns the runtime for a channel IF it supports live status cards (the
   // liveUpdates capability + the open/update/finish/buildStatusCard methods).
@@ -679,7 +749,7 @@ export function createComoteState({
       },
       async configure(config) {
         if (plugin.meta.id === "feishu") {
-          activeFeishuLogin = null;
+          activeFeishuLogins.delete(stack.channelId);
         }
         const patch = plugin.normalizeSecretPatch ? plugin.normalizeSecretPatch(config) : config;
         stack.config = plugin.normalizeConfig({ ...stack.config, ...patch });
@@ -1564,6 +1634,7 @@ export function createComoteState({
   // point-in-time config snapshot, used only for auto-start enabled-gating
   const wechatConfig = channelStacks.get("wechat").config;
   const feishuConfig = channelStacks.get("feishu").config;
+  const globalManagerFeishuConfig = channelStacks.get(GLOBAL_MANAGER_FEISHU_CHANNEL).config;
   const dingtalkConfig = channelStacks.get("dingtalk").config;
   const telegramConfig = channelStacks.get("telegram").config;
   // Delay saved-channel runtime auto-start so the HTTP daemon binds and answers
@@ -1591,11 +1662,29 @@ export function createComoteState({
       feishuRuntime.start().then(
         () => {
           eventLog.info("飞书运行时已自动启动", { appId: feishuConfig.appId });
-          globalManager.scheduleDashboard(0);
         },
         (error) => {
           feishuRuntime.lastError = error.message;
           eventLog.error("飞书运行时启动失败", { error: error.message });
+        },
+      );
+    });
+  }
+  if (
+    autoStartFeishuRuntime
+    && globalManagerFeishuConfig.enabled
+    && globalManagerFeishuConfig.appId
+    && globalManagerFeishuConfig.appSecret
+  ) {
+    deferAutoStart(() => {
+      globalManagerFeishuRuntime.start().then(
+        () => {
+          eventLog.info("飞书全局管理运行时已自动启动", { appId: globalManagerFeishuConfig.appId });
+          globalManager.scheduleDashboard(0);
+        },
+        (error) => {
+          globalManagerFeishuRuntime.lastError = error.message;
+          eventLog.error("飞书全局管理运行时启动失败", { error: error.message });
         },
       );
     });

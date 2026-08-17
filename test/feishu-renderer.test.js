@@ -55,6 +55,17 @@ test("picker reply renders pick buttons", async () => {
   assert.equal(action.actions[0].value.kind, "pick");
 });
 
+test("manager bind reply renders a global_manager_bind button", async () => {
+  const r = createFeishuRenderer();
+  const driver = stubDriver();
+  await r.render({ kind: "managerBind", conversationId: "manager-chat" }, { driver });
+  const call = driver.calls[0];
+  assert.equal(call[0], "sendCard");
+  assert.equal(call[1].receiveId, "manager-chat");
+  const action = call[1].card.elements.find((element) => element.tag === "action");
+  assert.equal(action.actions[0].value.kind, "global_manager_bind");
+});
+
 test("media image reply uploads then sends image", async () => {
   const fs = await import("node:fs");
   const os = await import("node:os");

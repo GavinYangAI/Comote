@@ -3,6 +3,7 @@ import { basename } from "node:path";
 import { t } from "../../core/i18n/index.js";
 import { textCard, statusCard, approvalCard, approvalResolvedCard, pickerCard } from "./cards.js";
 import { approvalDetail } from "../base/approval-format.js";
+import { globalManagerBindCard } from "./global-manager-cards.js";
 
 // Mirror of the runtime's media size guard (FeishuRuntimeService.MAX_MEDIA_BYTES);
 // kept in sync so the renderer falls back to text on the same boundary.
@@ -51,6 +52,14 @@ export function createFeishuRenderer() {
           runtime?.globalManager?.handleQueuedCardFailure?.(reply, error);
           throw error;
         }
+      }
+      if (reply.kind === "managerBind") {
+        await driver.sendCard({
+          receiveId: reply.conversationId,
+          receiveIdType: "chat_id",
+          card: globalManagerBindCard(),
+        });
+        return;
       }
       if (reply.kind === "media") {
         return this._renderMedia(reply, driver);
