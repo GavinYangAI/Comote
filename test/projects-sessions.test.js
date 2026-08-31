@@ -88,3 +88,15 @@ test("session store creates and switches active sessions per project", () => {
     [first.id, second.id],
   );
 });
+
+test("renaming a cached external session preserves the active session", () => {
+  const store = new SessionStore();
+  store.upsertExternalSession({ projectPath: "/repo", id: "thread_a", title: "thread_a" });
+  store.upsertExternalSession({ projectPath: "/repo", id: "thread_b", title: "Active thread" });
+
+  assert.equal(store.updateExternalSessionTitle("thread_a", "  Renamed thread  "), true);
+  assert.equal(store.getActiveSession("/repo").id, "thread_b");
+  assert.equal(store.listSessions("/repo")[0].title, "Renamed thread");
+  assert.equal(store.updateExternalSessionTitle("thread_missing", "Unknown"), false);
+  assert.equal(store.updateExternalSessionTitle("thread_a", "   "), false);
+});

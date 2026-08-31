@@ -102,6 +102,22 @@ export class SessionStore {
     return { ...session, messages: [...session.messages] };
   }
 
+  updateExternalSessionTitle(id, title) {
+    if (!id || typeof title !== "string" || !title.trim()) {
+      return false;
+    }
+    for (const sessions of this.sessionsByProject.values()) {
+      const session = sessions.find((candidate) => candidate.id === id);
+      if (!session) {
+        continue;
+      }
+      session.title = title.trim();
+      session.updatedAt = new Date().toISOString();
+      return true;
+    }
+    return false;
+  }
+
   listSessions(projectPath) {
     return (this.sessionsByProject.get(projectPath) ?? []).map((session) => ({
       ...session,

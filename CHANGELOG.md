@@ -7,6 +7,16 @@ GitHub Release notes, so keep each version's heading as `## vX.Y.Z`.
 本文件记录 Comote 的更新内容。发版流程会按推送的 `vX.Y.Z` tag 自动抽取对应
 段落作为 GitHub Release 说明，请保持每个版本标题为 `## vX.Y.Z`。
 
+## v0.7.2
+
+### 🐛 Fixes
+
+- **Conversation names stay in sync after ChatGPT/Codex updates.** Comote now applies Codex thread-name notifications to cached sessions and repairs older ID-only labels when `/sessions` refreshes, so conversation lists show readable names instead of raw thread IDs.
+
+### 🐛 修复
+
+- **ChatGPT/Codex 更新后会话名称可正常同步。** Comote 现在会把 Codex 的会话改名通知回写到本地缓存，并在 `/sessions` 刷新时修复历史上只显示 ID 的标签，会话列表恢复显示可读名称。
+
 ## v0.7.1
 
 ### 🐛 Fixes

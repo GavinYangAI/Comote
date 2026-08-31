@@ -26,11 +26,12 @@ class MemoryTransport {
   async close() {}
 }
 
-function buildState() {
+function buildState({ stateStore = null } = {}) {
   const transport = new MemoryTransport();
   const desktop = new CodexDesktopConnector({ transport });
   const state = createComoteState({
     desktop,
+    stateStore,
     autoStartWeChatRuntime: false,
     autoStartFeishuRuntime: false,
   });
@@ -64,6 +65,59 @@ test("Codex agent output is routed back to the originating WeChat conversation",
   assert.equal(queued[0].conversationId, "dm_peer");
   assert.equal(queued[0].accountId, "acct");
   assert.equal(queued[0].text, "all tests pass");
+});
+
+test("Codex thread name updates replace provisional session ids", async () => {
+  const { transport, desktop, state } = buildState();
+  await desktop.client.connect();
+  state.sessions.upsertExternalSession({
+    projectPath: "/repo",
+    id: "thread_42",
+    title: "thread_42",
+  });
+
+  transport.receive({
+    jsonrpc: "2.0",
+    method: "thread/name/updated",
+    params: { threadId: "thread_42", threadName: "Investigate flaky tests" },
+  });
+
+  assert.equal(state.sessions.listSessions("/repo")[0].title, "Investigate flaky tests");
+});
+
+test("Codex thread name updates persist while invalid updates are ignored", async () => {
+  const saved = [];
+  const stateStore = {
+    async save(snapshot) {
+      saved.push(snapshot);
+    },
+  };
+  const { transport, desktop, state } = buildState({ stateStore });
+  await desktop.client.connect();
+  state.sessions.upsertExternalSession({
+    projectPath: "/repo",
+    id: "thread_42",
+    title: "thread_42",
+  });
+
+  transport.receive({
+    jsonrpc: "2.0",
+    method: "thread/name/updated",
+    params: { threadId: "thread_42", threadName: "Persisted name" },
+  });
+  await tick();
+
+  assert.equal(saved.length, 1);
+  assert.equal(saved[0].sessions.sessions[0].title, "Persisted name");
+
+  transport.receive({
+    jsonrpc: "2.0",
+    method: "thread/name/updated",
+    params: { threadId: "thread_missing" },
+  });
+  await tick();
+
+  assert.equal(saved.length, 1);
 });
 
 test("Codex approval requests are pushed to the phone with a short code", async () => {
