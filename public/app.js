@@ -43,7 +43,13 @@ async function getJson(path, options = {}) {
   };
   const response = await fetch(path, { ...options, headers });
   if (!response.ok) {
-    const error = new Error(`Request failed: ${response.status}`);
+    let detail = null;
+    try {
+      detail = await response.json();
+    } catch {
+      detail = null;
+    }
+    const error = new Error(detail?.error ?? `Request failed: ${response.status}`);
     error.status = response.status;
     throw error;
   }
@@ -112,29 +118,96 @@ if (isTauri) {
 }
 
 // Wires the "keep daemon alive after quit" toggle. Only meaningful inside the
-// desktop app (the preference is read by the Rust quit path), so the panel stays
-// hidden in a plain browser where the command does not exist.
+// desktop app (the preference is read by the Rust quit path). In a plain
+// browser the panel remains visible for discoverability, with controls disabled.
+function setDesktopSettingStatus(element, key, isError = false) {
+  if (!element) return;
+  element.dataset.i18n = key;
+  element.textContent = tWeb(key);
+  element.classList.toggle("is-error", isError);
+}
+
 async function setupKeepAliveToggle() {
   const panel = document.querySelector("#keepAlivePanel");
   const checkbox = document.querySelector("#keepDaemonAlive");
-  if (!panel || !checkbox || !isTauri) {
+  const status = document.querySelector("#keepDaemonAliveStatus");
+  if (!panel || !checkbox) {
     return;
   }
-  panel.hidden = false;
+  if (!isTauri) {
+    checkbox.disabled = true;
+    setDesktopSettingStatus(status, "web.advanced.desktopOnly");
+    return;
+  }
   try {
     const enabled = await tauriInvoke("get_keep_daemon_alive");
     checkbox.checked = Boolean(enabled);
+    checkbox.disabled = false;
   } catch (error) {
     console.error("get_keep_daemon_alive failed", error);
+    checkbox.disabled = true;
+    setDesktopSettingStatus(status, "web.advanced.settingLoadError", true);
   }
   checkbox.addEventListener("change", async () => {
     const desired = checkbox.checked;
     checkbox.disabled = true;
     try {
       await tauriInvoke("set_keep_daemon_alive", { enabled: desired });
+      setDesktopSettingStatus(status, "web.advanced.keepAliveHint");
     } catch (error) {
       console.error("set_keep_daemon_alive failed", error);
       checkbox.checked = !desired; // revert on failure
+      setDesktopSettingStatus(status, "web.advanced.settingSaveError", true);
+    } finally {
+      checkbox.disabled = false;
+    }
+  });
+}
+
+// Wires the operating-system login startup entry. Registration is owned by
+// the desktop shell; in a normal browser the control remains visible but
+// disabled so users know where the feature lives and why it cannot be changed.
+async function setupLaunchAtLoginToggle() {
+  const checkbox = document.querySelector("#launchAtLogin");
+  const status = document.querySelector("#launchAtLoginStatus");
+  if (!checkbox || !status) {
+    return;
+  }
+  const showState = (enabled) => {
+    setDesktopSettingStatus(
+      status,
+      enabled
+        ? "web.advanced.launchAtLoginEnabled"
+        : "web.advanced.launchAtLoginDisabled",
+    );
+  };
+  if (!isTauri) {
+    checkbox.disabled = true;
+    setDesktopSettingStatus(status, "web.advanced.desktopOnly");
+    return;
+  }
+  try {
+    const state = await tauriInvoke("get_launch_at_login");
+    checkbox.checked = Boolean(state && state.enabled);
+    checkbox.disabled = !(state && state.supported);
+    showState(checkbox.checked);
+  } catch (error) {
+    console.error("get_launch_at_login failed", error);
+    checkbox.disabled = true;
+    setDesktopSettingStatus(status, "web.advanced.settingLoadError", true);
+  }
+  checkbox.addEventListener("change", async () => {
+    const desired = checkbox.checked;
+    checkbox.disabled = true;
+    setDesktopSettingStatus(status, "web.advanced.settingSaving");
+    try {
+      const state = await tauriInvoke("set_launch_at_login", { enabled: desired });
+      checkbox.checked = Boolean(state && state.enabled);
+      showState(checkbox.checked);
+    } catch (error) {
+      console.error("set_launch_at_login failed", error);
+      checkbox.checked = !desired;
+      setDesktopSettingStatus(status, "web.advanced.settingSaveError", true);
     } finally {
       checkbox.disabled = false;
     }
@@ -143,6 +216,8 @@ async function setupKeepAliveToggle() {
 
 // Generic per-channel login state: id -> { loginId, pollTimer, startCtx }.
 const activeLogin = {};
+let globalManagerLogin = null;
+let globalManagerSnapshot = null;
 let expandedChannelId = null; // accordion: at most one channel expanded at a time
 let lastChannels = []; // latest fetched list, so toggle handlers can re-render
 let accordionUserDecided = false; // once the user toggles any channel, stop auto-expanding pending
@@ -194,6 +269,7 @@ async function renderOnce() {
     candidates,
     projects,
     channelsResult,
+    globalManagerResult,
     approvals,
     logs,
   ] = await Promise.all([
@@ -202,6 +278,7 @@ async function renderOnce() {
     safeGet("/api/identities/candidates", []),
     safeGet("/api/projects", []),
     safeGet("/api/channels", []),
+    safeGet("/api/global-manager", { status: "unbound", enabled: false }),
     safeGet("/api/approvals", []),
     safeGet("/api/logs?limit=5&offset=0", { entries: [], total: 0, hasMore: false }),
   ]);
@@ -247,11 +324,65 @@ async function renderOnce() {
   renderCandidates(candidates);
   renderProjects(projects);
   renderChannels(channels);
+  renderGlobalManager(globalManagerResult);
   renderChannelDropdown(channels);
   renderApprovals(approvals);
   renderLogs(logs);
   renderConversation(transcript);
   await renderThreads(status.value, projects.value);
+}
+
+function renderGlobalManager(result) {
+  const manager = result.ok ? result.value : { status: "unbound", enabled: false, lastError: result.error?.message };
+  globalManagerSnapshot = manager;
+  if (manager.manager && globalManagerLogin) {
+    clearInterval(globalManagerLogin.pollTimer);
+    globalManagerLogin = null;
+  }
+  const status = manager.status ?? "unbound";
+  const labels = {
+    unbound: [tWeb("web.globalManager.status.unbound"), "neutral"],
+    ready: [tWeb("web.globalManager.status.ready"), "success"],
+    offline: [tWeb("web.globalManager.status.offline"), "pending"],
+    stale: [tWeb("web.globalManager.status.stale"), "pending"],
+    degraded: [tWeb("web.globalManager.status.degraded"), "pending"],
+  };
+  const [label, tone] = labels[status] ?? labels.unbound;
+  const badge = document.querySelector("#globalManagerStatus");
+  badge.textContent = label;
+  badge.className = `badge ${tone}`;
+  const configured = Boolean(manager.configured);
+  document.querySelector("#globalManagerDescription").textContent = manager.manager
+    ? tWeb("web.globalManager.boundAs", { name: manager.manager.displayName ?? manager.manager.stableId })
+    : configured
+      ? tWeb("web.globalManager.useCurrent")
+      : tWeb("web.globalManager.scanHint");
+  const rows = [
+    [tWeb("web.globalManager.row.app"), manager.appId ?? manager.configuredAppId ?? tWeb("web.globalManager.value.none")],
+    [tWeb("web.globalManager.row.user"), manager.manager?.displayName ?? tWeb("web.globalManager.value.none")],
+    [tWeb("web.globalManager.row.runtime"), manager.runtime ?? tWeb("web.globalManager.value.none")],
+  ];
+  if (manager.lastError) rows.push([tWeb("web.globalManager.row.error"), manager.lastError]);
+  document.querySelector("#globalManagerDetails").innerHTML = rows
+    .map(([key, value]) => `<dt>${escapeHtml(key)}</dt><dd>${escapeHtml(value)}</dd>`)
+    .join("");
+
+  const bind = document.querySelector("#globalManagerBind");
+  bind.hidden = status !== "unbound" && status !== "stale";
+  bind.textContent = configured ? tWeb("web.globalManager.useButton") : tWeb("web.globalManager.bind");
+  document.querySelector("#globalManagerTest").hidden = status !== "ready";
+  document.querySelector("#globalManagerUnbind").hidden = status === "unbound";
+  document.querySelector("#globalManagerRescan").hidden = !configured;
+  document.querySelector("#globalManagerWarning").hidden = !configured;
+
+  const qrBox = document.querySelector("#globalManagerLoginResult");
+  if (globalManagerLogin?.lastView) {
+    qrBox.hidden = false;
+    renderQrInto("globalManagerLoginResult", globalManagerLogin.lastView);
+  } else {
+    qrBox.hidden = true;
+    qrBox.innerHTML = "";
+  }
 }
 
 function renderReadiness(status, identitiesResult, channels) {
@@ -428,18 +559,34 @@ function setupChannelCards() {
     const saveBtn = event.target.closest("[data-save-config]");
     if (saveBtn) {
       const id = saveBtn.dataset.saveConfig;
+      const channel = channelsById[id];
+      const configForm = container.querySelector(`form[data-config-form="${cssEscapeId(id)}"]`);
+      if (configForm && !configForm.reportValidity()) {
+        return;
+      }
       // D-4: give the button a saving → saved lifecycle instead of silence.
       // guardedAction already alerts on failure and returns null there.
       saveBtn.disabled = true;
       const originalLabel = saveBtn.textContent;
       saveBtn.textContent = tWeb("web.channel.saving");
-      const result = await guardedAction(() =>
-        getJson(`/api/channels/${encodeURIComponent(id)}/config`, {
+      const result = await guardedAction(async () => {
+        const values = readChannelForm(id);
+        if (channel?.credentialBinding) {
+          values.enabled = true;
+        }
+        const config = await getJson(`/api/channels/${encodeURIComponent(id)}/config`, {
           method: "PUT",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify(readChannelForm(id)),
-        }),
-      );
+          body: JSON.stringify(values),
+        });
+        // Hybrid channels (currently Feishu) support both QR registration and
+        // manually supplied app credentials. A valid manual config is already
+        // the binding, so start its WebSocket runtime immediately after save.
+        if (channel?.credentialBinding && config?.configured) {
+          await getJson(`/api/channels/${encodeURIComponent(id)}/runtime/start`, { method: "POST" });
+        }
+        return config;
+      });
       if (result === null) {
         saveBtn.disabled = false;
         saveBtn.textContent = originalLabel;
@@ -497,7 +644,7 @@ function connectedRowHtml(ch) {
   const expanded = expandedChannelId === ch.id;
   const toggleLabel = expanded ? tWeb("web.channel.collapse") : tWeb("web.channel.manage");
   return `
-    <article class="channel-row ${expanded ? "expanded" : ""}" data-channel="${escapeAttr(ch.id)}">
+    <article class="channel-row ${expanded ? "expanded" : ""} ${ch.credentialBinding ? "channel-card-hybrid" : ""}" data-channel="${escapeAttr(ch.id)}">
       <div class="channel-row-head" data-toggle="${escapeAttr(ch.id)}">
         <div class="channel-tile ${escapeAttr(ch.id)}-icon" aria-hidden="true">${escapeHtml(icon)}</div>
         <div><div class="ch-name">${escapeHtml(ch.displayName ?? ch.id)}</div>${summary ? `<div class="ch-summary">${escapeHtml(summary)}</div>` : ""}</div>
@@ -513,16 +660,17 @@ function connectedRowHtml(ch) {
 function availableTileHtml(ch) {
   const icon = ch.icon ?? (ch.displayName ?? "")[0] ?? "";
   const expanded = expandedChannelId === ch.id;
+  const hybridClass = ch.credentialBinding ? " channel-card-hybrid" : "";
   if (expanded) {
-    return `<article class="channel-add-tile expanded" data-channel="${escapeAttr(ch.id)}">
-      <div class="channel-row-head" data-toggle="${escapeAttr(ch.id)}" style="padding:0 0 8px">
+    return `<article class="channel-add-tile expanded${hybridClass}" data-channel="${escapeAttr(ch.id)}">
+      <div class="channel-row-head channel-add-head" data-toggle="${escapeAttr(ch.id)}">
         <div class="channel-tile ${escapeAttr(ch.id)}-icon" aria-hidden="true">${escapeHtml(icon)}</div>
         <div class="ch-name">${escapeHtml(ch.displayName ?? ch.id)}</div>
-        <button type="button" class="secondary-button" data-toggle="${escapeAttr(ch.id)}" style="margin-left:auto">${escapeHtml(tWeb("web.channel.collapse"))} ▴</button>
+        <button type="button" class="secondary-button" data-toggle="${escapeAttr(ch.id)}">${escapeHtml(tWeb("web.channel.collapse"))} ▴</button>
       </div>
       ${channelDetailHtml(ch)}</article>`;
   }
-  return `<article class="channel-add-tile" data-channel="${escapeAttr(ch.id)}">
+  return `<article class="channel-add-tile${hybridClass}" data-channel="${escapeAttr(ch.id)}">
     <div class="channel-tile ${escapeAttr(ch.id)}-icon" aria-hidden="true">${escapeHtml(icon)}</div>
     <div class="ch-name">${escapeHtml(ch.displayName ?? ch.id)}</div>
     <button type="button" class="btn-primary-card" data-toggle="${escapeAttr(ch.id)}">+ ${escapeHtml(tWeb("web.channel.add"))}</button>
@@ -537,10 +685,12 @@ function channelDetailHtml(ch) {
   if (aff?.kind === "pairingCode") {
     affHtml = `<div class="pairing-block"><div class="intro">${escapeHtml(tWeb("web.channel.pairing.intro"))}</div><span class="pairing-code">${escapeHtml(aff.code ?? "—")}</span></div>`;
   } else if (aff?.kind === "qr") {
-    affHtml = qrAreaHtml(ch); // the <id>LoginResult scan area, painted by paintChannelCardResting
+    affHtml = qrAreaHtml(ch, ch.credentialBinding ? tWeb("web.channel.feishu.manualHint") : null); // the <id>LoginResult scan area, painted by paintChannelCardResting
   }
   // bound qr channel: still show its resting QR area (account summary) on expand
-  const qrResting = ch.binding === "qr" && !aff ? qrAreaHtml(ch) : "";
+  const qrResting = ch.binding === "qr" && !aff
+    ? qrAreaHtml(ch, ch.credentialBinding ? tWeb("web.channel.feishu.manualHint") : null)
+    : "";
   // C-1: surface the runtime's recorded lastError as a red row so a bad token
   // (configure "succeeds", runtime start fails) is no longer invisible.
   const lastError = channelLastError(ch);
@@ -551,6 +701,31 @@ function channelDetailHtml(ch) {
   const setup = channelSetup(ch, tWeb);
   const setupHtml = setup ? `<details class="channel-setup"><summary>${escapeHtml(tWeb("web.channel.howTo"))} ▸</summary><ol>${setup.steps.map((s) => `<li>${escapeHtml(s)}</li>`).join("")}</ol>${setup.link ? `<a href="${escapeAttr(setup.link.url)}" target="_blank" rel="noopener">↗ ${escapeHtml(setup.link.label)}</a>` : ""}</details>` : "";
   const button = channelBoundButton(ch, tWeb, { activeLoginId: activeLogin[ch.id]?.loginId ?? null });
+  if (ch.credentialBinding) {
+    const statusHtml = rows ? `<dl class="kv status-rows feishu-status-strip">${rows}</dl>` : "";
+    const qrHtml = affHtml || qrResting || qrAreaHtml(ch, tWeb("web.channel.feishu.qrDesc"));
+    return `${errorHtml}${statusHtml}<div class="feishu-bind-grid">
+      <section class="bind-method bind-method-primary">
+        <header class="bind-method-head">
+          <span class="bind-method-tag">${escapeHtml(tWeb("web.channel.feishu.recommended"))}</span>
+          <h4>${escapeHtml(tWeb("web.channel.feishu.bindCredentials"))}</h4>
+          <p>${escapeHtml(tWeb("web.channel.feishu.manualHint"))}</p>
+        </header>
+        ${channelConfigFormHtml(ch)}
+        ${setupHtml}
+        <div class="actions card-actions"><button type="button" class="btn-primary-card" data-save-config="${escapeAttr(ch.id)}">${escapeHtml(tWeb("web.channel.feishu.bindCredentials"))}</button></div>
+      </section>
+      <section class="bind-method bind-method-secondary">
+        <header class="bind-method-head">
+          <span class="bind-method-tag neutral">${escapeHtml(tWeb("web.channel.feishu.alternative"))}</span>
+          <h4>${escapeHtml(tWeb("web.channel.feishu.bindQr"))}</h4>
+          <p>${escapeHtml(tWeb("web.channel.feishu.qrDesc"))}</p>
+        </header>
+        ${qrHtml}
+        <div class="actions card-actions"><button type="button" class="secondary-button qr-bind-button" data-bind="${escapeAttr(ch.id)}">${escapeHtml(tWeb("web.channel.feishu.bindQr"))}</button></div>
+      </section>
+    </div>`;
+  }
   const actionBtn = ch.binding === "qr"
     ? `<button type="button" class="btn-primary-card" data-bind="${escapeAttr(ch.id)}">${escapeHtml(button.label)}</button>`
     : `<button type="button" class="btn-primary-card" data-save-config="${escapeAttr(ch.id)}">${escapeHtml(tWeb("web.channel.save"))}</button>`;
@@ -559,10 +734,10 @@ function channelDetailHtml(ch) {
 
 // The qr scan area (extracted from the old channelCardHtml qr branch) so both the
 // pending-scan affordance and a bound qr channel's resting summary can render it.
-function qrAreaHtml(ch) {
+function qrAreaHtml(ch, message = null) {
   return `<div id="${escapeAttr(ch.id)}LoginResult" class="qr-result">
     <div class="qr-glyph"><svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="#c4c2bc" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><path d="M14 14h3v3M21 14v7h-7M17 21v-4"/></svg></div>
-    <span>${escapeHtml(tWeb("web.channel.qr.scanHint"))}</span>
+    <span>${escapeHtml(message ?? tWeb("web.channel.qr.scanHint"))}</span>
   </div>`;
 }
 
@@ -575,17 +750,19 @@ function channelConfigFormHtml(ch) {
   }
   const fields = spec
     .map((field) => {
+      const inputId = `channel-${ch.id}-${field.name}`;
+      const required = field.required ? " required" : "";
       if (field.type === "select") {
         const options = field.options
           .map((opt) => `<option value="${escapeAttr(opt.value)}"${String(opt.value) === String(field.value) ? " selected" : ""}>${escapeHtml(opt.label)}</option>`)
           .join("");
-        return `<div class="config-field"><label class="domain-label">${escapeHtml(field.label)}</label><label class="select-wrap"><select name="${escapeAttr(field.name)}">${options}</select></label></div>`;
+        return `<div class="config-field"><label class="domain-label" for="${escapeAttr(inputId)}">${escapeHtml(field.label)}</label><label class="select-wrap"><select id="${escapeAttr(inputId)}" name="${escapeAttr(field.name)}"${required}>${options}</select></label></div>`;
       }
       if (field.type === "checkbox") {
         return `<label class="config-field"><input name="${escapeAttr(field.name)}" type="checkbox"${field.value ? " checked" : ""}> <span>${escapeHtml(field.label)}</span></label>`;
       }
       const inputType = field.secret || field.type === "password" ? "password" : "text";
-      return `<div class="config-field"><label class="domain-label">${escapeHtml(field.label)}</label><input name="${escapeAttr(field.name)}" type="${inputType}" value="${escapeAttr(field.value ?? "")}"></div>`;
+      return `<div class="config-field"><label class="domain-label" for="${escapeAttr(inputId)}">${escapeHtml(field.label)}</label><input id="${escapeAttr(inputId)}" name="${escapeAttr(field.name)}" type="${inputType}" value="${escapeAttr(field.value ?? "")}"${required} autocomplete="off"></div>`;
     })
     .join("");
   return `<form class="stack-form channel-config-form" data-config-form="${escapeAttr(ch.id)}">${fields}</form>`;
@@ -1057,18 +1234,25 @@ function showLoadError(error) {
   const panel = document.querySelector("#loadError");
   const title = document.querySelector("#loadErrorTitle");
   const detail = document.querySelector("#loadErrorDetail");
+  const tokenForm = document.querySelector("#apiTokenForm");
+  const tokenInput = document.querySelector("#apiTokenInput");
   if (error?.status === 401) {
     title.textContent = tWeb("web.loadError.tokenTitle");
     detail.textContent = tWeb("web.loadError.tokenDetail");
+    tokenForm.hidden = false;
+    tokenInput.value = localStorage.getItem("comoteApiToken") ?? "";
+    requestAnimationFrame(() => tokenInput.focus());
   } else {
     title.textContent = tWeb("web.loadError.connTitle");
     detail.textContent = tWeb("web.loadError.connDetail", { message: error?.message ?? "" });
+    tokenForm.hidden = true;
   }
   panel.hidden = false;
 }
 
 function hideLoadError() {
   document.querySelector("#loadError").hidden = true;
+  document.querySelector("#apiTokenForm").hidden = true;
 }
 
 function sectionError(message) {
@@ -1078,6 +1262,24 @@ function sectionError(message) {
 
 document.querySelector("#retryLoad").addEventListener("click", async () => {
   await render();
+});
+
+document.querySelector("#saveApiToken").addEventListener("click", async () => {
+  const input = document.querySelector("#apiTokenInput");
+  const token = input.value.trim();
+  if (!token) {
+    input.focus();
+    return;
+  }
+  localStorage.setItem("comoteApiToken", token);
+  await render();
+});
+
+document.querySelector("#apiTokenInput").addEventListener("keydown", async (event) => {
+  if (event.key === "Enter") {
+    event.preventDefault();
+    document.querySelector("#saveApiToken").click();
+  }
 });
 
 document.querySelector("#refreshLogs").addEventListener("click", async () => {
@@ -1324,6 +1526,75 @@ function pollQrLogin(ch, startCtx) {
   }, QR_POLL_MS);
 }
 
+async function startGlobalManagerQr() {
+  clearInterval(globalManagerLogin?.pollTimer);
+  const button = document.querySelector("#globalManagerBind");
+  button.disabled = true;
+  button.textContent = tWeb("web.qr.generating");
+  const body = { domain: globalManagerSnapshot?.domain ?? "feishu" };
+  try {
+    const start = await getJson("/api/channels/feishu-global-manager/login/start", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    const view = normalizedLoginView(start, tWeb);
+    globalManagerLogin = { startCtx: start, lastView: view, pollTimer: null };
+    document.querySelector("#globalManagerLoginResult").hidden = false;
+    renderQrInto("globalManagerLoginResult", view);
+    pollGlobalManagerQr(start);
+  } catch (error) {
+    globalManagerLogin = { lastView: { phase: "failed", qrUrl: null, accountLine: null, message: error.message }, pollTimer: null };
+    document.querySelector("#globalManagerLoginResult").hidden = false;
+    renderQrInto("globalManagerLoginResult", globalManagerLogin.lastView);
+  } finally {
+    button.disabled = false;
+    button.textContent = tWeb("web.globalManager.bind");
+  }
+}
+
+function pollGlobalManagerQr(startCtx) {
+  const params = new URLSearchParams({ loginId: startCtx.loginId ?? "" });
+  for (const key of ["domain", "interval", "expireIn"]) {
+    if (startCtx[key] != null) params.set(key, startCtx[key]);
+  }
+  globalManagerLogin.pollTimer = setInterval(async () => {
+    try {
+      const status = await getJson(`/api/channels/feishu-global-manager/login/status?${params}`);
+      const view = normalizedLoginView(status, tWeb);
+      if (!view.qrUrl) view.qrUrl = startCtx.qrUrl ?? null;
+      if (globalManagerLogin) globalManagerLogin.lastView = view;
+      document.querySelector("#globalManagerLoginResult").hidden = false;
+      renderQrInto("globalManagerLoginResult", view);
+      if (!["confirmed", "expired", "failed"].includes(view.phase)) return;
+      clearInterval(globalManagerLogin.pollTimer);
+      if (view.phase === "confirmed") {
+        globalManagerLogin = {
+          lastView: {
+            phase: "pending",
+            qrUrl: null,
+            accountLine: null,
+            message: tWeb("web.globalManager.bindInChat"),
+          },
+          pollTimer: null,
+        };
+        renderQrInto("globalManagerLoginResult", globalManagerLogin.lastView);
+        await render();
+      }
+    } catch (error) {
+      if (globalManagerLogin) {
+        globalManagerLogin.lastView = {
+          phase: "pending",
+          qrUrl: startCtx.qrUrl ?? null,
+          accountLine: null,
+          message: tWeb("web.channel.qr.checkFailed", { message: error.message }),
+        };
+        renderQrInto("globalManagerLoginResult", globalManagerLogin.lastView);
+      }
+    }
+  }, QR_POLL_MS);
+}
+
 // Renders a normalized login view ({ phase, qrUrl, accountLine, message }) into a
 // channel's `.qr-result` element. Reuses normalizeQrImageSource + qrDataUrl.
 function renderQrInto(elId, view) {
@@ -1367,8 +1638,9 @@ function renderQrInto(elId, view) {
   image.src = imageSource;
   image.alt = tWeb("web.channel.qr.imageAlt");
   target.append(image);
-  target.append(createStrongLine(tWeb("web.channel.qr.scanHint")));
-  if (view.message) {
+  const scanHint = tWeb("web.channel.qr.scanHint");
+  target.append(createStrongLine(scanHint));
+  if (view.message && view.message !== scanHint) {
     target.append(createTextLine(view.message));
   }
 }
@@ -1914,6 +2186,30 @@ document.querySelector("#refreshConnect")?.addEventListener("click", async (even
   }
 });
 
+document.querySelector("#globalManagerBind")?.addEventListener("click", async () => {
+  if (globalManagerSnapshot?.configured) {
+    window.alert(tWeb("web.globalManager.bindInChat"));
+    return;
+  }
+  await startGlobalManagerQr();
+});
+
+document.querySelector("#globalManagerTest")?.addEventListener("click", async () => {
+  const result = await guardedAction(() => getJson("/api/global-manager/test", { method: "POST" }));
+  if (result) window.alert(tWeb("web.globalManager.testSent"));
+  await render();
+});
+
+document.querySelector("#globalManagerUnbind")?.addEventListener("click", async () => {
+  if (!window.confirm(tWeb("web.globalManager.unbindConfirm"))) return;
+  const result = await guardedAction(() => getJson("/api/global-manager", { method: "DELETE" }));
+  if (result) await render();
+});
+
+document.querySelector("#globalManagerRescan")?.addEventListener("click", async () => {
+  await startGlobalManagerQr();
+});
+
 document.querySelector("#refreshUsers")?.addEventListener("click", async (event) => {
   const button = event.currentTarget;
   button.disabled = true;
@@ -1950,3 +2246,4 @@ init().catch((error) => {
 });
 
 setupKeepAliveToggle().catch((error) => console.error(error));
+setupLaunchAtLoginToggle().catch((error) => console.error(error));

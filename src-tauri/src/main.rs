@@ -14,11 +14,13 @@ use std::{
 #[cfg(target_os = "windows")]
 use std::os::windows::process::CommandExt;
 
+use serde::Serialize;
 use tauri::{
     menu::{Menu, MenuItem},
     tray::TrayIconBuilder,
     AppHandle, Manager, RunEvent, WebviewUrl, WebviewWindow, WebviewWindowBuilder, WindowEvent,
 };
+use tauri_plugin_autostart::{MacosLauncher, ManagerExt as AutostartManagerExt};
 use tauri_plugin_opener::OpenerExt;
 use tauri_plugin_shell::process::CommandChild;
 #[cfg(not(target_os = "windows"))]
@@ -148,6 +150,7 @@ const PORT: u16 = 16208;
 // behavior. Persisted in desktop-settings.json under the app data dir.
 const DEFAULT_KEEP_DAEMON_ALIVE: bool = false;
 const DESKTOP_SETTINGS_FILE: &str = "desktop-settings.json";
+const AUTOSTART_ARG: &str = "--autostart";
 // Windows: spawn comote-node.exe without flashing a console window.
 #[cfg(target_os = "windows")]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
@@ -174,15 +177,22 @@ const READY_TIMEOUT: Duration = Duration::from_secs(40);
 const STDERR_TAIL_LINES: usize = 40;
 
 fn main() {
+    let launched_at_login = launched_at_login(std::env::args());
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_autostart::init(
+            MacosLauncher::LaunchAgent,
+            Some(vec![AUTOSTART_ARG]),
+        ))
         .invoke_handler(tauri::generate_handler![
             open_external,
             get_keep_daemon_alive,
-            set_keep_daemon_alive
+            set_keep_daemon_alive,
+            get_launch_at_login,
+            set_launch_at_login
         ])
-        .setup(|app| {
+        .setup(move |app| {
             let app_data_dir = app.path().app_data_dir()?;
             fs::create_dir_all(&app_data_dir)?;
             let log_path = app_data_dir.join("comote-launch.log");
@@ -200,8 +210,11 @@ fn main() {
                     .title("Comote")
                     .inner_size(1280.0, 800.0)
                     .min_inner_size(960.0, 600.0)
+                    .visible(!launched_at_login)
                     .build()?;
-            let _ = window.set_focus();
+            if !launched_at_login {
+                let _ = window.set_focus();
+            }
 
             // Inspect any already-listening daemon before starting our own. We
             // only reuse a daemon whose /api/version matches ours; a mismatched
@@ -272,7 +285,11 @@ fn main() {
             // Show in the Dock (Regular) so users get the usual app affordance,
             // and ALSO live in the top-of-screen tray for quick access.
             #[cfg(target_os = "macos")]
-            app.set_activation_policy(tauri::ActivationPolicy::Regular);
+            app.set_activation_policy(if launched_at_login {
+                tauri::ActivationPolicy::Accessory
+            } else {
+                tauri::ActivationPolicy::Regular
+            });
 
             // A tray icon keeps Comote resident. Without it, closing the window
             // would stop the local daemon and break the phone bridge — exactly
@@ -351,6 +368,69 @@ fn set_keep_daemon_alive(app: AppHandle, enabled: bool) -> Result<bool, String> 
     Ok(enabled)
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LaunchAtLoginStatus {
+    supported: bool,
+    enabled: bool,
+    backend: &'static str,
+}
+
+// Reports the operating system's actual registration state. The OS entry is
+// the source of truth, so uninstallers and manual changes are reflected in the
+// UI instead of trusting a stale local preference.
+#[tauri::command]
+fn get_launch_at_login(app: AppHandle) -> Result<LaunchAtLoginStatus, String> {
+    let enabled = app.autolaunch().is_enabled().map_err(|e| e.to_string())?;
+    Ok(LaunchAtLoginStatus {
+        supported: true,
+        enabled,
+        backend: autostart_backend(),
+    })
+}
+
+// Enables or disables per-user login startup. The official Tauri plugin uses
+// HKCU Run on Windows, a LaunchAgent on macOS and XDG autostart on Linux. It
+// launches this desktop executable with --autostart so the daemon and tray are
+// started without flashing the main window.
+#[tauri::command]
+fn set_launch_at_login(app: AppHandle, enabled: bool) -> Result<LaunchAtLoginStatus, String> {
+    if enabled {
+        app.autolaunch().enable().map_err(|e| e.to_string())?;
+    } else {
+        app.autolaunch().disable().map_err(|e| e.to_string())?;
+    }
+    get_launch_at_login(app)
+}
+
+fn launched_at_login<I, S>(args: I) -> bool
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<str>,
+{
+    args.into_iter().any(|arg| arg.as_ref() == AUTOSTART_ARG)
+}
+
+#[cfg(target_os = "windows")]
+fn autostart_backend() -> &'static str {
+    "windows-registry"
+}
+
+#[cfg(target_os = "macos")]
+fn autostart_backend() -> &'static str {
+    "macos-launch-agent"
+}
+
+#[cfg(target_os = "linux")]
+fn autostart_backend() -> &'static str {
+    "linux-xdg-autostart"
+}
+
+#[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
+fn autostart_backend() -> &'static str {
+    "unsupported"
+}
+
 // Opens an external link in the system default browser. The daemon UI runs in a
 // remote-origin webview where <a target="_blank"> is a no-op, so the frontend
 // routes outbound links here. Only http(s) is allowed — never file:, etc.
@@ -368,6 +448,8 @@ fn open_external(app: AppHandle, url: String) -> Result<(), String> {
 }
 
 fn show_main_window(app: &AppHandle) {
+    #[cfg(target_os = "macos")]
+    app.set_activation_policy(tauri::ActivationPolicy::Regular);
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.show();
         let _ = window.set_focus();
@@ -597,7 +679,9 @@ fn normalize_windows_path(path: PathBuf) -> PathBuf {
 }
 
 fn navigate_to_service(window: &WebviewWindow, port: u16) {
-    let _ = window.eval(&format!("window.location.replace('http://127.0.0.1:{port}')"));
+    let _ = window.eval(&format!(
+        "window.location.replace('http://127.0.0.1:{port}')"
+    ));
 }
 
 fn show_launch_error(window: &WebviewWindow, log_path: &Path) {
@@ -789,7 +873,10 @@ fn append_sidecar_stderr_tail(launch_log: &Path) {
 // The last `max_lines` non-blank lines of a log body, in original order. Pure /
 // no I/O so the tail logic can be unit-tested without touching the filesystem.
 fn stderr_tail_lines(contents: &str, max_lines: usize) -> Vec<&str> {
-    let lines: Vec<&str> = contents.lines().filter(|line| !line.trim().is_empty()).collect();
+    let lines: Vec<&str> = contents
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .collect();
     let start = lines.len().saturating_sub(max_lines);
     lines[start..].to_vec()
 }
@@ -952,7 +1039,7 @@ mod tests {
     }
 
     #[test]
-    fn leaves_benign_lines_and_non_ascii_untouched(){
+    fn leaves_benign_lines_and_non_ascii_untouched() {
         let line = "[out] [info]: [ 'ws', 'ws client ready' ] 已开启防休眠（Codex 任务进行中）";
         assert_eq!(redact_secrets(line), line);
         // A bare word containing a key name but no separator is untouched.
@@ -1041,6 +1128,13 @@ mod tests {
         );
     }
 
+    #[test]
+    fn launch_at_login_flag_is_detected_without_affecting_manual_launches() {
+        assert!(!launched_at_login(["comote"]));
+        assert!(launched_at_login(["comote", "--autostart"]));
+        assert!(!launched_at_login(["comote", "--autostart=false"]));
+    }
+
     #[cfg(unix)]
     #[test]
     fn graceful_stop_returns_exited_when_process_dies_in_grace() {
@@ -1083,7 +1177,10 @@ mod tests {
         // Cap smaller than the content: keep the final N non-blank lines, order preserved.
         assert_eq!(stderr_tail_lines(body, 2), vec!["line3", "line4"]);
         // Cap larger than the content: all non-blank lines, blanks removed.
-        assert_eq!(stderr_tail_lines(body, 10), vec!["line1", "line2", "line3", "line4"]);
+        assert_eq!(
+            stderr_tail_lines(body, 10),
+            vec!["line1", "line2", "line3", "line4"]
+        );
         // Nothing worth showing.
         assert!(stderr_tail_lines("\n   \n\n", 5).is_empty());
         assert!(stderr_tail_lines("", 5).is_empty());
@@ -1135,7 +1232,9 @@ mod tests {
     #[test]
     fn normalize_windows_path_strips_verbatim_prefix() {
         assert_eq!(
-            normalize_windows_path(PathBuf::from(r"\\?\C:\Program Files\Comote\comote-node.exe")),
+            normalize_windows_path(PathBuf::from(
+                r"\\?\C:\Program Files\Comote\comote-node.exe"
+            )),
             PathBuf::from(r"C:\Program Files\Comote\comote-node.exe")
         );
         // No prefix → identity.

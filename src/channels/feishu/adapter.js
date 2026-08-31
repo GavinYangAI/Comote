@@ -7,9 +7,9 @@ import { t } from "../../core/i18n/index.js";
 // Outbound cards are no longer built here — the feishu renderer turns the
 // semantic reply into a card at delivery time.
 export class FeishuChannelAdapter extends BaseChannelAdapter {
-  constructor({ commandRouter, sendReply, onDetectedIdentity = null, allowGroups = false, resolveDisplayName = null, downloadAttachment = null, supportsMedia = null }) {
+  constructor({ channelId = "feishu", commandRouter, sendReply, onDetectedIdentity = null, allowGroups = false, resolveDisplayName = null, downloadAttachment = null, supportsMedia = null }) {
     super({
-      channelId: "feishu",
+      channelId,
       commandRouter,
       sendReply,
       onDetectedIdentity,
@@ -34,12 +34,13 @@ export class FeishuChannelAdapter extends BaseChannelAdapter {
         }
       },
     });
+    this.feishuChannelId = channelId;
     this.startedAt = new Date().toISOString();
   }
 
   getStatus() {
     return {
-      id: "feishu",
+      id: this.feishuChannelId,
       state: "adapter_ready",
       supports: {
         directMessages: true,
@@ -67,7 +68,7 @@ export class FeishuChannelAdapter extends BaseChannelAdapter {
       conversationId: message.chat_id ?? payload.chatId ?? stableId,
       conversationType: chatType === "p2p" ? "direct" : "group",
       identity: {
-        channel: "feishu",
+        channel: this.feishuChannelId,
         stableId,
         displayName: sender.name ?? payload.senderName ?? stableId,
       },

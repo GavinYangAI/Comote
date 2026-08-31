@@ -3,6 +3,9 @@
 docs/
 .DS_Store
 node_modules/
+.env
+logs/
+.runtime/
 dist/
 release/
 build-assets/

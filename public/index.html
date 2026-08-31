@@ -23,6 +23,10 @@
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="7" y="2" width="10" height="20" rx="2.5"/><path d="M11 18h2"/></svg>
             <span data-i18n="web.nav.connectPhone">连接手机</span>
           </a>
+          <a class="nav-item" href="#globalManager">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 2v4M12 18v4M4.9 4.9l2.8 2.8M16.3 16.3l2.8 2.8M2 12h4M18 12h4M4.9 19.1l2.8-2.8M16.3 7.7l2.8-2.8"/><circle cx="12" cy="12" r="4"/></svg>
+            <span data-i18n="web.globalManager.nav">全局管理应用</span>
+          </a>
           <a class="nav-item" href="#users">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 3.5-6 8-6s8 2 8 6"/></svg>
             <span data-i18n="web.nav.users">授权用户</span>
@@ -94,6 +98,13 @@
           <div>
             <strong id="loadErrorTitle" data-i18n="web.loadError.title">加载设置时出错</strong>
             <p id="loadErrorDetail"></p>
+            <div id="apiTokenForm" class="token-auth-form" hidden>
+              <label for="apiTokenInput" data-i18n="web.loadError.tokenInputLabel">本地 API token</label>
+              <div class="token-auth-controls">
+                <input id="apiTokenInput" type="password" autocomplete="off" spellcheck="false" data-i18n-attr="placeholder:web.loadError.tokenInputPlaceholder" placeholder="输入 COMOTE_LOCAL_API_TOKEN">
+                <button id="saveApiToken" class="secondary-button" type="button" data-i18n="web.loadError.tokenSave">保存并重试</button>
+              </div>
+            </div>
           </div>
           <button id="retryLoad" class="secondary-button" type="button" data-i18n="web.button.retry">重试</button>
         </section>
@@ -116,6 +127,31 @@
           </div>
 
           <div id="channelCards"></div>
+        </section>
+
+        <section id="globalManager" class="section-block">
+          <div class="section-heading">
+            <h2 data-i18n="web.globalManager.title">全局管理应用</h2>
+            <p data-i18n="web.globalManager.subtitle">绑定独立的飞书应用，专门接收全部 Codex 项目状态并处理审批。</p>
+          </div>
+          <article class="panel global-manager-panel">
+            <div class="global-manager-head">
+              <div>
+                <strong data-i18n="web.globalManager.feishuTitle">飞书 Codex 全局管理</strong>
+                <p id="globalManagerDescription" class="panel-hint"></p>
+              </div>
+              <span id="globalManagerStatus" class="badge neutral">未绑定</span>
+            </div>
+            <dl id="globalManagerDetails" class="kv global-manager-details"></dl>
+            <div id="globalManagerLoginResult" class="qr-result" hidden></div>
+            <div class="actions global-manager-actions">
+              <button id="globalManagerBind" type="button" data-i18n="web.globalManager.bind">扫码绑定</button>
+              <button id="globalManagerTest" class="secondary-button" type="button" data-i18n="web.globalManager.test" hidden>发送测试卡片</button>
+              <button id="globalManagerRescan" class="secondary-button" type="button" data-i18n="web.globalManager.rescan" hidden>重新扫码</button>
+              <button id="globalManagerUnbind" class="danger-button" type="button" data-i18n="web.globalManager.unbind" hidden>解除绑定</button>
+            </div>
+            <p id="globalManagerWarning" class="setting-note" hidden data-i18n="web.globalManager.rescanWarning">重新扫码只会替换全局管理飞书应用，不影响项目对话通道。</p>
+          </article>
         </section>
 
         <section id="users" class="section-block">
@@ -207,8 +243,8 @@
               </div>
             </article>
 
-            <article id="keepAlivePanel" class="panel" hidden>
-              <h3 data-i18n="web.advanced.keepAliveTitle">后台运行</h3>
+            <article id="keepAlivePanel" class="panel desktop-runtime-panel">
+              <h3 data-i18n="web.advanced.startupTitle">后台与启动</h3>
               <label class="setting-toggle" for="keepDaemonAlive">
                 <span class="setting-copy">
                   <strong data-i18n="web.advanced.keepAliveLabel">关闭窗口后保持后台运行</strong>
@@ -216,6 +252,16 @@
                 </span>
                 <span class="switch-control">
                   <input id="keepDaemonAlive" type="checkbox" role="switch" data-i18n-attr="aria-label:web.advanced.keepAliveLabel" aria-label="关闭窗口后保持后台运行">
+                  <span class="switch-track" aria-hidden="true"></span>
+                </span>
+              </label>
+              <label class="setting-toggle setting-toggle-separated" for="launchAtLogin">
+                <span class="setting-copy">
+                  <strong data-i18n="web.advanced.launchAtLoginLabel">登录系统时自动启动 Comote</strong>
+                  <span id="launchAtLoginStatus" class="setting-note" data-i18n="web.advanced.launchAtLoginHint" aria-live="polite">启动后隐藏在系统托盘，并自动运行本地服务。</span>
+                </span>
+                <span class="switch-control">
+                  <input id="launchAtLogin" type="checkbox" role="switch" disabled data-i18n-attr="aria-label:web.advanced.launchAtLoginLabel" aria-label="登录系统时自动启动 Comote">
                   <span class="switch-track" aria-hidden="true"></span>
                 </span>
               </label>

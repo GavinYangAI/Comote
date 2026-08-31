@@ -3,6 +3,7 @@ import { basename } from "node:path";
 import { t } from "../../core/i18n/index.js";
 import { textCard, statusCard, approvalCard, approvalResolvedCard, pickerCard } from "./cards.js";
 import { approvalDetail } from "../base/approval-format.js";
+import { globalManagerBindCard } from "./global-manager-cards.js";
 
 // Mirror of the runtime's media size guard (FeishuRuntimeService.MAX_MEDIA_BYTES);
 // kept in sync so the renderer falls back to text on the same boundary.
@@ -20,7 +21,46 @@ export function createFeishuRenderer() {
     pickerTitle(pickKind) {
       return t(pickKind === "project" ? "card.picker.project" : "card.picker.conversation");
     },
-    async render(reply, { driver }) {
+    async render(reply, { driver, runtime }) {
+      if (reply.kind === "globalManagerCard") {
+        try {
+          if (!runtime?.globalManager?.canDeliverQueuedCard?.(reply)) {
+            throw new Error("global manager binding is not ready for this queued card");
+          }
+          let result = null;
+          if (reply.messageId) {
+            try {
+              await driver.updateCard({ messageId: reply.messageId, card: reply.card });
+              result = { messageId: reply.messageId };
+            } catch {
+              result = await driver.sendCard({
+                receiveId: reply.conversationId,
+                receiveIdType: reply.receiveIdType ?? "open_id",
+                card: reply.card,
+              });
+            }
+          } else {
+            result = await driver.sendCard({
+              receiveId: reply.conversationId,
+              receiveIdType: reply.receiveIdType ?? "open_id",
+              card: reply.card,
+            });
+          }
+          runtime?.globalManager?.handleQueuedCardDelivered?.(reply, result);
+          return result;
+        } catch (error) {
+          runtime?.globalManager?.handleQueuedCardFailure?.(reply, error);
+          throw error;
+        }
+      }
+      if (reply.kind === "managerBind") {
+        await driver.sendCard({
+          receiveId: reply.conversationId,
+          receiveIdType: "chat_id",
+          card: globalManagerBindCard(),
+        });
+        return;
+      }
       if (reply.kind === "media") {
         return this._renderMedia(reply, driver);
       }

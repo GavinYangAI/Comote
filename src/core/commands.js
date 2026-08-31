@@ -4,9 +4,10 @@ import { t } from "./i18n/index.js";
 import { classifyMedia, resolveWithinProject } from "./paths.js";
 import { buildFileDeliveries } from "./file-delivery.js";
 import { scanLocalProjects as defaultScanLocalProjects } from "./local-projects.js";
+import { isAbsolute, win32 } from "node:path";
 
 function isAbsolutePath(value) {
-  return typeof value === "string" && value.startsWith("/");
+  return typeof value === "string" && (isAbsolute(value) || win32.isAbsolute(value));
 }
 
 // Upper bound for the one-time-message identity sets (welcome card /
@@ -35,6 +36,8 @@ export class CommandRouter {
     persisted = {},
     maxTurnsPerHour = 60,
     transcript = null,
+    taskMonitor = null,
+    globalManager = null,
     scanLocalProjects = defaultScanLocalProjects,
   }) {
     this.authorization = authorization;
@@ -44,6 +47,8 @@ export class CommandRouter {
     this.codexCli = codexCli;
     this.outboundQueue = outboundQueue;
     this.transcript = transcript;
+    this.taskMonitor = taskMonitor;
+    this.globalManager = globalManager;
     // Headless/Linux fallback project source: enumerates folders under a root
     // when there is no Codex Desktop to list workspaces. Injectable for tests.
     this.scanLocalProjects = scanLocalProjects;
@@ -76,6 +81,10 @@ export class CommandRouter {
       noticedIdentities: [...this.noticedIdentities],
       greetedIdentities: [...this.greetedIdentities],
     };
+  }
+
+  setGlobalManager(globalManager) {
+    this.globalManager = globalManager;
   }
 
   // Throws a user-facing error when an identity exceeds its hourly turn budget,
@@ -181,6 +190,13 @@ export class CommandRouter {
   async handleMessageAsync(rawMessage) {
     const message = normalizeChannelMessage(rawMessage);
     const key = this.identityKey(message.identity);
+    // The global manager is a separate application over the same transport.
+    // Its explicit /manager namespace and manager binding authorize it without
+    // mutating or depending on the project application's identity allow-list.
+    const managerReply = await this.handleManagerMessageAsync(message);
+    if (managerReply) {
+      return managerReply;
+    }
     if (!this.authorization.isAuthorized(message.identity)) {
       if (!this.noticedIdentities.has(key)) {
         rememberIdentity(this.noticedIdentities, key);
@@ -194,6 +210,12 @@ export class CommandRouter {
       return this.prependWelcome(reply);
     }
     return reply;
+  }
+
+  async handleManagerMessageAsync(rawMessage) {
+    const message = normalizeChannelMessage(rawMessage);
+    if (!/^\/manager(?:\s|$)/.test(message.text)) return null;
+    return await this.globalManager?.handleMessage?.(message) ?? null;
   }
 
   async dispatchAuthorizedMessage(message) {
@@ -361,23 +383,23 @@ export class CommandRouter {
   }
 
   async projectsTextAsync(identity) {
+    const key = this.identityKey(identity);
+    let connectedDesktopWasEmpty = false;
     if (this.codexDesktop?.getStatus?.().state === "connected" && this.codexDesktop?.listProjects) {
       const desktopProjects = await this.codexDesktop.listProjects();
       if (desktopProjects.length > 0) {
-        const key = this.identityKey(identity);
         this.lastProjectsByIdentity.set(key, desktopProjects);
         this.pendingByIdentity.set(key, { type: "choose_project" });
         return this.pickerFromProjects(desktopProjects, t("cmd.projects.chooseDesktop"));
       }
-      const key = this.identityKey(identity);
-      this.lastProjectsByIdentity.set(key, []);
-      this.pendingByIdentity.delete(key);
-      return this.text(t("cmd.projects.noDesktop"));
+      // A Docker/headless app-server can be connected without sharing the
+      // host Codex Desktop workspace registry. Continue to the mounted local
+      // project list instead of turning a usable /workspace into a dead end.
+      connectedDesktopWasEmpty = true;
     }
-    const key = this.identityKey(identity);
     let localProjects = this.projects.listProjects();
-    // No desktop and an empty store (typical on a fresh headless/Linux box):
-    // scan the local project root so /projects is a real list, not a dead end.
+    // No Desktop projects and an empty store (typical in Docker/headless
+    // installs): scan the local project root so /projects remains usable.
     if (localProjects.length === 0) {
       const scanned = this.scanLocalProjects?.() ?? [];
       if (scanned.length > 0) {
@@ -386,6 +408,11 @@ export class CommandRouter {
       }
     }
     if (localProjects.length === 0) {
+      this.lastProjectsByIdentity.set(key, []);
+      this.pendingByIdentity.delete(key);
+      if (connectedDesktopWasEmpty) {
+        return this.text(t("cmd.projects.noDesktop"));
+      }
       return this.text(this.projectsText());
     }
     this.lastProjectsByIdentity.set(key, localProjects);

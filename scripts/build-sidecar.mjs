@@ -29,11 +29,20 @@ async function main() {
     await buildMacUniversalNode();
   } else if (mode === "x86_64-pc-windows-msvc") {
     await buildWindowsNode();
+  } else if (mode === "linux-current") {
+    await buildLinuxCurrentNode();
   } else {
     throw new Error(`Unknown sidecar target: ${mode}`);
   }
 
   console.log(`Prepared Comote sidecar for ${mode}`);
+}
+
+async function buildLinuxCurrentNode() {
+  if (process.platform !== "linux") {
+    throw new Error("Linux sidecar must be built on Linux so the desktop packages contain a native Node runtime.");
+  }
+  await copyFile(process.execPath, join(binariesDir, sidecarName(currentTargetTriple())));
 }
 
 async function buildMacUniversalNode() {
@@ -213,5 +222,6 @@ function currentTargetTriple() {
   if (process.platform === "darwin" && process.arch === "x64") return "x86_64-apple-darwin";
   if (process.platform === "win32" && process.arch === "x64") return "x86_64-pc-windows-msvc";
   if (process.platform === "linux" && process.arch === "x64") return "x86_64-unknown-linux-gnu";
+  if (process.platform === "linux" && process.arch === "arm64") return "aarch64-unknown-linux-gnu";
   throw new Error(`Unsupported development platform: ${process.platform}/${process.arch}`);
 }

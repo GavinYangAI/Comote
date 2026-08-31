@@ -80,6 +80,7 @@ Comote 通过 `codex app-server`（stdio JSON-RPC）与 Codex 通信，会自动
 
 - macOS：`Comote-x.y.z.dmg`
 - Windows：`Comote-x.y.z-setup.exe`
+- Linux 桌面：`Comote-x.y.z.AppImage` 或 `.deb`
 
 **npm**（命令行版，跨平台，含 Linux）：
 
@@ -88,6 +89,8 @@ npm i -g comote   # 需要 Node 22+
 ```
 
 Linux / 无界面服务器请看[下面](#linux--无界面服务器headless-vps)的部署说明。也可以[从源码编译](#从源码构建)。
+
+桌面安装版可在“高级设置 → 后台与启动”中开启“登录系统时自动启动 Comote”。Windows、macOS 和 Linux 桌面版都会以当前用户身份在登录后启动，默认隐藏在系统托盘，同时拉起本地服务；这与“关闭窗口后保持后台运行”是两个独立设置。Linux 无桌面服务器请使用 systemd，不通过网页修改系统级服务。
 
 ### 2. 绑定一个 IM
 
@@ -149,6 +152,32 @@ Linux / 无界面服务器请看[下面](#linux--无界面服务器headless-vps)
 **本地优先，诚实版**：Comote 没有自己的服务器，你的消息不经过任何 Comote 自有服务器中转；Codex 调用全部发生在本机（daemon 在本机直接跟 `codex app-server` 子进程说话），daemon 也只绑 `127.0.0.1`，授权、token、会话历史都存在本机（见下面[数据存储位置](#数据存储位置)）。但要说清楚一点：你和 Comote 之间的消息**经由你所选 IM 平台自己的服务器**传输（飞书是 WebSocket 长连接，钉钉是 Stream 长连接，微信是 iLink getupdates 轮询，Telegram 是 getUpdates 长轮询），这段链路受该 IM 平台的隐私政策约束。
 
 ## 配置与参考
+
+### Docker 运行
+
+项目根目录已提供 `Dockerfile` 和 `docker-compose.yml`。首次运行先复制环境变量模板并生成一个长随机 token：
+
+```bash
+cp .env.example .env
+docker compose up -d --build
+```
+
+浏览器访问 `http://127.0.0.1:16208/`。Compose 仅把网关发布到宿主机回环地址；网关负责向内部 Comote API 注入 token。容器会挂载宿主机的 `~/.comote`、Codex 的 `auth.json`/`config.toml` 和当前项目目录，分别用于持久化 Comote 状态、复用 Codex 登录状态，以及让容器内 Codex 操作此项目。Codex 的 Linux SQLite 状态保存在独立 Docker volume 中，避免与正在运行的 Windows Codex Desktop 争用同一数据库。
+
+默认基础镜像使用固定 digest 的 DaoCloud Docker Hub 代理，以适配 Docker Hub 访问受限的网络；可在 `.env` 中通过 `NODE_IMAGE` 和 `NGINX_IMAGE` 切换到官方或自建镜像源。
+
+查看状态和日志：
+
+```bash
+docker compose ps
+docker compose logs -f comote
+```
+
+停止服务：
+
+```bash
+docker compose down
+```
 
 ### 配置的三层结构
 
@@ -287,7 +316,7 @@ Linux 上没有应用内自动下载更新，手动升级即可。
 
 ## 从源码构建
 
-要求：Node.js ≥ 22，Rust（Tauri 需要），macOS 12+ 或 Windows 10+。
+要求：Node.js ≥ 22，Rust（Tauri 需要），macOS 12+、Windows 10+ 或带 WebKitGTK 的 Linux 桌面环境。
 
 ```bash
 git clone https://github.com/GavinYangAI/comote.git
@@ -314,6 +343,10 @@ npm run dist:mac
 # Windows（必须在 Windows 上跑 —— Node sidecar + NSIS 都依赖 Windows 工具链）
 npm run dist:win
 # 产物：release/win/
+
+# Linux（必须在 Linux 上跑；生成当前 CPU 架构的 deb 和 AppImage）
+npm run dist:linux
+# 产物：release/Comote-x.y.z-{x64|arm64}.{deb|AppImage}
 ```
 
 也可以让 GitHub Actions 帮忙（`windows-latest` runner）—— 参考 `.github/workflows/desktop-release.yml`。

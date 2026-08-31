@@ -116,6 +116,31 @@ export class BaseChannelAdapter {
     if (message.conversationType !== "direct" && !this.allowGroups) {
       return this._ignoreGroupMessage(message);
     }
+    // A manager command belongs to the independent global-manager application.
+    // Route it before project attachment handling so a shared phone transport
+    // never makes manager input read or mutate the project application's state,
+    // including its detected/authorized identity lists.
+    const managerReply = await this.commandRouter.handleManagerMessageAsync?.({
+      identity: message.identity,
+      text: message.text,
+      attachments: [],
+      conversation: {
+        channel: this.channelId,
+        conversationId: message.conversationId,
+        ...(message.accountId ? { accountId: message.accountId } : {}),
+      },
+    });
+    if (managerReply) {
+      const semantic = routerReplyToSemantic(managerReply, {
+        channel: this.channelId,
+        conversationId: message.conversationId,
+        accountId: message.accountId,
+        inReplyTo: message.messageId,
+      });
+      if (semantic) await this.sendReply(semantic);
+      return managerReply;
+    }
+
     await this.resolveIdentityName?.(message.identity);
     this.onDetectedIdentity?.(message.identity);
 

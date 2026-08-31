@@ -17,7 +17,7 @@ export { MAX_MEDIA_BYTES } from "./renderer.js";
 // card-button callbacks (handleCardAction via the driver's onAction hook), and
 // async pick dispatch.
 export class FeishuRuntimeService extends BaseChannelRuntime {
-  constructor({ adapter, outboundQueue, renderer, driver = null, persist = null, eventLog = null, cardUpdateIntervalMs = 700 }) {
+  constructor({ channelId = "feishu", adapter, outboundQueue, renderer, driver = null, persist = null, eventLog = null, cardUpdateIntervalMs = 700 }) {
     if (!adapter) {
       throw new Error("adapter is required");
     }
@@ -29,7 +29,7 @@ export class FeishuRuntimeService extends BaseChannelRuntime {
     // so the not-yet-migrated state.js construction (A12 wires it explicitly)
     // keeps working. The runtime always has a working renderer either way.
     super({
-      channelId: "feishu",
+      channelId,
       inboundMode: "push",
       adapter,
       outboundQueue,
@@ -263,7 +263,7 @@ export class FeishuRuntimeService extends BaseChannelRuntime {
     if (!action.openId) {
       return null;
     }
-    return { channel: "feishu", stableId: action.openId };
+    return { channel: this.channelId, stableId: action.openId };
   }
 
   // True when the clicker is on the allow-list. Card buttons are a side channel
@@ -317,6 +317,10 @@ export class FeishuRuntimeService extends BaseChannelRuntime {
     });
     if (!action.value) {
       return {};
+    }
+    const managerResult = await this.globalManager?.handleCardAction?.(action);
+    if (managerResult) {
+      return managerResult;
     }
     const router = this.adapter?.commandRouter ?? null;
     const identity = this.clickerIdentity(action);

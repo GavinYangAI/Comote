@@ -1,0 +1,14 @@
+.git
+.github
+.env
+.comote/
+logs/
+node_modules/
+dist/
+release/
+build-assets/
+src-tauri/target/
+src-tauri/binaries/
+src-tauri/gen/
+npm-debug.log*
+*.log

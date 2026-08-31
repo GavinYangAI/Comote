@@ -4,6 +4,397 @@ import assert from "node:assert/strict";
 import { createComoteState } from "../src/server/state.js";
 import wechatPlugin from "../src/channels/wechat/index.js";
 import { DingTalkDriver } from "../src/channels/dingtalk/driver.js";
+import { FeishuDriver } from "../src/channels/feishu/driver.js";
+
+test("restart keeps project chat and global manager on independent Feishu apps", async () => {
+  let saved = null;
+  const state = createComoteState({
+    autoStartFeishuRuntime: false,
+    stateStore: {
+      async save(snapshot) { saved = snapshot; },
+      async flush() {},
+    },
+    persisted: {
+      channelConfigs: {
+        feishu: {
+          enabled: true,
+          appId: "cli_project_chat",
+          appSecret: "secret_project_chat",
+          domain: "feishu",
+        },
+        "feishu-global-manager": {
+          enabled: true,
+          appId: "cli_global_manager",
+          appSecret: "secret_global_manager",
+          domain: "feishu",
+        },
+      },
+      globalManager: {
+        enabled: true,
+        channelId: "feishu-global-manager",
+        appId: "cli_global_manager",
+        managerOpenId: "ou_global_manager",
+      },
+    },
+  });
+
+  assert.equal(state.runtime.feishu.getConfig().appId, "cli_project_chat");
+  assert.equal(
+    state.runtime["feishu-global-manager"].getConfig().appId,
+    "cli_global_manager",
+  );
+  assert.notEqual(state.runtime.feishu, state.runtime["feishu-global-manager"]);
+  assert.equal(state.globalManager.publicSnapshot().configuredAppId, "cli_global_manager");
+  assert.equal(state.globalManager.publicSnapshot().channelId, "feishu-global-manager");
+  await state.persist();
+  assert.equal(saved.channelConfigs.feishu.appId, "cli_project_chat");
+  assert.equal(saved.channelConfigs["feishu-global-manager"].appId, "cli_global_manager");
+  await state.shutdown();
+});
+
+test("global-manager QR login replaces only the manager Feishu app", async (t) => {
+  const originalStartEventStream = FeishuDriver.prototype.startEventStream;
+  FeishuDriver.prototype.startEventStream = async () => ({ ok: true });
+  t.after(() => {
+    FeishuDriver.prototype.startEventStream = originalStartEventStream;
+  });
+
+  const state = createComoteState({
+    autoStartFeishuRuntime: false,
+    persisted: {
+      channelConfigs: {
+        feishu: {
+          enabled: true,
+          appId: "cli_project_chat",
+          appSecret: "secret_project_chat",
+          domain: "feishu",
+        },
+        "feishu-global-manager": {
+          enabled: true,
+          appId: "cli_manager_old",
+          appSecret: "secret_manager_old",
+          domain: "feishu",
+        },
+      },
+    },
+    feishuLoginDriverFactory: () => ({
+      startLogin: async () => ({ loginId: "manager_login", domain: "feishu" }),
+      getLoginStatus: async () => ({
+        state: "confirmed",
+        appId: "cli_manager_new",
+        appSecret: "secret_manager_new",
+        domain: "feishu",
+      }),
+    }),
+  });
+
+  const managerRuntime = state.runtime["feishu-global-manager"];
+  await managerRuntime.startLogin({ domain: "feishu" });
+  const result = await managerRuntime.getLoginStatus({ loginId: "manager_login" });
+
+  assert.equal(result.state, "confirmed");
+  assert.equal(result.requiresManagerBind, true);
+  assert.equal(managerRuntime.getConfig().appId, "cli_manager_new");
+  assert.equal(state.runtime.feishu.getConfig().appId, "cli_project_chat");
+  await state.shutdown();
+});
+
+test("project and global-manager Feishu event streams reply through only their own apps", async () => {
+  const handlers = {};
+  const sent = { feishu: [], "feishu-global-manager": [] };
+  const makeDriver = (channel) => ({
+    verifyEvent: () => true,
+    getStatus: () => ({ state: "configured" }),
+    startEventStream: async (nextHandlers) => {
+      handlers[channel] = nextHandlers;
+      return { ok: true };
+    },
+    stopEventStream() {},
+    async sendCard(args) {
+      sent[channel].push(args);
+      return { messageId: `${channel}-message-${sent[channel].length}` };
+    },
+  });
+  const projectIdentity = {
+    channel: "feishu",
+    stableId: "ou_project_user",
+    displayName: "Project user",
+  };
+  const state = createComoteState({
+    autoStartWeChatRuntime: false,
+    autoStartFeishuRuntime: false,
+    autoStartDingTalkRuntime: false,
+    autoStartTelegramRuntime: false,
+    autoStartTaskMonitor: false,
+    persisted: {
+      identities: [projectIdentity],
+      channelConfigs: {
+        feishu: {
+          enabled: true,
+          appId: "cli_project_chat",
+          appSecret: "secret_project_chat",
+        },
+        "feishu-global-manager": {
+          enabled: true,
+          appId: "cli_global_manager",
+          appSecret: "secret_global_manager",
+        },
+      },
+    },
+    scanLocalProjects: () => [
+      { name: "Comote", path: "D:\\work\\Comote", source: "local-scan", status: "available" },
+    ],
+  });
+
+  state.runtime.feishu.__setTestDriver(makeDriver("feishu"));
+  state.runtime["feishu-global-manager"].__setTestDriver(makeDriver("feishu-global-manager"));
+  await state.runtime.feishu.start();
+  await state.runtime["feishu-global-manager"].start();
+
+  await handlers.feishu.onEvent({
+    header: { event_id: "project-event-1" },
+    event: {
+      sender: { sender_id: { open_id: projectIdentity.stableId } },
+      message: {
+        message_id: "project-message-1",
+        chat_id: "project-chat",
+        chat_type: "p2p",
+        message_type: "text",
+        content: JSON.stringify({ text: "/projects" }),
+      },
+    },
+  });
+
+  assert.equal(sent.feishu.length, 1, "the project app must answer /projects");
+  assert.equal(sent.feishu[0].receiveId, "project-chat");
+  assert.match(JSON.stringify(sent.feishu[0].card), /Comote/);
+  assert.equal(sent["feishu-global-manager"].length, 0, "the manager app must not steal project replies");
+
+  await handlers.feishu.onAction({
+    event: {
+      operator: { open_id: projectIdentity.stableId },
+      action: { value: { kind: "global_manager_bind" } },
+    },
+  });
+  assert.equal(state.globalManager.publicSnapshot().status, "unbound", "a project-app card action cannot bind global management");
+
+  await handlers["feishu-global-manager"].onEvent({
+    header: { event_id: "manager-event-1" },
+    event: {
+      sender: { sender_id: { open_id: "ou_manager_user" } },
+      message: {
+        message_id: "manager-message-1",
+        chat_id: "manager-chat",
+        chat_type: "p2p",
+        message_type: "text",
+        content: JSON.stringify({ text: "你好" }),
+      },
+    },
+  });
+
+  assert.equal(sent.feishu.length, 1, "the project app must not send manager replies");
+  assert.equal(sent["feishu-global-manager"].length, 1, "the manager app must send its bind card");
+  assert.equal(sent["feishu-global-manager"][0].receiveId, "manager-chat");
+  assert.match(JSON.stringify(sent["feishu-global-manager"][0].card), /global_manager_bind/);
+
+  const bindResult = await handlers["feishu-global-manager"].onAction({
+    event: {
+      operator: { open_id: "ou_manager_user" },
+      open_chat_id: "manager-chat",
+      open_message_id: "manager-message-1",
+      action: { value: { kind: "global_manager_bind" } },
+    },
+  });
+  assert.equal(bindResult.toast.type, "success");
+  assert.equal(state.globalManager.publicSnapshot().status, "ready");
+  assert.equal(state.globalManager.publicSnapshot().manager.stableId, "ou_manager_user");
+  assert.equal(sent.feishu.length, 1, "binding must not use the project app");
+  assert.equal(sent["feishu-global-manager"].length, 2, "binding sends the manager dashboard through the manager app");
+  assert.deepEqual(
+    state.authorization.listDetectedIdentities().map((identity) => identity.channel),
+    [],
+    "manager identities must stay out of project authorization",
+  );
+  await state.shutdown();
+});
+
+test("rejects a Feishu login id that was not started by the current process", async () => {
+  let statusCalls = 0;
+  const state = createComoteState({
+    autoStartFeishuRuntime: false,
+    feishuLoginDriverFactory: () => ({
+      startLogin: async () => ({ loginId: "current_login", domain: "feishu" }),
+      getLoginStatus: async () => {
+        statusCalls += 1;
+        return {
+          state: "confirmed",
+          appId: "cli_stale",
+          appSecret: "secret_stale",
+          userId: "ou_stale",
+          domain: "feishu",
+        };
+      },
+    }),
+  });
+
+  const result = await state.runtime.feishu.getLoginStatus({ loginId: "stale_login" });
+
+  assert.equal(result.state, "expired");
+  assert.equal(statusCalls, 0);
+  assert.equal(state.runtime.feishu.getConfig().linkedUserId, null);
+  await state.shutdown();
+});
+
+test("a confirmed Feishu login id can update binding only once", async (t) => {
+  const originalResolveUserName = FeishuDriver.prototype.resolveUserName;
+  const originalStartEventStream = FeishuDriver.prototype.startEventStream;
+  FeishuDriver.prototype.resolveUserName = async () => "Current user";
+  FeishuDriver.prototype.startEventStream = async () => ({ ok: true });
+  t.after(() => {
+    FeishuDriver.prototype.resolveUserName = originalResolveUserName;
+    FeishuDriver.prototype.startEventStream = originalStartEventStream;
+  });
+
+  let statusCalls = 0;
+  const loginDriver = {
+    startLogin: async () => ({ loginId: "current_login", domain: "feishu" }),
+    getLoginStatus: async () => {
+      statusCalls += 1;
+      return {
+        state: "confirmed",
+        appId: "cli_current",
+        appSecret: "secret_current",
+        userId: "ou_current",
+        domain: "feishu",
+      };
+    },
+  };
+  const state = createComoteState({
+    autoStartFeishuRuntime: false,
+    feishuLoginDriverFactory: () => loginDriver,
+  });
+
+  await state.runtime.feishu.startLogin({ domain: "feishu" });
+  const confirmed = await state.runtime.feishu.getLoginStatus({ loginId: "current_login" });
+  const repeated = await state.runtime.feishu.getLoginStatus({ loginId: "current_login" });
+
+  assert.equal(confirmed.state, "confirmed");
+  assert.equal(repeated.state, "expired");
+  assert.equal(statusCalls, 1);
+  assert.equal(state.runtime.feishu.getConfig().linkedUserId, null);
+  assert.equal(state.runtime.feishu.getConfig().linkedUserAppId, null);
+  await state.shutdown();
+});
+
+test("starting a new Feishu login invalidates an older in-flight result", async (t) => {
+  const originalResolveUserName = FeishuDriver.prototype.resolveUserName;
+  const originalStartEventStream = FeishuDriver.prototype.startEventStream;
+  FeishuDriver.prototype.resolveUserName = async () => "New user";
+  FeishuDriver.prototype.startEventStream = async () => ({ ok: true });
+  t.after(() => {
+    FeishuDriver.prototype.resolveUserName = originalResolveUserName;
+    FeishuDriver.prototype.startEventStream = originalStartEventStream;
+  });
+
+  let loginCounter = 0;
+  let releaseOldStatus;
+  const oldStatusGate = new Promise((resolve) => { releaseOldStatus = resolve; });
+  const state = createComoteState({
+    autoStartFeishuRuntime: false,
+    feishuLoginDriverFactory: () => ({
+      startLogin: async () => {
+        loginCounter += 1;
+        return { loginId: `login_${loginCounter}`, domain: "feishu" };
+      },
+      getLoginStatus: async ({ loginId }) => {
+        if (loginId === "login_1") {
+          await oldStatusGate;
+          return {
+            state: "confirmed",
+            appId: "cli_old",
+            appSecret: "secret_old",
+            userId: "ou_old",
+            domain: "feishu",
+          };
+        }
+        return {
+          state: "confirmed",
+          appId: "cli_new",
+          appSecret: "secret_new",
+          userId: "ou_new",
+          domain: "feishu",
+        };
+      },
+    }),
+  });
+
+  await state.runtime.feishu.startLogin({ domain: "feishu" });
+  const oldStatus = state.runtime.feishu.getLoginStatus({ loginId: "login_1" });
+  await state.runtime.feishu.startLogin({ domain: "feishu" });
+  releaseOldStatus();
+
+  assert.equal((await oldStatus).state, "expired");
+  assert.equal(state.runtime.feishu.getConfig().linkedUserId, null);
+  assert.equal((await state.runtime.feishu.getLoginStatus({ loginId: "login_2" })).state, "confirmed");
+  assert.equal(state.runtime.feishu.getConfig().linkedUserId, null);
+  assert.equal(state.runtime.feishu.getConfig().linkedUserAppId, null);
+  await state.shutdown();
+});
+
+test("changing Feishu app credentials clears the previous app-scoped user binding", async () => {
+  const state = createComoteState({
+    autoStartFeishuRuntime: false,
+    persisted: {
+      channelConfigs: {
+        feishu: {
+          enabled: true,
+          appId: "cli_old",
+          appSecret: "secret_old",
+          linkedUserId: "ou_old",
+          linkedUserName: "Old user",
+          linkedUserAppId: "cli_old",
+          linkedUserSource: "inbound",
+        },
+      },
+    },
+  });
+
+  const updated = await state.runtime.feishu.configure({
+    appId: "cli_new",
+    appSecret: "secret_new",
+  });
+
+  assert.equal(updated.appId, "cli_new");
+  assert.equal(updated.linkedUserId, null);
+  assert.equal(updated.linkedUserName, null);
+  assert.equal(updated.linkedUserAppId, null);
+  await state.shutdown();
+});
+
+test("updating non-credential Feishu settings preserves the scoped user binding", async () => {
+  const state = createComoteState({
+    autoStartFeishuRuntime: false,
+    persisted: {
+      channelConfigs: {
+        feishu: {
+          enabled: true,
+          appId: "cli_same",
+          appSecret: "secret_same",
+          linkedUserId: "ou_same",
+          linkedUserName: "Same user",
+          linkedUserAppId: "cli_same",
+          linkedUserSource: "inbound",
+        },
+      },
+    },
+  });
+
+  const updated = await state.runtime.feishu.configure({ verificationToken: "verify" });
+
+  assert.equal(updated.linkedUserId, "ou_same");
+  assert.equal(updated.linkedUserAppId, "cli_same");
+  await state.shutdown();
+});
 
 test("stores WeChat login results when token and account id are present", () => {
   assert.equal(

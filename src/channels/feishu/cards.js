@@ -2,6 +2,7 @@
 // Cards use the "config + elements" format already used by this channel.
 
 import { t } from "../../core/i18n/index.js";
+import { neutralizeMarkdownImages } from "../../core/markdown-images.js";
 
 const PHASES = {
   started: { titleKey: "card.phase.started", template: "blue" },
@@ -17,7 +18,10 @@ const PHASES = {
 const MARKDOWN_ELEMENT_LIMIT = 3000;
 
 export function renderMarkdown(text) {
-  const value = String(text ?? "").trim();
+  // Feishu markdown images require an uploaded image_key. Codex commonly
+  // returns local paths instead, so render them as plain text here; the state
+  // layer separately queues safe project-local images as media messages.
+  const value = neutralizeMarkdownImages(text).trim();
   if (!value) {
     return [{ tag: "markdown", content: t("card.empty") }];
   }

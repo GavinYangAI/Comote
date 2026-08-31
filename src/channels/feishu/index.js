@@ -8,16 +8,30 @@ import { FeishuRuntimeService } from "./runtime.js";
 import { createFeishuRenderer } from "./renderer.js";
 
 function normalizeFeishuConfig(config = {}) {
+  const appId = config.appId ?? null;
+  const linkedUserAppId = config.linkedUserAppId ?? null;
+  const linkedUserSource = config.linkedUserSource ?? null;
+  // Feishu open_id values are application-scoped. A legacy binding without an
+  // app scope, or a binding left behind after changing appId, is unsafe to use
+  // and would fail with 99992361 "open_id cross app".
+  const hasCurrentAppUser = Boolean(
+    config.linkedUserId
+    && appId
+    && linkedUserAppId === appId
+    && linkedUserSource === "inbound",
+  );
   return {
     enabled: Boolean(config.enabled),
-    appId: config.appId ?? null,
+    appId,
     appSecret: config.appSecret ?? null,
     verificationToken: config.verificationToken ?? null,
     encryptKey: config.encryptKey ?? null,
     baseUrl: config.baseUrl ?? null,
     domain: config.domain ?? "feishu",
-    linkedUserId: config.linkedUserId ?? null,
-    linkedUserName: config.linkedUserName ?? null,
+    linkedUserId: hasCurrentAppUser ? config.linkedUserId : null,
+    linkedUserName: hasCurrentAppUser ? (config.linkedUserName ?? null) : null,
+    linkedUserAppId: hasCurrentAppUser ? linkedUserAppId : null,
+    linkedUserSource: hasCurrentAppUser ? linkedUserSource : null,
   };
 }
 
@@ -46,6 +60,8 @@ function publicFeishuConfig(config) {
     domain: config.domain,
     linkedUserId: config.linkedUserId,
     linkedUserName: config.linkedUserName,
+    linkedUserAppId: config.linkedUserAppId,
+    linkedUserSource: config.linkedUserSource,
   };
 }
 
@@ -81,10 +97,25 @@ const feishuPlugin = {
     displayName: "飞书 / Lark",
     inboundMode: "push",
     binding: "qr",
+    credentialBinding: true,
     capabilities: { cards: 1, media: 1, liveUpdates: 1, milestones: 0, typing: 0, fileButtons: 1 },
     descriptionKey: "web.channel.feishu.desc",
     icon: "飞",
     configFields: [
+      {
+        name: "appId",
+        type: "text",
+        required: true,
+        labelKey: "web.channel.feishu.appId",
+      },
+      {
+        name: "appSecret",
+        type: "password",
+        secret: true,
+        required: true,
+        hasValueField: "hasAppSecret",
+        labelKey: "web.channel.feishu.appSecret",
+      },
       {
         name: "domain",
         type: "select",

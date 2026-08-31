@@ -36,7 +36,28 @@ GET  /api/channels/feishu/login/status
 POST /api/channels/feishu/inbound
 ```
 
+The global manager uses a second, independent Feishu application under channel
+id `feishu-global-manager`. Its config, QR login session, WebSocket runtime,
+identity scope, and outbound queue are separate from project chat. The same
+generic HTTP boundary is available at
+`/api/channels/feishu-global-manager/*`; scanning or updating it must never
+replace `/api/channels/feishu/config`.
+
 To enable Feishu, click "绑定飞书" in the Comote settings UI and scan the QR code with the Feishu mobile app. The QR app-registration flow returns an app id and app secret, stores them locally, and starts the WebSocket runtime automatically.
+
+For a manually supplied or reused Feishu app, the developer console must use
+long-connection delivery under **Events & Callbacks**, subscribe to
+`im.message.receive_v1`, enable the bot/message permissions, and publish the
+latest app version. A runtime can report `running` as soon as its WebSocket is
+connected even when Feishu has not subscribed that app to message events. In
+that case `/projects` never reaches Comote and no candidate identity appears at
+`GET /api/identities/candidates`.
+
+After scanning the dedicated global-manager app, open its bot in a direct chat
+and send any message. The bot replies with a **Bind global management** card;
+its `global_manager_bind` button binds the clicking user in the current app's
+open-id scope. `/manager bind` remains the text fallback. The QR registration
+open-id is never reused because it belongs to a different application scope.
 
 The `/api/channels/feishu/inbound` webhook path remains for diagnostics and compatibility, but normal Comote operation uses WebSocket, so no public callback URL is required.
 

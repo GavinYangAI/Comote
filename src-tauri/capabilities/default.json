@@ -10,6 +10,8 @@
     "core:default",
     "allow-open-external",
     "allow-get-keep-daemon-alive",
-    "allow-set-keep-daemon-alive"
+    "allow-set-keep-daemon-alive",
+    "allow-get-launch-at-login",
+    "allow-set-launch-at-login"
   ]
 }

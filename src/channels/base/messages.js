@@ -1,7 +1,7 @@
 // Channel-neutral semantic outbound messages. The router/desktop layer produces
 // these; each channel's renderer turns them into native form (cards, inline
 // keyboards, plain text) or degrades by capability.
-export const REPLY_KINDS = ["text", "status", "approval", "approvalResolved", "picker", "media"];
+export const REPLY_KINDS = ["text", "status", "approval", "approvalResolved", "picker", "media", "managerBind"];
 
 export function isReplyKind(kind) {
   return REPLY_KINDS.includes(kind);
@@ -21,6 +21,9 @@ export function routerReplyToSemantic(reply, target) {
   };
   if (reply.picker) {
     return { ...base, kind: "picker", pickKind: reply.picker.pickKind, items: reply.picker.items, text: reply.text ?? "" };
+  }
+  if (reply.kind === "managerBind") {
+    return { ...base, kind: "managerBind" };
   }
   // denied/ignored are never delivered: the existing adapters suppress the
   // repeat "not authorized" denial so an unconfirmed user isn't spammed. Welcome

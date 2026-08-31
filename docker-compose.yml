@@ -1,0 +1,42 @@
+services:
+  comote:
+    build:
+      context: .
+      args:
+        NODE_IMAGE: ${NODE_IMAGE:-docker.m.daocloud.io/library/node:22-bookworm-slim@sha256:f32b81066cde10a75dbac96646099533316d94bac4150c55da1636e1f0ffdc46}
+        CODEX_VERSION: ${CODEX_VERSION:-0.146.0}
+        NPM_REGISTRY: ${NPM_REGISTRY:-https://registry.npmmirror.com}
+    restart: unless-stopped
+    environment:
+      HOST: 0.0.0.0
+      PORT: 16208
+      COMOTE_STATE_PATH: /data/state.json
+      COMOTE_PROJECT_ROOT: /workspace
+      COMOTE_HOST_PROJECT_ROOT: ${COMOTE_HOST_PROJECT_ROOT:-}
+      COMOTE_CODEX_PATH: /usr/local/bin/codex
+      COMOTE_LOCAL_API_TOKEN: ${COMOTE_LOCAL_API_TOKEN:?Set COMOTE_LOCAL_API_TOKEN in .env}
+    volumes:
+      - "${USERPROFILE}/.comote:/data"
+      - codex-home:/home/node/.codex
+      - "${USERPROFILE}/.codex/auth.json:/home/node/.codex/auth.json"
+      - "${USERPROFILE}/.codex/config.toml:/home/node/.codex/config.toml:ro"
+      - "${USERPROFILE}/.codex/.codex-global-state.json:/home/node/.codex/.codex-global-state.json:ro"
+      - "${COMOTE_PROJECTS_PATH:-.}:/workspace"
+    expose:
+      - "16208"
+
+  gateway:
+    image: ${NGINX_IMAGE:-docker.m.daocloud.io/library/nginx:1.27-alpine@sha256:65645c7bb6a0661892a8b03b89d0743208a18dd2f3f17a54ef4b76fb8e2f2a10}
+    restart: unless-stopped
+    depends_on:
+      comote:
+        condition: service_healthy
+    environment:
+      COMOTE_LOCAL_API_TOKEN: ${COMOTE_LOCAL_API_TOKEN:?Set COMOTE_LOCAL_API_TOKEN in .env}
+    volumes:
+      - ./deploy/nginx.conf.template:/etc/nginx/templates/default.conf.template:ro
+    ports:
+      - "127.0.0.1:16208:16208"
+
+volumes:
+  codex-home:
