@@ -213,6 +213,14 @@ export class CodexDesktopConnector {
   handleNotification(notification) {
     const method = notification.method;
     const params = notification.params ?? {};
+    if (method === "thread/name/updated") {
+      this.#emit({
+        type: "threadNameUpdated",
+        threadId: params.threadId ?? null,
+        name: params.threadName ?? null,
+      });
+      return;
+    }
     // Capture file-change details so a later approval prompt can show the diff.
     if (params.item?.type === "fileChange" && params.item.id) {
       this.fileChangesByItem.set(params.item.id, params.item.changes ?? []);

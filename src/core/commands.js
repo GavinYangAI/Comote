@@ -490,6 +490,12 @@ export class CommandRouter {
     if (this.codexDesktop?.getStatus?.().state === "connected") {
       const response = await this.codexDesktop.listThreads({ cwd: projectPath });
       const threads = response.data ?? response.threads ?? [];
+      for (const thread of threads) {
+        const title = this.threadTitle(thread);
+        if (title && title !== thread.id) {
+          this.sessions.updateExternalSessionTitle(thread.id, title);
+        }
+      }
       const entries = [
         { label: t("cmd.session.newLabel"), index: "0" },
         ...threads.map((thread, index) => ({

@@ -122,6 +122,31 @@ test("async sessions command lists Codex Desktop threads when connected", async 
   assert.ok(reply.picker.items.some((item) => item.label === "Continue Comote" && item.index === "1"));
 });
 
+test("async sessions refresh replaces a cached thread id with the Codex thread name", async () => {
+  const authorization = new AuthorizationStore();
+  const projects = new ProjectStore();
+  const sessions = new SessionStore();
+  const identity = { channel: "wechat", stableId: "wxid_owner", displayName: "Alice" };
+  const projectPath = "/home/test/projects/comote";
+  const codexDesktop = {
+    getStatus: () => ({ state: "connected" }),
+    listThreads: async () => ({
+      data: [{ id: "thread_1", name: "Continue Comote", cwd: projectPath }],
+    }),
+  };
+  const router = new CommandRouter({ authorization, projects, sessions, codexDesktop });
+  authorization.confirmIdentity(identity);
+  projects.replaceProjects([
+    { name: "comote", path: projectPath, source: "manual", status: "available" },
+  ]);
+  sessions.upsertExternalSession({ projectPath, id: "thread_1", title: "thread_1" });
+
+  router.handleMessage({ identity, text: "/open 1" });
+  await router.handleMessageAsync({ identity, text: "/sessions" });
+
+  assert.equal(sessions.listSessions(projectPath)[0].title, "Continue Comote");
+});
+
 test("async projects command lists Desktop and CLI projects with source labels", async () => {
   const authorization = new AuthorizationStore();
   const projects = new ProjectStore();

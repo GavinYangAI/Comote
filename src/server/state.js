@@ -834,6 +834,12 @@ export function createComoteState({
   }
 
   function routeDesktopEvent(event) {
+    if (event.type === "threadNameUpdated") {
+      if (sessions.updateExternalSessionTitle(event.threadId, event.name)) {
+        persistInBackground();
+      }
+      return;
+    }
     if (event.type === "turnStarted") {
       changedFilesDeliveredThreads.delete(event.threadId);
       // Advance the per-thread turn nonce for EVERY channel — both the milestone
