@@ -463,6 +463,9 @@ export class CodexDesktopConnector {
       cwd,
       archived: false,
       limit,
+      // Empty = every model provider. Omitted, app-server keeps only the
+      // current provider and hides threads recorded under an older one.
+      modelProviders: [],
       useStateDbOnly: false,
     };
     // Pagination: thread/list returns { data, nextCursor, backwardsCursor };
@@ -476,6 +479,24 @@ export class CodexDesktopConnector {
     return this.client.request("thread/list", params);
   }
 
+  // Threads of one Codex Desktop project. Several projects can share a root
+  // cwd, and thread/list only filters by cwd, so the project membership comes
+  // from Codex Desktop's thread-project-assignments. Threads Codex Desktop has
+  // not assigned (e.g. started from Comote) fall back to localProjectByThread;
+  // threads nobody assigned stay visible in every project at that root.
+  async listProjectThreads({ cwd, codexProjectId = null, localProjectByThread = new Map(), limit = 20 } = {}) {
+    if (!codexProjectId) {
+      return this.listThreads({ cwd, limit });
+    }
+    const assignments = readCodexGlobalState(this.codexStatePath)?.["thread-project-assignments"] ?? {};
+    const response = await this.listThreads({ cwd, limit: 100 });
+    const threads = normalizeThreadList(response).filter((thread) => {
+      const owner = assignments[thread.id]?.projectId ?? localProjectByThread.get(thread.id) ?? null;
+      return owner === null || owner === codexProjectId;
+    });
+    return { data: threads.slice(0, limit) };
+  }
+
   async listProjects({ limit = 100 } = {}) {
     // Two sources, merged: Codex Desktop's own workspace list (active
     // workspace first, then project order) AND projects derived from thread
@@ -483,10 +504,14 @@ export class CodexDesktopConnector {
     // conversations but is not (or no longer) a workspace — CLI-only work,
     // removed workspaces. Deduped by path; workspace entries keep their order
     // and win on conflict, thread-derived ones follow sorted by name.
-    const workspaceProjects = readCodexWorkspaceProjects(this.codexStatePath);
+    const codexState = readCodexGlobalState(this.codexStatePath);
+    const workspaceProjects = readCodexWorkspaceProjects(codexState);
     let threadProjects;
     try {
-      threadProjects = await this.#projectsFromThreadHistory({ limit });
+      threadProjects = await this.#projectsFromThreadHistory({
+        limit,
+        skipThreadIds: new Set(codexState?.["projectless-thread-ids"] ?? []),
+      });
     } catch (error) {
       // thread/list unreachable (not connected, RPC error): degrade to the
       // workspace list rather than failing the whole call. When there is no
@@ -513,14 +538,15 @@ export class CodexDesktopConnector {
 
   // Derives projects from thread history cwds. Source semantics unchanged:
   // thread-derived projects are tagged codex-cli / codex-desktop (or both)
-  // per isCliThread. Sorted by name.
-  async #projectsFromThreadHistory({ limit }) {
+  // per isCliThread. Sorted by name. Desktop "projectless" chats are skipped:
+  // their cwd is a throwaway Documents/Codex/<date>/new-chat directory.
+  async #projectsFromThreadHistory({ limit, skipThreadIds }) {
     const response = await this.listThreads({ cwd: null, limit });
     const threads = normalizeThreadList(response);
     const projectsByPath = new Map();
     for (const thread of threads) {
       const cwd = thread.cwd ?? thread.workingDirectory ?? thread.projectPath ?? null;
-      if (!cwd) {
+      if (!cwd || skipThreadIds.has(thread.id)) {
         continue;
       }
       const source = isCliThread(thread) ? "codex-cli" : "codex-desktop";
@@ -837,28 +863,89 @@ function findNestedCodexExecutable(dir, { exists, readdir, depth = 0, maxDepth =
 
 // Reads Codex Desktop's persisted workspace list: the active workspace, then
 // the user's project order, then any other saved workspaces. Deduplicated.
-function readCodexWorkspaceProjects(statePath) {
-  let state;
+function isAbsoluteProjectPath(value) {
+  return typeof value === "string" && (value.startsWith("/") || winPath.isAbsolute(value));
+}
+
+function readCodexGlobalState(statePath) {
   try {
-    state = JSON.parse(readFileSync(statePath, "utf8"));
+    return JSON.parse(readFileSync(statePath, "utf8"));
   } catch {
+    return null;
+  }
+}
+
+function readCodexWorkspaceProjects(state) {
+  if (!state) {
     return [];
   }
   const active = state["active-workspace-roots"] ?? [];
   const order = state["project-order"] ?? [];
   const saved = state["electron-saved-workspace-roots"] ?? [];
   const labels = state["electron-workspace-root-labels"] ?? {};
+  // Newer Codex Desktop lists project ids in project-order and keeps each
+  // project's name + rootPaths under local-projects. Several projects can share
+  // one root, so each project becomes its own entry (tagged codexProjectId) and
+  // a bare root path is only listed when no project claims it.
+  const localProjects = state["local-projects"] ?? {};
+  const selectedProjectId = state["selected-project"]?.projectId ?? null;
+  const projectIdsByRoot = new Map();
+  for (const id of [...order, ...Object.keys(localProjects)]) {
+    const root = projectRoot(localProjects[id]);
+    if (!root) {
+      continue;
+    }
+    const ids = projectIdsByRoot.get(root) ?? [];
+    if (!ids.includes(id)) {
+      ids.push(id);
+    }
+    projectIdsByRoot.set(root, ids);
+  }
   const seen = new Set();
   const projects = [];
   const hasLabel = (path) => typeof labels[path] === "string" && labels[path].trim();
-  const add = (path, isActive) => {
-    if (!path || seen.has(path)) {
+  const addProject = (id, isActive) => {
+    const project = localProjects[id];
+    const path = projectRoot(project);
+    if (!path || seen.has(id)) {
       return;
     }
+    seen.add(id);
     seen.add(path);
     projects.push({
-      name: hasLabel(path) ? labels[path].trim() : basename(path),
+      name: project.name?.trim() || basename(path),
       path,
+      codexProjectId: id,
+      source: "codex-desktop",
+      status: "available",
+      active: isActive,
+    });
+  };
+  const add = (entry, isActive) => {
+    if (!entry) {
+      return;
+    }
+    if (localProjects[entry]) {
+      addProject(entry, isActive);
+      return;
+    }
+    if (!isAbsoluteProjectPath(entry)) {
+      return;
+    }
+    const rootProjectIds = projectIdsByRoot.get(entry);
+    if (rootProjectIds) {
+      for (const id of rootProjectIds) {
+        addProject(id, isActive && (id === selectedProjectId || !rootProjectIds.includes(selectedProjectId)));
+      }
+      return;
+    }
+    if (seen.has(entry)) {
+      return;
+    }
+    seen.add(entry);
+    projects.push({
+      name: hasLabel(entry) ? labels[entry].trim() : basename(entry),
+      path: entry,
       source: "codex-desktop",
       status: "available",
       active: isActive,
@@ -872,10 +959,17 @@ function readCodexWorkspaceProjects(statePath) {
       add(path, false);
     }
   }
-  for (const path of [...order, ...saved]) {
-    add(path, false);
+  for (const entry of [...order, ...saved, ...Object.keys(localProjects)]) {
+    add(entry, false);
   }
   return projects;
+}
+
+// Codex projects may list several roots; Comote works in one directory, so
+// the first root is the project's working directory.
+function projectRoot(project) {
+  const root = Array.isArray(project?.rootPaths) ? project.rootPaths[0] : null;
+  return typeof root === "string" && root ? root : null;
 }
 
 function approvalResultFor(method, decision) {

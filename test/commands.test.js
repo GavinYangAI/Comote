@@ -703,3 +703,61 @@ test("the first authorized message prepends a short onboarding card, not the ful
   const second = await router.handleMessageAsync({ identity, text: "/status" });
   assert.ok(!second.text.includes("你已连接到 Comote"), "onboarding card must fire only once");
 });
+
+test("opening one of several Codex projects sharing a root lists only its threads", async () => {
+  const authorization = new AuthorizationStore();
+  const projects = new ProjectStore();
+  const sessions = new SessionStore();
+  const identity = { channel: "feishu", stableId: "ou_owner", displayName: "Alice" };
+  const listed = [];
+  const codexDesktop = {
+    getStatus: () => ({ state: "connected" }),
+    listProjects: async () => [
+      { name: "Alpha", path: "/repo/harness", codexProjectId: "alpha", source: "codex-desktop", status: "available" },
+      { name: "瓶子星球", path: "/repo/harness", codexProjectId: "bottle", source: "codex-desktop", status: "available" },
+    ],
+    listThreads: async () => {
+      throw new Error("plain listThreads must not be used for a Codex project");
+    },
+    listProjectThreads: async ({ cwd, codexProjectId, localProjectByThread }) => {
+      listed.push([cwd, codexProjectId, [...localProjectByThread]]);
+      return { data: codexProjectId === "bottle" ? [{ id: "t_bottle", preview: "Bottle thread" }] : [] };
+    },
+    startThread: async () => ({ thread: { id: "t_new" } }),
+    startTurn: async () => ({}),
+  };
+  const router = new CommandRouter({ authorization, projects, sessions, codexDesktop });
+  authorization.confirmIdentity(identity);
+
+  const menu = await router.handleMessageAsync({ identity, text: "/projects" });
+  const opened = await router.handleMessageAsync({ identity, text: "2" });
+  await router.handleMessageAsync({ identity, text: "/new 你好" });
+  await router.handleMessageAsync({ identity, text: "/projects" });
+  await router.handleMessageAsync({ identity, text: "2" });
+
+  assert.match(menu.text, /1\. Alpha/);
+  assert.match(menu.text, /2\. 瓶子星球/);
+  assert.doesNotMatch(menu.text, /status: available/);
+  assert.match(opened.text, /已进入 瓶子星球/);
+  assert.match(opened.text, /1\. Bottle thread/);
+  assert.deepEqual(listed[0], ["/repo/harness", "bottle", []]);
+  // The thread Comote started inside 瓶子星球 is remembered as belonging to it.
+  assert.deepEqual(listed.at(-1), ["/repo/harness", "bottle", [["t_new", "bottle"]]]);
+  assert.deepEqual(router.snapshot().codexProjectByThread, [["t_new", "bottle"]]);
+});
+
+test("project store collapses Codex projects sharing a root into one entry", () => {
+  const projects = new ProjectStore();
+  projects.replaceProjects([
+    { name: "Alpha", path: "/repo/harness" },
+    { name: "瓶子星球", path: "/repo/harness" },
+    { name: "Livovia", path: "/repo/livovia" },
+  ]);
+  assert.deepEqual(
+    projects.listProjects().map((p) => [p.id, p.name, p.path]),
+    [
+      ["1", "Alpha / 瓶子星球", "/repo/harness"],
+      ["2", "Livovia", "/repo/livovia"],
+    ],
+  );
+});

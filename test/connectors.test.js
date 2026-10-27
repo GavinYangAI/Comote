@@ -174,6 +174,7 @@ test("desktop connector lists and starts Codex threads", async () => {
     cwd: "/repo",
     archived: false,
     limit: 20,
+    modelProviders: [],
     useStateDbOnly: false,
   });
   transport.receive({ jsonrpc: "2.0", id: 1, result: { threads: [] } });
@@ -225,6 +226,7 @@ test("desktop connector passes a pagination cursor through to thread/list", asyn
     cwd: "/repo",
     archived: false,
     limit: 2,
+    modelProviders: [],
     useStateDbOnly: false,
     cursor: "2026-07-13T13:49:16Z",
   });
@@ -251,6 +253,7 @@ test("desktop connector passes a pagination cursor through to thread/list", asyn
     cwd: "/repo",
     archived: false,
     limit: 2,
+    modelProviders: [],
     useStateDbOnly: false,
   });
   transport.receive({ jsonrpc: "2.0", id: 2, result: { data: [], nextCursor: null, backwardsCursor: null } });
@@ -269,6 +272,7 @@ test("desktop connector derives projects and marks Desktop or CLI sources", asyn
     cwd: null,
     archived: false,
     limit: 100,
+    modelProviders: [],
     useStateDbOnly: false,
   });
   transport.receive({
@@ -1301,6 +1305,112 @@ test("listProjects merges workspace projects with thread-history projects", asyn
     );
     // Workspace ordering (active first) is preserved by the merge.
     assert.equal(projects[0].active, true);
+  } finally {
+    rmSync(statePath, { force: true });
+  }
+});
+
+test("listProjects lists each Codex Desktop project, including ones sharing a root", async () => {
+  // Newer Codex Desktop stores project ids in project-order and keeps the
+  // name + root paths under local-projects; several projects may share a root.
+  const statePath = join(tmpdir(), `comote-codex-project-ids-${process.pid}.json`);
+  writeFileSync(
+    statePath,
+    JSON.stringify({
+      "active-workspace-roots": ["/repo/knowledge"],
+      "electron-saved-workspace-roots": ["/repo/knowledge"],
+      "project-order": [
+        "58ced78e-a15d-4c8a-8ee6-157325a87edf",
+        "4d309341-6332-41b7-93d2-9ac917972b3b",
+        "6bbf4fdf-9144-4186-a747-8daa45a95bc7",
+        "deadbeef-0000-4000-8000-000000000000",
+      ],
+      "local-projects": {
+        "6bbf4fdf-9144-4186-a747-8daa45a95bc7": { name: "Livovia", rootPaths: ["/repo/livovia"] },
+        "4d309341-6332-41b7-93d2-9ac917972b3b": { name: "Alpha", rootPaths: ["/repo/harness"] },
+        "58ced78e-a15d-4c8a-8ee6-157325a87edf": { name: "词元跃迁", rootPaths: ["/repo/harness"] },
+      },
+    }),
+  );
+  try {
+    const transport = new MemoryTransport();
+    const connector = new CodexDesktopConnector({ transport, codexStatePath: statePath });
+    const projectsPromise = connector.listProjects();
+    await flushAsyncWork();
+    transport.receive({ jsonrpc: "2.0", id: 1, result: { threads: [{ id: "t1", cwd: "/repo/harness" }] } });
+    const projects = await projectsPromise;
+    assert.deepEqual(
+      projects.map((p) => [p.name, p.path, p.codexProjectId]),
+      [
+        ["knowledge", "/repo/knowledge", undefined],
+        ["词元跃迁", "/repo/harness", "58ced78e-a15d-4c8a-8ee6-157325a87edf"],
+        ["Alpha", "/repo/harness", "4d309341-6332-41b7-93d2-9ac917972b3b"],
+        ["Livovia", "/repo/livovia", "6bbf4fdf-9144-4186-a747-8daa45a95bc7"],
+      ],
+    );
+  } finally {
+    rmSync(statePath, { force: true });
+  }
+});
+
+test("listProjectThreads keeps only the threads of one Codex project sharing a root", async () => {
+  const statePath = join(tmpdir(), `comote-codex-project-threads-${process.pid}.json`);
+  writeFileSync(
+    statePath,
+    JSON.stringify({
+      "thread-project-assignments": {
+        "t-alpha": { projectKind: "local", projectId: "alpha" },
+        "t-beta": { projectKind: "local", projectId: "beta" },
+      },
+    }),
+  );
+  try {
+    const transport = new MemoryTransport();
+    const connector = new CodexDesktopConnector({ transport, codexStatePath: statePath });
+    const threadsPromise = connector.listProjectThreads({
+      cwd: "/repo/harness",
+      codexProjectId: "alpha",
+      localProjectByThread: new Map([["t-comote-alpha", "alpha"], ["t-comote-beta", "beta"]]),
+    });
+    await flushAsyncWork();
+    assert.deepEqual(transport.sent[0].params.cwd, "/repo/harness");
+    transport.receive({
+      jsonrpc: "2.0",
+      id: 1,
+      result: {
+        data: ["t-alpha", "t-beta", "t-comote-alpha", "t-comote-beta", "t-unassigned"].map((id) => ({ id })),
+      },
+    });
+    const { data } = await threadsPromise;
+    assert.deepEqual(data.map((thread) => thread.id), ["t-alpha", "t-comote-alpha", "t-unassigned"]);
+  } finally {
+    rmSync(statePath, { force: true });
+  }
+});
+
+test("listProjects skips Codex Desktop projectless chats from thread history", async () => {
+  const statePath = join(tmpdir(), `comote-codex-projectless-${process.pid}.json`);
+  writeFileSync(
+    statePath,
+    JSON.stringify({ "active-workspace-roots": ["/repo/active"], "projectless-thread-ids": ["t-chat"] }),
+  );
+  try {
+    const transport = new MemoryTransport();
+    const connector = new CodexDesktopConnector({ transport, codexStatePath: statePath });
+    const projectsPromise = connector.listProjects();
+    await flushAsyncWork();
+    transport.receive({
+      jsonrpc: "2.0",
+      id: 1,
+      result: {
+        threads: [
+          { id: "t-chat", cwd: "/home/u/Documents/Codex/2026-10-27/new-chat" },
+          { id: "t-real", cwd: "/repo/zeta", source: "cli" },
+        ],
+      },
+    });
+    const projects = await projectsPromise;
+    assert.deepEqual(projects.map((p) => p.path), ["/repo/active", "/repo/zeta"]);
   } finally {
     rmSync(statePath, { force: true });
   }
