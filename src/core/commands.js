@@ -14,6 +14,7 @@ function isAbsolutePath(value) {
 // oldest-first rather than letting a scan of random strangers grow the state
 // file forever. Worst case an evicted identity sees the notice once more.
 const MAX_REMEMBERED_IDENTITIES = 500;
+const MAX_REMEMBERED_THREADS = 500;
 
 // Adds `key` to a Set that behaves as a FIFO of at most
 // MAX_REMEMBERED_IDENTITIES entries (Sets iterate in insertion order).
@@ -50,6 +51,12 @@ export class CommandRouter {
     // Routing state is restored from disk so a daemon restart does not lose
     // the phone user's current project / session context.
     this.currentProjectByIdentity = new Map(persisted.currentProjectByIdentity ?? []);
+    // identityKey -> Codex Desktop project id, when the current project is one
+    // of several Codex projects sharing a root (the path alone is ambiguous).
+    this.currentCodexProjectByIdentity = new Map(persisted.currentCodexProjectByIdentity ?? []);
+    // Codex threadId -> Codex project id for threads Comote started inside a
+    // Codex project; Codex Desktop does not assign those to a project itself.
+    this.codexProjectByThread = new Map((persisted.codexProjectByThread ?? []).slice(-MAX_REMEMBERED_THREADS));
     this.lastProjectsByIdentity = new Map();
     this.pendingByIdentity = new Map();
     // identityKey -> { channel, conversationId, accountId }
@@ -71,6 +78,8 @@ export class CommandRouter {
   snapshot() {
     return {
       currentProjectByIdentity: [...this.currentProjectByIdentity],
+      currentCodexProjectByIdentity: [...this.currentCodexProjectByIdentity],
+      codexProjectByThread: [...this.codexProjectByThread].slice(-MAX_REMEMBERED_THREADS),
       conversationByIdentity: [...this.conversationByIdentity],
       threadBindings: [...this.threadBindings],
       noticedIdentities: [...this.noticedIdentities],
@@ -402,6 +411,7 @@ export class CommandRouter {
       throw new Error(t("cmd.open.excluded", { path: project.path }));
     }
     this.currentProjectByIdentity.set(this.identityKey(identity), project.path);
+    this.currentCodexProjectByIdentity.delete(this.identityKey(identity));
     return t("cmd.open.entered", { name: project.name, path: project.path });
   }
 
@@ -420,8 +430,28 @@ export class CommandRouter {
     if (!project) {
       return null;
     }
-    this.currentProjectByIdentity.set(this.identityKey(identity), project.path);
+    const key = this.identityKey(identity);
+    this.currentProjectByIdentity.set(key, project.path);
+    if (project.codexProjectId) {
+      this.currentCodexProjectByIdentity.set(key, project.codexProjectId);
+    } else {
+      this.currentCodexProjectByIdentity.delete(key);
+    }
     return t("cmd.open.entered", { name: project.name, path: project.path });
+  }
+
+  // Threads of the identity's current project. A Codex Desktop project that
+  // shares its root with other projects only lists its own threads.
+  listCurrentProjectThreads(identity, projectPath) {
+    const codexProjectId = this.currentCodexProjectByIdentity.get(this.identityKey(identity));
+    if (codexProjectId && this.codexDesktop.listProjectThreads) {
+      return this.codexDesktop.listProjectThreads({
+        cwd: projectPath,
+        codexProjectId,
+        localProjectByThread: this.codexProjectByThread,
+      });
+    }
+    return this.codexDesktop.listThreads({ cwd: projectPath });
   }
 
   formatProjects(projects) {
@@ -433,7 +463,8 @@ export class CommandRouter {
           `${id}. ${project.name}${activeTag}`,
           `   ${project.path}`,
           `   ${t("cmd.projects.sourceLabel", { source: this.projectSourceLabel(project) })}`,
-          `   status: ${project.status}`,
+          // "available" is the normal case; only an unusual status is worth a line.
+          ...(project.status && project.status !== "available" ? [`   status: ${project.status}`] : []),
         ].join("\n");
       })
       .join("\n\n");
@@ -488,7 +519,7 @@ export class CommandRouter {
       this.pendingByIdentity.set(key, { type: "choose_session", projectPath });
     }
     if (this.codexDesktop?.getStatus?.().state === "connected") {
-      const response = await this.codexDesktop.listThreads({ cwd: projectPath });
+      const response = await this.listCurrentProjectThreads(identity, projectPath);
       const threads = response.data ?? response.threads ?? [];
       for (const thread of threads) {
         const title = this.threadTitle(thread);
@@ -609,7 +640,7 @@ export class CommandRouter {
       return t("cmd.session.promptFirstMessage");
     }
     if (this.codexDesktop?.getStatus?.().state === "connected") {
-      const response = await this.codexDesktop.listThreads({ cwd: projectPath });
+      const response = await this.listCurrentProjectThreads(identity, projectPath);
       const threads = response.data ?? response.threads ?? [];
       const thread = threads[Number(selector) - 1] ?? threads.find((candidate) => candidate.id === selector);
       if (thread) {
@@ -659,6 +690,10 @@ export class CommandRouter {
         const started = await this.codexDesktop.startThread({ cwd: projectPath });
         const threadId = started.thread.id;
         this.bindThreadForIdentity(identity, threadId, projectPath);
+        const codexProjectId = this.currentCodexProjectByIdentity.get(key);
+        if (codexProjectId) {
+          this.codexProjectByThread.set(threadId, codexProjectId);
+        }
         this.transcript?.record(threadId, "user", message);
         await this.codexDesktop.startTurn({ threadId, text: message, cwd: projectPath, images });
         this.sessions.upsertExternalSession({

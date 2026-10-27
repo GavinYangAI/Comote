@@ -7,6 +7,20 @@ GitHub Release notes, so keep each version's heading as `## vX.Y.Z`.
 本文件记录 Comote 的更新内容。发版流程会按推送的 `vX.Y.Z` tag 自动抽取对应
 段落作为 GitHub Release 说明，请保持每个版本标题为 `## vX.Y.Z`。
 
+## v0.7.3
+
+### 🐛 Fixes
+
+- **Project list matches the new Codex Desktop project format.** Newer Codex Desktop stores project IDs instead of paths, so `/projects` showed raw UUIDs. Comote now reads each project's name and root, lists every Codex project separately (even when several share one folder), and opening one shows only that project's conversations.
+- **Projectless chats no longer clutter `/projects`.** Throwaway `new-chat` directories from Codex Desktop's projectless conversations are skipped.
+- **Conversations from older model providers are visible again.** Comote now asks Codex for threads from every model provider, so conversations recorded under an earlier provider name are no longer missing.
+
+### 🐛 修复
+
+- **项目列表适配 Codex Desktop 新版项目格式。** 新版 Codex Desktop 改存项目 ID，`/projects` 曾直接显示 UUID。现在会读取项目名与目录，每个 Codex 项目单独列出（多个项目共用一个目录也能分开），打开后只显示该项目自己的对话。
+- **`/projects` 不再混入临时对话目录。** Codex Desktop 未归属项目的对话所建的 `new-chat` 目录会被跳过。
+- **旧模型服务商下的对话重新可见。** Comote 现在查询所有模型服务商的对话，之前因服务商名称不同而漏掉的对话可以正常显示。
+
 ## v0.7.2
 
 ### 🐛 Fixes

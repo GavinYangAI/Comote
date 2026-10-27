@@ -25,20 +25,32 @@ export class ProjectStore {
 
   _replace(list) {
     const next = [];
+    const byPath = new Map();
     for (const project of list) {
       const path = normalizePath(project.path);
+      // Several Codex Desktop projects can share one root; the store is keyed
+      // by path, so they collapse into one entry carrying all their names.
+      const existing = byPath.get(path);
+      if (existing) {
+        if (project.name && !existing.name.split(" / ").includes(project.name)) {
+          existing.name = `${existing.name} / ${project.name}`;
+        }
+        continue;
+      }
       let id = this._pathToId.get(path);
       if (id === undefined) {
         id = String(this._nextId++);
         this._pathToId.set(path, id);
       }
-      next.push({
+      const entry = {
         id,
         name: project.name ?? path.split("/").filter(Boolean).at(-1) ?? path,
         path,
         source: project.source ?? "codex-desktop",
         status: project.status ?? "available",
-      });
+      };
+      byPath.set(path, entry);
+      next.push(entry);
     }
     this.projects = next;
   }
