@@ -120,9 +120,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate {
 
         let process = Process()
         process.currentDirectoryURL = URL(fileURLWithPath: root)
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-        process.arguments = ["npm", "run", "dev"]
-        process.environment = ProcessInfo.processInfo.environment.merging(["PORT": port]) { _, new in new }
+        // GUI apps inherit launchd's minimal PATH, so `npm` (and often `node`)
+        // are invisible here. Launch node directly by absolute path instead of
+        // going through npm (npm run dev just runs `node src/server/index.js`).
+        let homeDir = NSHomeDirectory()
+        let nodeCandidates = ["/usr/local/bin/node", "/opt/homebrew/bin/node", homeDir + "/.volta/bin/node"]
+        let nodePath = nodeCandidates.first(where: { FileManager.default.isExecutableFile(atPath: $0) })
+        if let nodePath {
+            process.executableURL = URL(fileURLWithPath: nodePath)
+            process.arguments = ["src/server/index.js"]
+        } else {
+            process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+            process.arguments = ["node", "src/server/index.js"]
+        }
+        var env = ProcessInfo.processInfo.environment
+        let pathValue = ["/usr/local/bin", "/opt/homebrew/bin", env["PATH"] ?? "", "/usr/bin", "/bin", "/usr/sbin", "/sbin"]
+            .filter { !$0.isEmpty }
+            .joined(separator: ":")
+        env["PATH"] = pathValue
+        env["PORT"] = port
+        process.environment = env
 
         let logURL = URL(fileURLWithPath: logDir).appendingPathComponent("comote-app.log")
         FileManager.default.createFile(atPath: logURL.path, contents: nil)

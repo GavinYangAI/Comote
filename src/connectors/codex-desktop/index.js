@@ -757,6 +757,7 @@ export function resolveCodexCommand({
     // one, then the npm/Homebrew CLI install locations.
     const bundledCandidates = [
       "/Applications/ChatGPT.app/Contents/Resources/codex",
+      "/Applications/ChatGPT.app/Contents/Resources/codex-cli/bin/codex",
       "/Applications/Codex.app/Contents/Resources/codex",
     ];
     const bundled = bundledCandidates.find((candidate) => exists(candidate));
